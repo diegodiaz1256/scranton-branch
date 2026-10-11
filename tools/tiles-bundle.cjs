@@ -75,10 +75,10 @@ function safeRel(p) {
 
 /** Decrypt a bundle into { path: Buffer }. Throws on a wrong key or a damaged bundle. */
 function unpack(bundle, key) {
-  if (!bundle.subarray(0, 4).equals(MAGIC)) throw new Error('not a tiles bundle');
+  if (bundle.length < 32 || !bundle.subarray(0, 4).equals(MAGIC)) throw new Error('not a tiles bundle');
   const iv = bundle.subarray(4, 16);
   const tag = bundle.subarray(16, 32);
-  const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  const d = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   d.setAuthTag(tag);
   const plain = zlib.gunzipSync(Buffer.concat([d.update(bundle.subarray(32)), d.final()]));
   const mlen = plain.readUInt32BE(0);
