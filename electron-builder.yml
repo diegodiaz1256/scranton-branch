@@ -158,6 +158,15 @@ mac:
     - target: zip
       arch: [universal]
   artifactName: Scranton-Branch-${version}-mac-${arch}.${ext}
+  # better-sqlite3 13 ships every platform's prebuilt .node in one package, and
+  # node-pty keeps per-arch builds (prebuilds/, bin/<platform>-<arch>-<abi>/),
+  # so these arch-named files are the same in the x64 and arm64 halves of the
+  # universal app; the merge must be told, or it fails. The other platforms'
+  # prebuilds are left out of each installer.
+  x64ArchFiles: "**/node_modules/{better-sqlite3,node-pty}/{prebuilds,bin}/**"
+  files:
+    - "!**/node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"
+    - "!**/node_modules/node-pty/prebuilds/win32-*/**"
 
 dmg:
   title: Scranton Branch ${version}
@@ -178,6 +187,10 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
+  files:
+    - "!**/node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node"
+    - "!**/node_modules/better-sqlite3/prebuilds/win32-arm64.node"
+    - "!**/node_modules/node-pty/prebuilds/{darwin-*,win32-arm64}/**"
 
 # Windows installers are compiled with a current NSIS (3.11), not the 2018
 # 3.0.4.1 electron-builder 25 downloads: that one's System.dll plugin crashes
@@ -206,3 +219,7 @@ linux:
     - target: AppImage
       arch: [x64]
   artifactName: Scranton-Branch-${version}-linux-x86_64.AppImage
+  files:
+    - "!**/node_modules/better-sqlite3/prebuilds/{darwin,win32,linuxmusl}-*.node"
+    - "!**/node_modules/better-sqlite3/prebuilds/linux-arm64.node"
+    - "!**/node_modules/node-pty/prebuilds/{darwin-*,win32-*}/**"
