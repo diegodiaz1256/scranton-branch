@@ -2051,11 +2051,19 @@ async function runBreakerBeat(progressWindowMs: number): Promise<void> {
  *  it cannot answer "what has this agent cost us". See costLifetime.ts. */
 const costTotals = new CostLedgerTotals();
 
+let fleetBusy = false;
 /** Build + write the live fleet snapshot Michael reads (`<hive>/fleet.json`).
  *  Always-on (independent of the heartbeat) since `claude agents` can't see the
  *  hive's sibling sessions. PII-free; never throws (called from a timer). */
 function writeFleetSnapshot(): void {
-  if (!hive.enabled()) return;
+  if (!hive.enabled() || fleetBusy) return;
+  fleetBusy = true;
+  void buildAndWriteFleetSnapshot().finally(() => { fleetBusy = false; });
+}
+
+/** Disk work (inbox counts, the write) is async: a sync pass froze the main
+ *  process for 4.8 s once on a slow disk. One pass at a time. */
+async function buildAndWriteFleetSnapshot(): Promise<void> {
   try {
     const reg = hive.registry();
     const snap = telemetry.snapshot();
@@ -2064,9 +2072,10 @@ function writeFleetSnapshot(): void {
     // Async + incremental; returns immediately and never throws into the timer.
     const hiveRoot = hive.root();
     if (hiveRoot) void costTotals.refresh(join(hiveRoot, 'cost-ledger.jsonl'));
-    const agents = Object.entries(reg.agents)
-      .filter(([, a]) => !a.archived)
-      .map(([id, a]) => {
+    const live = Object.entries(reg.agents).filter(([, a]) => !a.archived);
+    const backlogs = await Promise.all(live.map(([id]) => hive.inboxBacklogAsync(id)));
+    const agents = live
+      .map(([id, a], i) => {
         const u = usageById.get(id);
         const spans = snap.spans[id] ?? [];
         const tokens = u ? u.input + u.output + u.cacheRead + u.cacheCreation : 0;
@@ -2086,13 +2095,13 @@ function writeFleetSnapshot(): void {
           sessionUsd,
           lastTool: spans.length ? spans[spans.length - 1].tool : null,
           lastActiveSecAgo: u ? Math.round((now - u.ts) / 1000) : null,
-          inboxBacklog: hive.inboxBacklog(id),
+          inboxBacklog: backlogs[i],
           onHold: !!a.onHold
         };
       });
     // `hooks` is the control plane's own health (#277): god and the operator
     // can read from fleet.json whether hooks are being enforced at all.
-    hive.writeFleetSnapshot({ ts: now, agents, hooks: hookServer.health() });
+    await hive.writeFleetSnapshotAsync({ ts: now, agents, hooks: hookServer.health() });
   } catch (e) {
     console.error('[fleet] snapshot failed:', e);
   }
