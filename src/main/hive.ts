@@ -3403,6 +3403,12 @@ export class HiveManager {
     if (!root) return;
     try { writeFileSync(join(root, 'fleet.json'), JSON.stringify(snapshot, null, 2), 'utf8'); } catch { /* noop */ }
   }
+  /** writeFleetSnapshot off the main thread, for the 8 s timer. */
+  async writeFleetSnapshotAsync(snapshot: unknown): Promise<void> {
+    const root = this.root();
+    if (!root) return;
+    try { await writeFileAsync(join(root, 'fleet.json'), JSON.stringify(snapshot, null, 2), 'utf8'); } catch { /* noop */ }
+  }
 
   /** Is this agent the hive's god/orchestrator? */
   isGod(agentId: string): boolean {

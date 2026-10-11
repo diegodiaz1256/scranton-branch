@@ -85,3 +85,12 @@ test('repeated status checks reuse the launcher and the CLI lookups', async (t) 
   fs.rmSync(path.join(dir, FORTRESS_TAG, '.verified'));
   assert.equal(f.launcherPath(), null);
 });
+
+test('the Fortress CLI gets UTF-8 output, so a cp1252 console cannot crash it', () => {
+  const { fortressCliEnv } = loadTs('src/main/fortress.ts');
+  const env = fortressCliEnv({ PATH: '/bin', PYTHONIOENCODING: 'cp1252' });
+  assert.equal(env.PATH, '/bin');
+  assert.equal(env.PYTHONIOENCODING, 'utf-8');
+  assert.equal(env.PYTHONUTF8, '1');
+  assert.equal(env.PYTHONUNBUFFERED, '1');
+});
