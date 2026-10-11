@@ -28,7 +28,7 @@ import { join, resolve, relative, sep, basename, dirname, isAbsolute } from 'nod
 import { homedir, hostname } from 'node:os';
 import { request as httpsRequest } from 'node:https';
 import { PtyManager, type SpawnOptions } from './pty';
-import { resolveCommand as resolveCliCommand, isSafeCommandName, userShellPath } from './shellEnv';
+import { resolveCommand as resolveCliCommand, resolveCommandAsync, isSafeCommandName, userShellPath } from './shellEnv';
 import { initAutoUpdater, abortPendingRestart } from './updater';
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
 import {
@@ -2056,11 +2056,19 @@ async function runBreakerBeat(progressWindowMs: number): Promise<void> {
  *  it cannot answer "what has this agent cost us". See costLifetime.ts. */
 const costTotals = new CostLedgerTotals();
 
+let fleetBusy = false;
 /** Build + write the live fleet snapshot Michael reads (`<hive>/fleet.json`).
  *  Always-on (independent of the heartbeat) since `claude agents` can't see the
  *  hive's sibling sessions. PII-free; never throws (called from a timer). */
 function writeFleetSnapshot(): void {
-  if (!hive.enabled()) return;
+  if (!hive.enabled() || fleetBusy) return;
+  fleetBusy = true;
+  void buildAndWriteFleetSnapshot().finally(() => { fleetBusy = false; });
+}
+
+/** Disk work (inbox counts, the write) is async: a sync pass froze the main
+ *  process for 4.8 s once on a slow disk. One pass at a time. */
+async function buildAndWriteFleetSnapshot(): Promise<void> {
   try {
     const reg = hive.registry();
     const snap = telemetry.snapshot();
@@ -2069,9 +2077,10 @@ function writeFleetSnapshot(): void {
     // Async + incremental; returns immediately and never throws into the timer.
     const hiveRoot = hive.root();
     if (hiveRoot) void costTotals.refresh(join(hiveRoot, 'cost-ledger.jsonl'));
-    const agents = Object.entries(reg.agents)
-      .filter(([, a]) => !a.archived)
-      .map(([id, a]) => {
+    const live = Object.entries(reg.agents).filter(([, a]) => !a.archived);
+    const backlogs = await Promise.all(live.map(([id]) => hive.inboxBacklogAsync(id)));
+    const agents = live
+      .map(([id, a], i) => {
         const u = usageById.get(id);
         const spans = snap.spans[id] ?? [];
         const tokens = u ? u.input + u.output + u.cacheRead + u.cacheCreation : 0;
@@ -2091,13 +2100,13 @@ function writeFleetSnapshot(): void {
           sessionUsd,
           lastTool: spans.length ? spans[spans.length - 1].tool : null,
           lastActiveSecAgo: u ? Math.round((now - u.ts) / 1000) : null,
-          inboxBacklog: hive.inboxBacklog(id),
+          inboxBacklog: backlogs[i],
           onHold: !!a.onHold
         };
       });
     // `hooks` is the control plane's own health (#277): god and the operator
     // can read from fleet.json whether hooks are being enforced at all.
-    hive.writeFleetSnapshot({ ts: now, agents, hooks: hookServer.health() });
+    await hive.writeFleetSnapshotAsync({ ts: now, agents, hooks: hookServer.health() });
   } catch (e) {
     console.error('[fleet] snapshot failed:', e);
   }
@@ -3622,15 +3631,28 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
     return await Promise.race([spawnTurn(() => spawnAgentCore(opts, owner)), watchdog]);
   } finally {
     clearTimeout(timer);
-    spawnSteps.delete(opts.id);
+    spawnStepsDone(opts.id);
   }
 });
 
 /** The step each agent start is on, for the watchdog and the log. */
 const spawnSteps = new Map<string, string>();
+/** When each start entered its current step. A step that took long goes to the
+ *  freeze log, so a stall during a start names the step: an agent start froze
+ *  the app for ~0.9 s on a real install and the log only said "pty:spawn". */
+const spawnStepAt = new Map<string, number>();
 function spawnStep(id: string, step: string): void {
+  const now = performance.now();
+  const prev = spawnSteps.get(id);
+  const at = spawnStepAt.get(id);
+  if (prev && at !== undefined) freezes.noteOp(`spawn: ${prev}`, now - at);
   spawnSteps.set(id, step);
+  spawnStepAt.set(id, now);
   console.log(`[spawn ${id}] ${step}`);
+}
+function spawnStepsDone(id: string): void {
+  spawnSteps.delete(id);
+  spawnStepAt.delete(id);
 }
 
 /** Core agent-spawn logic — provider inference, the missing-CLI installer
@@ -3650,6 +3672,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // returned to the caller so the renderer records the same absolute path.
   // On a WSL floor a typed `/home/u/repo` or `~/repo` is a path inside the
   // distro (that is where its agents run), not on Windows.
+  // A fresh timeline (the worker watcher also starts agents, without the IPC cleanup).
+  spawnStepsDone(opts.id);
+  spawnStep(opts.id, 'checking the command and folder');
   const floorWslIn = process.platform === 'win32' ? hive.wslRoot() : null;
   const ingest = (p: string): string => (floorWslIn && typeof p === 'string' && /^(\/|~(\/|$))/.test(p.trim())
     ? fromLinuxPath(p, floorWslIn.distro, () => distroHomeUnc(floorWslIn.distro))
@@ -4075,6 +4100,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // Suppress first-run interactive prompts for providers that need it (e.g. Codex
   // directory-trust gate via CODEX_NON_INTERACTIVE). Merges into any env already
   // set on opts.
+  spawnStep(opts.id, 'keys, connections and engine settings');
   const nonInteractiveEnv = nonInteractiveEnvForProvider(provider);
   if (Object.keys(nonInteractiveEnv).length > 0) {
     opts.env = { ...(opts.env ?? {}), ...nonInteractiveEnv };
@@ -4292,13 +4318,14 @@ ipcMain.handle('session:resolveCwd', (_evt, sessionId: unknown) =>
   (typeof sessionId === 'string' ? resolveSessionCwd(sessionId) : null));
 
 // ─── IPC: clipboard ─────────────────────────────────────────────────────────
-ipcMain.handle('app:copyToClipboard', (_evt, text: unknown) => {
+// Electron 44 made the main-process clipboard async (W3C-style promises).
+ipcMain.handle('app:copyToClipboard', async (_evt, text: unknown) => {
   if (typeof text !== 'string') return { ok: false, error: 'invalid text' };
-  try { clipboard.writeText(text); return { ok: true }; }
+  try { await clipboard.writeText(text); return { ok: true }; }
   catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
 });
-ipcMain.handle('app:readClipboard', () => {
-  try { return clipboard.readText(); } catch { return ''; }
+ipcMain.handle('app:readClipboard', async () => {
+  try { return await clipboard.readText(); } catch { return ''; }
 });
 // Same read, SYNCHRONOUS, for the terminal's paste shortcut.
 //
@@ -4308,8 +4335,11 @@ ipcMain.handle('app:readClipboard', () => {
 // which point the restore has already landed and we paste the PREVIOUS text.
 // A `sendSync` read completes inside the keydown handler, before the tool gets
 // a chance to put the old contents back.
-ipcMain.on('app:readClipboardSync', (evt) => {
-  try { evt.returnValue = clipboard.readText(); } catch { evt.returnValue = ''; }
+//
+// The main-process read is async since Electron 44, but the renderer stays
+// blocked in sendSync until returnValue is set, so the guarantee holds.
+ipcMain.on('app:readClipboardSync', async (evt) => {
+  try { evt.returnValue = await clipboard.readText(); } catch { evt.returnValue = ''; }
 });
 // NOTE: the terminal theme is mirrored into each agent's per-session Claude
 // settings at spawn (hive.ensureAgent theme option) — deliberately NOT via
@@ -4323,7 +4353,9 @@ ipcMain.handle('dialog:chooseFolder', async (evt) => {
   // On a WSL floor start in the distro user's home (\\wsl.localhost\<distro>\
   // home\<you>): projects for its agents live there, not on a Windows drive.
   const floorWsl = process.platform === 'win32' ? hive.wslRoot() : null;
-  const defaultPath = floorWsl ? distroHomeUnc(floorWsl.distro) ?? undefined : undefined;
+  // Elsewhere start in the home folder: since Electron 43 dialogs default to
+  // Downloads, which is no place for a project.
+  const defaultPath = (floorWsl ? distroHomeUnc(floorWsl.distro) : null) ?? app.getPath('home');
   const res = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
     title: 'Pick a folder',
@@ -5571,7 +5603,11 @@ ipcMain.handle('skills:reveal', (_evt, path: unknown) => {
  */
 ipcMain.handle('tools:status', async (): Promise<ToolStatus[]> => {
   const win = process.platform === 'win32';
-  const mem = (() => { try { memory.resetBinCache(); return memory.status(); } catch { return null; } })();
+  // Look for mempalace again without blocking: the sync `where` held the main
+  // process for 1.2 s each time Settings opened (freezes.jsonl: ipc tools:status).
+  memory.resetBinCache();
+  await memory.binAsync().catch(() => null);
+  const mem = (() => { try { return memory.status(); } catch { return null; } })();
   // A WSL floor: its agents and tools run inside the distro, so look there and
   // give Linux install commands (memory finds mempalace inside the distro too).
   const wslLoc = win ? parseWslPath(readConfig().harnessHome) : null;
@@ -5603,7 +5639,7 @@ ipcMain.handle('tools:status', async (): Promise<ToolStatus[]> => {
     });
   }
   // The sandbox row is about Linux: Windows has none to install, macOS has its own.
-  return toolCatalog().filter((spec) => !spec.linuxOnly || process.platform === 'linux').map((spec): ToolStatus => {
+  return Promise.all(toolCatalog().filter((spec) => !spec.linuxOnly || process.platform === 'linux').map(async (spec): Promise<ToolStatus> => {
     const installCommand = win ? spec.install.win32 : spec.install.posix;
     if (spec.id === 'mempalace') {
       return {
@@ -5623,11 +5659,12 @@ ipcMain.handle('tools:status', async (): Promise<ToolStatus[]> => {
     if (!spec.bin) return { ...spec, installCommand, found: false, path: null };
     let path: string | null = null;
     try {
-      const resolved = resolveCliCommand(spec.bin);
-      if (resolved !== spec.bin && existsSync(resolved)) path = resolved;
+      // Async: a sync `where` (a login shell on macOS) per row held the app for over a second.
+      const resolved = await resolveCommandAsync(spec.bin);
+      if (resolved !== spec.bin) path = resolved;
     } catch { /* a probe must never take the panel down */ }
     return { ...spec, installCommand, found: !!path, path };
-  });
+  }));
 });
 
 // ─── IPC: semantic memory (MemPalace CLI) ───────────────────────────────────
@@ -5803,13 +5840,19 @@ ipcMain.handle('dialog:attachFiles', async (evt) => {
 // clipboard holds no image (e.g. a normal text paste).
 ipcMain.handle('clipboard:saveImage', async () => {
   try {
-    const img = clipboard.readImage();
-    if (img.isEmpty()) return { ok: false as const, error: 'no image in clipboard' };
+    // Electron 44 removed readImage(): read the items and take the image one.
+    let image: Blob | null = null;
+    for (const item of await clipboard.read()) {
+      const type = item.types.find((t) => t === 'image/png') ?? item.types.find((t) => t.startsWith('image/'));
+      if (type) { image = await item.getType(type) as Blob; break; }
+    }
+    if (!image || image.size === 0) return { ok: false as const, error: 'no image in clipboard' };
+    const ext = image.type === 'image/jpeg' ? 'jpg' : image.type.replace(/^image\//, '').replace(/[^a-z0-9]/g, '') || 'png';
     const dir = join(app.getPath('temp'), 'cth-pastes');
     mkdirSync(dir, { recursive: true });
-    const name = `paste-${Date.now()}.png`;
+    const name = `paste-${Date.now()}.${ext}`;
     const dest = join(dir, name);
-    writeFileSync(dest, img.toPNG());
+    writeFileSync(dest, Buffer.from(await image.arrayBuffer()));
     return { ok: true as const, file: { path: dest, name } };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : String(e) };

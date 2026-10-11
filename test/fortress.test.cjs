@@ -61,3 +61,36 @@ test('a Windows .cmd (tillion.cmd, a pip shim) runs through cmd.exe, quoted; any
   assert.deepEqual(commandLine('win32', 'C:\\uv\\uv.exe', ['tool', 'run']), { file: 'C:\\uv\\uv.exe', args: ['tool', 'run'], verbatim: false });
   assert.deepEqual(commandLine('linux', '/x/tilion.cmd', ['a']), { file: '/x/tilion.cmd', args: ['a'], verbatim: false });
 });
+
+// Settings polls the status every few seconds; walking the bundle and a sync
+// `where uv` each time froze the main process (freezes.jsonl: fortress:status).
+test('repeated status checks reuse the launcher and the CLI lookups', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-fortress-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let uvLookups = 0;
+  const f = new Fortress({ baseDir: dir, uvPath: () => { uvLookups++; return null; }, env: () => process.env, platform: 'linux', arch: 'x64' });
+  const deep = path.join(dir, FORTRESS_TAG, 'fortress-v153', 'bin');
+  fs.mkdirSync(deep, { recursive: true });
+  fs.writeFileSync(path.join(deep, 'tilion'), '');
+  fs.writeFileSync(path.join(dir, FORTRESS_TAG, '.verified'), '{}');
+  assert.equal(f.launcherPath(), path.join(deep, 'tilion'));
+  // A second launcher higher up would win a fresh walk; the cached one is kept.
+  fs.writeFileSync(path.join(dir, FORTRESS_TAG, 'tilion'), '');
+  assert.equal(f.launcherPath(), path.join(deep, 'tilion'));
+  for (let i = 0; i < 3; i++) await f.status();
+  assert.equal(uvLookups, 1);
+  // Gone from disk (removed or reinstalled): looked up again.
+  fs.rmSync(path.join(deep, 'tilion'));
+  assert.equal(f.launcherPath(), path.join(dir, FORTRESS_TAG, 'tilion'));
+  fs.rmSync(path.join(dir, FORTRESS_TAG, '.verified'));
+  assert.equal(f.launcherPath(), null);
+});
+
+test('the Fortress CLI gets UTF-8 output, so a cp1252 console cannot crash it', () => {
+  const { fortressCliEnv } = loadTs('src/main/fortress.ts');
+  const env = fortressCliEnv({ PATH: '/bin', PYTHONIOENCODING: 'cp1252' });
+  assert.equal(env.PATH, '/bin');
+  assert.equal(env.PYTHONIOENCODING, 'utf-8');
+  assert.equal(env.PYTHONUTF8, '1');
+  assert.equal(env.PYTHONUNBUFFERED, '1');
+});

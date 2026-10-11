@@ -20,7 +20,7 @@
  */
 import { messageBody } from '../shared/messageBody';
 import { mkdir as mkdirAsync, readdir as readdirAsync, readFile as readFileAsync, stat as statAsync, writeFile as writeFileAsync } from 'node:fs/promises';
-import { gitInvocation, linuxizeText, parseWslPath, runInDistro, toWslUnc, type WslLocation } from './wsl';
+import { gitInvocation, linuxizeText, parseWslPath, runInDistro, runInDistroAsync, toWslUnc, type WslLocation } from './wsl';
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync, renameSync,
   readdirSync, statSync, lstatSync, realpathSync, rmSync, appendFileSync,
@@ -28,7 +28,7 @@ import {
 } from 'node:fs';
 import { join, dirname, basename, isAbsolute, relative, resolve, posix } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { spawnSync, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawnSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import type { AgentUsageSample } from './usage';
 import { COMMAND_GROUPS } from '../shared/claudeCommands';
@@ -1352,7 +1352,8 @@ export class HiveManager {
     if (sock && shim) {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
-      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs))));
+      const requireSandbox = await this.sandboxAvailable();
+      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox)));
       args.push('--settings', settingsPath);
     }
     return { args, env };
@@ -1686,7 +1687,26 @@ export class HiveManager {
     }
   }
 
-  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = []): unknown {
+  /** Whether Claude Code's OS sandbox can run where this office's agents run:
+   *  on Linux (a Linux machine, or a WSL floor's distro) it needs bubblewrap.
+   *  Looked up once per run (per distro); false when it cannot be checked. */
+  private sandboxCheck = new Map<string, Promise<boolean>>();
+  sandboxAvailable(): Promise<boolean> {
+    const w = this.wslRoot();
+    const key = w ? `wsl:${w.distro}` : process.platform;
+    if (!w && process.platform !== 'linux') return Promise.resolve(false);
+    let p = this.sandboxCheck.get(key);
+    if (!p) {
+      p = (w
+        ? runInDistroAsync(w.distro, 'sh', ['-c', 'command -v bwrap || true'])
+        : new Promise<string>((resolve) => execFile('sh', ['-c', 'command -v bwrap || true'], { encoding: 'utf8', timeout: 10_000 }, (_e, out) => resolve(String(out ?? ''))))
+      ).then((out) => /bwrap/.test(out), () => false);
+      this.sandboxCheck.set(key, p);
+    }
+    return p;
+  }
+
+  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false): unknown {
     // Bundled node, NOT bare `node` — see nodeLauncherPath(). Claude runs each of
     // these through `sh -c` with a stripped PATH, where `node` is often absent.
     const cmd = this.claudeHookCommand(shim);
@@ -1725,7 +1745,10 @@ export class HiveManager {
       // runs as before rather than refusing to spawn.
       ...(writableDirs.length
         ? {
-            sandbox: { enabled: true, filesystem: { allowWrite: writableDirs } },
+            // Where the sandbox CAN run (bubblewrap found on Linux / in a WSL
+            // floor's distro), it must: if it ever fails to start, the agent's
+            // shell refuses to run rather than running unconfined.
+            sandbox: { enabled: true, ...(requireSandbox ? { failIfUnavailable: true } : {}), filesystem: { allowWrite: writableDirs } },
             permissions: { additionalDirectories: writableDirs }
           }
         : {}),
@@ -3379,6 +3402,12 @@ export class HiveManager {
     const root = this.root();
     if (!root) return;
     try { writeFileSync(join(root, 'fleet.json'), JSON.stringify(snapshot, null, 2), 'utf8'); } catch { /* noop */ }
+  }
+  /** writeFleetSnapshot off the main thread, for the 8 s timer. */
+  async writeFleetSnapshotAsync(snapshot: unknown): Promise<void> {
+    const root = this.root();
+    if (!root) return;
+    try { await writeFileAsync(join(root, 'fleet.json'), JSON.stringify(snapshot, null, 2), 'utf8'); } catch { /* noop */ }
   }
 
   /** Is this agent the hive's god/orchestrator? */

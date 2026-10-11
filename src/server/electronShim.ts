@@ -16,11 +16,11 @@
  *   the rest       dialogs, shell, clipboard, menus, power, screen: inert
  */
 import { EventEmitter } from 'node:events';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { loadSecretKey } from './secretKey';
+import { open, seal } from './secretBox';
 
 declare const __APP_VERSION__: string;
 
@@ -259,17 +259,11 @@ export const safeStorage = {
   isEncryptionAvailable(): boolean { return secretKey !== null; },
   encryptString(plain: string): Buffer {
     if (!secretKey) throw new Error('no secret key (set MD_SECRET_KEY_FILE)');
-    const iv = randomBytes(12);
-    const c = createCipheriv('aes-256-gcm', secretKey, iv);
-    const body = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
-    return Buffer.concat([Buffer.from('mds1'), iv, c.getAuthTag(), body]);
+    return seal(secretKey, plain);
   },
   decryptString(buf: Buffer): string {
     if (!secretKey) throw new Error('no secret key (set MD_SECRET_KEY_FILE)');
-    if (buf.subarray(0, 4).toString() !== 'mds1') throw new Error('not a server-encrypted secret');
-    const d = createDecipheriv('aes-256-gcm', secretKey, buf.subarray(4, 16));
-    d.setAuthTag(buf.subarray(16, 32));
-    return Buffer.concat([d.update(buf.subarray(32)), d.final()]).toString('utf8');
+    return open(secretKey, buf);
   },
   getSelectedStorageBackend(): string { return 'md_server_key'; }
 };
@@ -300,10 +294,11 @@ export const shell = {
 };
 
 let clip = '';
+// Promise-based like Electron 44's clipboard; a server has no image to paste.
 export const clipboard = {
-  readText: (): string => clip,
-  writeText: (t: string): void => { clip = String(t); },
-  readImage: () => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) })
+  readText: async (): Promise<string> => clip,
+  writeText: async (t: string): Promise<void> => { clip = String(t); },
+  read: async (): Promise<Array<{ types: string[]; getType: (type: string) => Promise<Blob> }>> => []
 };
 
 export const nativeImage = { createFromPath: () => ({ isEmpty: () => true }), createEmpty: () => ({ isEmpty: () => true }) };

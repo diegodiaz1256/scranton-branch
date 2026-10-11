@@ -32,6 +32,13 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
+/** Environment for Fortress's Python CLI: unbuffered, and UTF-8 output even on
+ *  a Windows console whose code page cannot print its check marks (it crashed
+ *  with UnicodeEncodeError under cp1252). */
+export function fortressCliEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...base, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+}
+
 export const FORTRESS_TAG = 'v153.0.8010.36';
 export const FORTRESS_CHROMIUM = '153.0.8010.36';
 /** Fortress's CLI pinned to the same release (activation and license status). */
@@ -139,9 +146,31 @@ export class Fortress {
   private get logDir(): string { return join(this.deps.baseDir, 'logs'); }
   private get marker(): string { return join(this.installDir, '.verified'); }
 
+  // Settings asks for the status every few seconds. Walking the 600 MB bundle
+  // for the launcher and a sync `where uv` / `where tilion` each time froze the
+  // main process for 200-370 ms per ask (freezes.jsonl: ipc fortress:status).
+  private launcherCache: string | null = null;
+  private lookups = new Map<string, { path: string | null; at: number }>();
+
+  /** A CLI lookup kept while the file exists; a missing one is retried every 30 s. */
+  private cachedLookup(name: string, find: (() => string | null) | undefined): string | null {
+    if (!find) return null;
+    const c = this.lookups.get(name);
+    if (c && (c.path ? existsSync(c.path) : Date.now() - c.at < 30_000)) return c.path;
+    const path = find();
+    this.lookups.set(name, { path, at: Date.now() });
+    return path;
+  }
+
   /** The engine's launcher in the extracted bundle (`tilion`, or `tillion.cmd` on Windows). */
   launcherPath(): string | null {
-    if (!existsSync(this.marker)) return null;
+    if (!existsSync(this.marker)) { this.launcherCache = null; return null; }
+    if (this.launcherCache && existsSync(this.launcherCache)) return this.launcherCache;
+    this.launcherCache = this.findLauncher();
+    return this.launcherCache;
+  }
+
+  private findLauncher(): string | null {
     const want = this.platform === 'win32' ? 'tillion.cmd' : 'tilion';
     const walk = (dir: string, depth: number): string | null => {
       if (depth > 4) return null;
@@ -160,9 +189,9 @@ export class Fortress {
   /** argv for Fortress's CLI: the user's own `tilion` when installed, else the
    *  one pinned to this release through uv (where it is named tilion-fortress). */
   private cli(args: string[]): { cmd: string; args: string[]; via: 'tilion' | 'uv' } | null {
-    const own = this.deps.tilionPath?.();
+    const own = this.cachedLookup('tilion', this.deps.tilionPath);
     if (own) return { cmd: own, args, via: 'tilion' };
-    const uv = this.deps.uvPath();
+    const uv = this.cachedLookup('uv', this.deps.uvPath);
     if (uv) return { cmd: uv, args: ['tool', 'run', '--from', FORTRESS_CLI_SPEC, 'tilion-fortress', ...args], via: 'uv' };
     return null;
   }
@@ -192,7 +221,7 @@ export class Fortress {
     if (!cli) return null;
     const value = await new Promise<FortressLicense | null>((resolve) => {
       const c = commandLine(this.platform, cli.cmd, cli.args);
-      execFile(c.file, c.args, { env: { ...this.deps.env(), PYTHONUNBUFFERED: '1' }, timeout: 120_000, windowsHide: true, windowsVerbatimArguments: c.verbatim }, (_err, stdout) => {
+      execFile(c.file, c.args, { env: fortressCliEnv(this.deps.env()), timeout: 120_000, windowsHide: true, windowsVerbatimArguments: c.verbatim }, (_err, stdout) => {
         try {
           const j = JSON.parse(String(stdout).trim().split('\n').filter((l) => l.trim().startsWith('{')).pop() ?? '{}') as FortressLicense;
           resolve(typeof j.licensed === 'boolean' ? j : null);
@@ -272,7 +301,7 @@ export class Fortress {
     if (!cli) return { ok: false, error: this.platform === 'win32' ? 'signing in needs uv on Windows itself (Fortress runs beside the app, not inside WSL)' : 'signing in needs uv (install it from this list)' };
     this.activation = { state: 'waiting' };
     const c = commandLine(this.platform, cli.cmd, cli.args);
-    const child = spawn(c.file, c.args, { env: { ...this.deps.env(), PYTHONUNBUFFERED: '1' }, windowsHide: true, windowsVerbatimArguments: c.verbatim, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(c.file, c.args, { env: fortressCliEnv(this.deps.env()), windowsHide: true, windowsVerbatimArguments: c.verbatim, stdio: ['ignore', 'pipe', 'pipe'] });
     this.activator = child;
     let out = '';
     return new Promise((resolve) => {
@@ -307,7 +336,7 @@ export class Fortress {
     if (!cli) return { ok: false, error: 'needs uv (install it from this list)' };
     const r = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
       const c = commandLine(this.platform, cli.cmd, cli.args);
-      execFile(c.file, c.args, { env: { ...this.deps.env(), PYTHONUNBUFFERED: '1' }, timeout: 120_000, windowsHide: true, windowsVerbatimArguments: c.verbatim }, (err, stdout, stderr) => {
+      execFile(c.file, c.args, { env: fortressCliEnv(this.deps.env()), timeout: 120_000, windowsHide: true, windowsVerbatimArguments: c.verbatim }, (err, stdout, stderr) => {
         resolve(err ? { ok: false, error: (String(stderr) || String(stdout)).trim().split('\n').slice(-2).join(' ') || err.message } : { ok: true });
       });
     });

@@ -14,8 +14,9 @@ const { TeamNode } = loadTs('src/main/teamNode.ts');
 const { generateIdentity } = loadTs('src/main/teamCrypto.ts');
 
 async function broker(t, opts = {}) {
-  const mod = require('aedes');
-  const aedes = mod.createBroker ? await mod.createBroker() : mod();
+  // aedes 1.x is ESM with a named `Aedes` class and an async createBroker().
+  const { Aedes } = require('aedes');
+  const aedes = await Aedes.createBroker();
   const seen = [];
   aedes.on('publish', (p) => { if (p.topic.startsWith('md-team/')) seen.push(p.payload.toString()); });
   if (opts.password) {
