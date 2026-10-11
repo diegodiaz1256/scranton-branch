@@ -87,7 +87,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # node-gyp (used to rebuild native node-pty) imports distutils, which was

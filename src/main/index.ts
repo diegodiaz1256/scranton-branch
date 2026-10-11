@@ -4296,13 +4296,14 @@ ipcMain.handle('session:resolveCwd', (_evt, sessionId: unknown) =>
   (typeof sessionId === 'string' ? resolveSessionCwd(sessionId) : null));
 
 // ─── IPC: clipboard ─────────────────────────────────────────────────────────
-ipcMain.handle('app:copyToClipboard', (_evt, text: unknown) => {
+// Electron 44 made the main-process clipboard async (W3C-style promises).
+ipcMain.handle('app:copyToClipboard', async (_evt, text: unknown) => {
   if (typeof text !== 'string') return { ok: false, error: 'invalid text' };
-  try { clipboard.writeText(text); return { ok: true }; }
+  try { await clipboard.writeText(text); return { ok: true }; }
   catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
 });
-ipcMain.handle('app:readClipboard', () => {
-  try { return clipboard.readText(); } catch { return ''; }
+ipcMain.handle('app:readClipboard', async () => {
+  try { return await clipboard.readText(); } catch { return ''; }
 });
 // Same read, SYNCHRONOUS, for the terminal's paste shortcut.
 //
@@ -4312,8 +4313,11 @@ ipcMain.handle('app:readClipboard', () => {
 // which point the restore has already landed and we paste the PREVIOUS text.
 // A `sendSync` read completes inside the keydown handler, before the tool gets
 // a chance to put the old contents back.
-ipcMain.on('app:readClipboardSync', (evt) => {
-  try { evt.returnValue = clipboard.readText(); } catch { evt.returnValue = ''; }
+//
+// The main-process read is async since Electron 44, but the renderer stays
+// blocked in sendSync until returnValue is set, so the guarantee holds.
+ipcMain.on('app:readClipboardSync', async (evt) => {
+  try { evt.returnValue = await clipboard.readText(); } catch { evt.returnValue = ''; }
 });
 // NOTE: the terminal theme is mirrored into each agent's per-session Claude
 // settings at spawn (hive.ensureAgent theme option) — deliberately NOT via
@@ -4327,7 +4331,9 @@ ipcMain.handle('dialog:chooseFolder', async (evt) => {
   // On a WSL floor start in the distro user's home (\\wsl.localhost\<distro>\
   // home\<you>): projects for its agents live there, not on a Windows drive.
   const floorWsl = process.platform === 'win32' ? hive.wslRoot() : null;
-  const defaultPath = floorWsl ? distroHomeUnc(floorWsl.distro) ?? undefined : undefined;
+  // Elsewhere start in the home folder: since Electron 43 dialogs default to
+  // Downloads, which is no place for a project.
+  const defaultPath = (floorWsl ? distroHomeUnc(floorWsl.distro) : null) ?? app.getPath('home');
   const res = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
     title: 'Pick a folder',
@@ -5812,13 +5818,19 @@ ipcMain.handle('dialog:attachFiles', async (evt) => {
 // clipboard holds no image (e.g. a normal text paste).
 ipcMain.handle('clipboard:saveImage', async () => {
   try {
-    const img = clipboard.readImage();
-    if (img.isEmpty()) return { ok: false as const, error: 'no image in clipboard' };
+    // Electron 44 removed readImage(): read the items and take the image one.
+    let image: Blob | null = null;
+    for (const item of await clipboard.read()) {
+      const type = item.types.find((t) => t === 'image/png') ?? item.types.find((t) => t.startsWith('image/'));
+      if (type) { image = await item.getType(type) as Blob; break; }
+    }
+    if (!image || image.size === 0) return { ok: false as const, error: 'no image in clipboard' };
+    const ext = image.type === 'image/jpeg' ? 'jpg' : image.type.replace(/^image\//, '').replace(/[^a-z0-9]/g, '') || 'png';
     const dir = join(app.getPath('temp'), 'cth-pastes');
     mkdirSync(dir, { recursive: true });
-    const name = `paste-${Date.now()}.png`;
+    const name = `paste-${Date.now()}.${ext}`;
     const dest = join(dir, name);
-    writeFileSync(dest, img.toPNG());
+    writeFileSync(dest, Buffer.from(await image.arrayBuffer()));
     return { ok: true as const, file: { path: dest, name } };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : String(e) };

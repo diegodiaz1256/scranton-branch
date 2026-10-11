@@ -294,10 +294,11 @@ export const shell = {
 };
 
 let clip = '';
+// Promise-based like Electron 44's clipboard; a server has no image to paste.
 export const clipboard = {
-  readText: (): string => clip,
-  writeText: (t: string): void => { clip = String(t); },
-  readImage: () => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) })
+  readText: async (): Promise<string> => clip,
+  writeText: async (t: string): Promise<void> => { clip = String(t); },
+  read: async (): Promise<Array<{ types: string[]; getType: (type: string) => Promise<Blob> }>> => []
 };
 
 export const nativeImage = { createFromPath: () => ({ isEmpty: () => true }), createEmpty: () => ({ isEmpty: () => true }) };

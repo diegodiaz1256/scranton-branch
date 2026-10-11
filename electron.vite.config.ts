@@ -1,4 +1,4 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 import { resolve, dirname } from 'node:path';
 import { readFileSync, copyFileSync, mkdirSync, statSync } from 'node:fs';
@@ -73,7 +73,7 @@ function copyMainSidecars() {
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin(), copyMainSidecars()],
+    plugins: [copyMainSidecars()],
     define: defineMain,
     build: {
       rollupOptions: {
@@ -82,7 +82,6 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
     define,
     build: {
       rollupOptions: {
@@ -98,7 +97,7 @@ export default defineConfig({
       // JS parsed on every launch. Minified, it loads faster and weighs less in
       // memory. (Main stays readable: the freeze log names functions.)
       minify: 'esbuild',
-      target: 'chrome128',
+      target: 'chrome152',
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/renderer/index.html') }
       }
