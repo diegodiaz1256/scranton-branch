@@ -61,3 +61,12 @@ test('a Windows .cmd (tillion.cmd, a pip shim) runs through cmd.exe, quoted; any
   assert.deepEqual(commandLine('win32', 'C:\\uv\\uv.exe', ['tool', 'run']), { file: 'C:\\uv\\uv.exe', args: ['tool', 'run'], verbatim: false });
   assert.deepEqual(commandLine('linux', '/x/tilion.cmd', ['a']), { file: '/x/tilion.cmd', args: ['a'], verbatim: false });
 });
+
+test('the Fortress CLI gets UTF-8 output, so a cp1252 console cannot crash it', () => {
+  const { fortressCliEnv } = loadTs('src/main/fortress.ts');
+  const env = fortressCliEnv({ PATH: '/bin', PYTHONIOENCODING: 'cp1252' });
+  assert.equal(env.PATH, '/bin');
+  assert.equal(env.PYTHONIOENCODING, 'utf-8');
+  assert.equal(env.PYTHONUTF8, '1');
+  assert.equal(env.PYTHONUNBUFFERED, '1');
+});

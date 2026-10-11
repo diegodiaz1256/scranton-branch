@@ -32,6 +32,13 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
+/** Environment for Fortress's Python CLI: unbuffered, and UTF-8 output even on
+ *  a Windows console whose code page cannot print its check marks (it crashed
+ *  with UnicodeEncodeError under cp1252). */
+export function fortressCliEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...base, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+}
+
 export const FORTRESS_TAG = 'v153.0.8010.36';
 export const FORTRESS_CHROMIUM = '153.0.8010.36';
 /** Fortress's CLI pinned to the same release (activation and license status). */
@@ -192,7 +199,7 @@ export class Fortress {
     if (!cli) return null;
     const value = await new Promise<FortressLicense | null>((resolve) => {
       const c = commandLine(this.platform, cli.cmd, cli.args);
-      execFile(c.file, c.args, { env: { ...this.deps.env(), PYTHONUNBUFFERED: '1' }, timeout: 120_000, windowsHide: true, windowsVerbatimArguments: c.verbatim }, (_err, stdout) => {
+      execFile(c.file, c.args, { env: fortressCliEnv(this.deps.env()), timeout: 120_000, windowsHide: true, windowsVerbatimArguments: c.verbatim }, (_err, stdout) => {
         try {
           const j = JSON.parse(String(stdout).trim().split('\n').filter((l) => l.trim().startsWith('{')).pop() ?? '{}') as FortressLicense;
           resolve(typeof j.licensed === 'boolean' ? j : null);
@@ -272,7 +279,7 @@ export class Fortress {
     if (!cli) return { ok: false, error: this.platform === 'win32' ? 'signing in needs uv on Windows itself (Fortress runs beside the app, not inside WSL)' : 'signing in needs uv (install it from this list)' };
     this.activation = { state: 'waiting' };
     const c = commandLine(this.platform, cli.cmd, cli.args);
-    const child = spawn(c.file, c.args, { env: { ...this.deps.env(), PYTHONUNBUFFERED: '1' }, windowsHide: true, windowsVerbatimArguments: c.verbatim, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(c.file, c.args, { env: fortressCliEnv(this.deps.env()), windowsHide: true, windowsVerbatimArguments: c.verbatim, stdio: ['ignore', 'pipe', 'pipe'] });
     this.activator = child;
     let out = '';
     return new Promise((resolve) => {
@@ -307,7 +314,7 @@ export class Fortress {
     if (!cli) return { ok: false, error: 'needs uv (install it from this list)' };
     const r = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
       const c = commandLine(this.platform, cli.cmd, cli.args);
-      execFile(c.file, c.args, { env: { ...this.deps.env(), PYTHONUNBUFFERED: '1' }, timeout: 120_000, windowsHide: true, windowsVerbatimArguments: c.verbatim }, (err, stdout, stderr) => {
+      execFile(c.file, c.args, { env: fortressCliEnv(this.deps.env()), timeout: 120_000, windowsHide: true, windowsVerbatimArguments: c.verbatim }, (err, stdout, stderr) => {
         resolve(err ? { ok: false, error: (String(stderr) || String(stdout)).trim().split('\n').slice(-2).join(' ') || err.message } : { ok: true });
       });
     });
