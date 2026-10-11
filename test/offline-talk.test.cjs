@@ -40,3 +40,13 @@ test('what is read aloud has no markdown, code or link targets', () => {
     'Done. See the report and run npm test. Next'
   );
 });
+
+test('local Whisper falls back to WASM when WebGPU fails mid-transcription', () => {
+  // Seen live: the model loaded on WebGPU, then ONNX Runtime's WebGPU backend
+  // threw "Cannot read properties of undefined (reading 'destroy')" while
+  // transcribing, and offline talk gave up. The load-time fallback never ran.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'freeflow', 'whisper.worker.ts'), 'utf8');
+  assert.match(src, /const device = 'gpu' in navigator && !gpuFailed \? 'webgpu' : 'wasm';/);
+  const transcribe = src.slice(src.indexOf("m.type === 'transcribe'"));
+  assert.match(transcribe, /catch \(e\) \{[\s\S]*gpuFailed = true;[\s\S]*load\(m\.model, false\)[\s\S]*\(m\.audio, opts\)/);
+});
