@@ -33,7 +33,7 @@
     "dist:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "better-sqlite3": "^11.10.0",
     "electron-updater": "^6.8.9",
     "mqtt": "^5.16.0",
