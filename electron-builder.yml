@@ -163,7 +163,7 @@ mac:
   # so these arch-named files are the same in the x64 and arm64 halves of the
   # universal app; the merge must be told, or it fails. The other platforms'
   # prebuilds are left out of each installer.
-  x64ArchFiles: "**/node_modules/{better-sqlite3,node-pty}/{prebuilds,bin}/**/*.node"
+  x64ArchFiles: "**/node_modules/{better-sqlite3,node-pty}/{prebuilds,bin}/**"
   files:
     - "!**/node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"
     - "!**/node_modules/node-pty/prebuilds/win32-*/**"
