@@ -1,0 +1,4 @@
+{
+  "//": "Files from github.com/ZerogeWorkshop/assets that this app uses, relative to that repo (see tools/zw-assets.cjs). Prefer atlases/ over whole vendor packs.",
+  "files": []
+}

@@ -38,3 +38,6 @@ docs/blog-preview-*/
 
 # demo office seeded by `npm run demo` (tools/seed-demo-hive.cjs) — local only
 /.demo/
+
+# licensed art copied from ZerogeWorkshop/assets at build time (tools/zw-assets.cjs); never commit
+src/renderer/src/assets/private/

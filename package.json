@@ -13,8 +13,9 @@
     "url": "https://github.com/diegodiaz1256/scranton-branch.git"
   },
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build && npm run copy:main-assets",
+    "dev": "npm run assets && electron-vite dev",
+    "build": "npm run assets && electron-vite build && npm run copy:main-assets",
+    "assets": "node tools/zw-assets.cjs",
     "copy:main-assets": "node tools/copy-main-assets.cjs",
     "preview": "electron-vite preview",
     "demo": "node tools/demo.cjs",
