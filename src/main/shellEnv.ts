@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { access } from 'node:fs/promises';
+import { execFile, spawnSync } from 'node:child_process';
 import { win32 } from 'node:path';
 
 // These helpers mirror the resolution logic in pty.ts. They exist separately so
@@ -171,5 +172,47 @@ export function resolveCommand(command: string): string {
     `${process.env.HOME ?? ''}/.volta/bin/${command}`
   ];
   for (const c of candidates) if (existsSync(c)) return c;
+  return command;
+}
+
+/** resolveCommand() without blocking the main process: the same lookup (`where`
+ *  on Windows, the login shell's `which` elsewhere, then the usual install
+ *  folders) through child processes the event loop waits on. Settings checks a
+ *  dozen tools at once, and the sync version held the app for over a second. */
+export async function resolveCommandAsync(command: string): Promise<string> {
+  if (command.includes('/') || command.includes('\\')) return command;
+  if (!isSafeCommandName(command)) return command;
+  const exists = (p: string): Promise<boolean> => access(p).then(() => true, () => false);
+  const run = (file: string, args: string[]): Promise<string> => new Promise((resolve) => {
+    execFile(file, args, { encoding: 'utf8', timeout: 3000, windowsHide: true }, (_e, out) => resolve(String(out ?? '')));
+  });
+  if (process.platform === 'win32') {
+    const path = (await run('where', [command])).trim().split(/\r?\n/)[0];
+    if (path && await exists(path)) return path;
+    for (const c of windowsFallbackCandidates(command)) if (await exists(c)) return c;
+    return command;
+  }
+  const script = `which ${command}`;
+  let which: string | null | undefined = shellCapture.get(script);
+  if (which === undefined) {
+    const mark = '__MD_SHELL_FENCE__';
+    const out = await run(process.env.SHELL ?? '/bin/zsh', ['-ilc', `printf %s ${mark}; ${script}; printf %s ${mark}`]);
+    const start = out.indexOf(mark);
+    const end = out.lastIndexOf(mark);
+    which = start >= 0 && end > start ? out.slice(start + mark.length, end) : null;
+    if (which !== null) shellCapture.set(script, which);
+  }
+  if (which) {
+    const path = which.trim().split('\n').map((l) => l.trim()).filter(Boolean).pop();
+    if (path && await exists(path)) return path;
+  }
+  const candidates = [
+    `/opt/homebrew/bin/${command}`,
+    `/usr/local/bin/${command}`,
+    `${process.env.HOME ?? ''}/.local/bin/${command}`,
+    `${process.env.HOME ?? ''}/.claude/local/${command}`,
+    `${process.env.HOME ?? ''}/.volta/bin/${command}`
+  ];
+  for (const c of candidates) if (await exists(c)) return c;
   return command;
 }
