@@ -28,7 +28,7 @@ import { join, resolve, relative, sep, basename, dirname, isAbsolute } from 'nod
 import { homedir, hostname } from 'node:os';
 import { request as httpsRequest } from 'node:https';
 import { PtyManager, type SpawnOptions } from './pty';
-import { resolveCommand as resolveCliCommand, isSafeCommandName, userShellPath } from './shellEnv';
+import { resolveCommand as resolveCliCommand, resolveCommandAsync, isSafeCommandName, userShellPath } from './shellEnv';
 import { initAutoUpdater, abortPendingRestart } from './updater';
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
 import {
@@ -5566,7 +5566,11 @@ ipcMain.handle('skills:reveal', (_evt, path: unknown) => {
  */
 ipcMain.handle('tools:status', async (): Promise<ToolStatus[]> => {
   const win = process.platform === 'win32';
-  const mem = (() => { try { memory.resetBinCache(); return memory.status(); } catch { return null; } })();
+  // Look for mempalace again without blocking: the sync `where` held the main
+  // process for 1.2 s each time Settings opened (freezes.jsonl: ipc tools:status).
+  memory.resetBinCache();
+  await memory.binAsync().catch(() => null);
+  const mem = (() => { try { return memory.status(); } catch { return null; } })();
   // A WSL floor: its agents and tools run inside the distro, so look there and
   // give Linux install commands (memory finds mempalace inside the distro too).
   const wslLoc = win ? parseWslPath(readConfig().harnessHome) : null;
@@ -5598,7 +5602,7 @@ ipcMain.handle('tools:status', async (): Promise<ToolStatus[]> => {
     });
   }
   // The sandbox row is about Linux: Windows has none to install, macOS has its own.
-  return toolCatalog().filter((spec) => !spec.linuxOnly || process.platform === 'linux').map((spec): ToolStatus => {
+  return Promise.all(toolCatalog().filter((spec) => !spec.linuxOnly || process.platform === 'linux').map(async (spec): Promise<ToolStatus> => {
     const installCommand = win ? spec.install.win32 : spec.install.posix;
     if (spec.id === 'mempalace') {
       return {
@@ -5618,11 +5622,12 @@ ipcMain.handle('tools:status', async (): Promise<ToolStatus[]> => {
     if (!spec.bin) return { ...spec, installCommand, found: false, path: null };
     let path: string | null = null;
     try {
-      const resolved = resolveCliCommand(spec.bin);
-      if (resolved !== spec.bin && existsSync(resolved)) path = resolved;
+      // Async: a sync `where` (a login shell on macOS) per row held the app for over a second.
+      const resolved = await resolveCommandAsync(spec.bin);
+      if (resolved !== spec.bin) path = resolved;
     } catch { /* a probe must never take the panel down */ }
     return { ...spec, installCommand, found: !!path, path };
-  });
+  }));
 });
 
 // ─── IPC: semantic memory (MemPalace CLI) ───────────────────────────────────
