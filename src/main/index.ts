@@ -3626,15 +3626,28 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
     return await Promise.race([spawnTurn(() => spawnAgentCore(opts, owner)), watchdog]);
   } finally {
     clearTimeout(timer);
-    spawnSteps.delete(opts.id);
+    spawnStepsDone(opts.id);
   }
 });
 
 /** The step each agent start is on, for the watchdog and the log. */
 const spawnSteps = new Map<string, string>();
+/** When each start entered its current step. A step that took long goes to the
+ *  freeze log, so a stall during a start names the step: an agent start froze
+ *  the app for ~0.9 s on a real install and the log only said "pty:spawn". */
+const spawnStepAt = new Map<string, number>();
 function spawnStep(id: string, step: string): void {
+  const now = performance.now();
+  const prev = spawnSteps.get(id);
+  const at = spawnStepAt.get(id);
+  if (prev && at !== undefined) freezes.noteOp(`spawn: ${prev}`, now - at);
   spawnSteps.set(id, step);
+  spawnStepAt.set(id, now);
   console.log(`[spawn ${id}] ${step}`);
+}
+function spawnStepsDone(id: string): void {
+  spawnSteps.delete(id);
+  spawnStepAt.delete(id);
 }
 
 /** Core agent-spawn logic — provider inference, the missing-CLI installer
@@ -3654,6 +3667,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // returned to the caller so the renderer records the same absolute path.
   // On a WSL floor a typed `/home/u/repo` or `~/repo` is a path inside the
   // distro (that is where its agents run), not on Windows.
+  // A fresh timeline (the worker watcher also starts agents, without the IPC cleanup).
+  spawnStepsDone(opts.id);
+  spawnStep(opts.id, 'checking the command and folder');
   const floorWslIn = process.platform === 'win32' ? hive.wslRoot() : null;
   const ingest = (p: string): string => (floorWslIn && typeof p === 'string' && /^(\/|~(\/|$))/.test(p.trim())
     ? fromLinuxPath(p, floorWslIn.distro, () => distroHomeUnc(floorWslIn.distro))
@@ -4079,6 +4095,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // Suppress first-run interactive prompts for providers that need it (e.g. Codex
   // directory-trust gate via CODEX_NON_INTERACTIVE). Merges into any env already
   // set on opts.
+  spawnStep(opts.id, 'keys, connections and engine settings');
   const nonInteractiveEnv = nonInteractiveEnvForProvider(provider);
   if (Object.keys(nonInteractiveEnv).length > 0) {
     opts.env = { ...(opts.env ?? {}), ...nonInteractiveEnv };
