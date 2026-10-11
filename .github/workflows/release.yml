@@ -103,10 +103,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Licensed art (LimeZu) lives in the private ZerogeWorkshop/assets repo and
+      # only enters the installers (tools/zw-assets.cjs). ASSETS_TOKEN: a
+      # fine-grained token with read access to that repo's contents. Without it
+      # (forks) the app builds with its free art.
+      - name: Licensed art available?
+        id: zwassets
+        shell: bash
+        env:
+          ASSETS_TOKEN: ${{ secrets.ASSETS_TOKEN }}
+        run: echo "present=$([ -n "$ASSETS_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch licensed art (private assets repo)
+        if: steps.zwassets.outputs.present == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: ZerogeWorkshop/assets
+          token: ${{ secrets.ASSETS_TOKEN }}
+          path: zw-assets
+          sparse-checkout: atlases
+          persist-credentials: false
+
       # No analytics in this fork's builds: electron.vite.config.ts pins the
       # key empty (src/shared/fork.ts), so nothing is injected here.
       - name: Compile (electron-vite → out/)
         run: npm run build
+        env:
+          ZW_ASSETS: ${{ steps.zwassets.outputs.present == 'true' && format('{0}/zw-assets', github.workspace) || '' }}
 
       # Current NSIS for the Windows installers (why: electron-builder.yml, nsis).
       # The official 3.11 zip, plus elevate.exe from electron-builder's own NSIS
