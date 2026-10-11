@@ -158,11 +158,12 @@ mac:
     - target: zip
       arch: [universal]
   artifactName: Scranton-Branch-${version}-mac-${arch}.${ext}
-  # better-sqlite3 13 ships every platform's prebuilt .node in one package, so
-  # its darwin builds are the same file in the x64 and arm64 halves of the
+  # better-sqlite3 13 ships every platform's prebuilt .node in one package, and
+  # node-pty keeps per-arch builds (prebuilds/, bin/<platform>-<arch>-<abi>/),
+  # so these arch-named files are the same in the x64 and arm64 halves of the
   # universal app; the merge must be told, or it fails. The other platforms'
   # prebuilds are left out of each installer.
-  x64ArchFiles: "**/node_modules/better-sqlite3/prebuilds/darwin-*.node"
+  x64ArchFiles: "**/node_modules/{better-sqlite3,node-pty}/{prebuilds,bin}/**/*.node"
   files:
     - "!**/node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"
     - "!**/node_modules/node-pty/prebuilds/win32-*/**"
