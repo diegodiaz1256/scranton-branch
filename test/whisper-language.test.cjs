@@ -20,5 +20,5 @@ test('UI language → Whisper language code', () => {
 
 test('the recorder passes it to local Whisper', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src/renderer/src/freeflow/recorder.ts'), 'utf8');
-  assert.match(src, /transcribeLocal\(blob, cfg\.freeflowLocalModel \?\? 'small', whisperLanguage\(i18n\.language\)\)/);
+  assert.match(src, /transcribeLocal\(blob, cfg\??\.freeflowLocalModel \?\? 'small', whisperLanguage\(i18n\.language\)\)/);
 });

@@ -23,6 +23,7 @@ import { PixelButton } from './PixelButton';
 import { Icon } from './Icon';
 import { useStore } from '@/store/store';
 import { useRealtimeMichael, type RealtimeStatus } from '@/realtime/session';
+import { localTalk, useLocalTalk, type LocalTalkStatus } from '@/realtime/localTalk';
 
 /** Per-status presentation: button variant, SHORT label, dot color, and (optional)
  *  animation for the live-state indicator dot. Maps hook.status → visuals.
@@ -80,6 +81,15 @@ const STATE_VIEW: Record<
   }
 };
 
+/** Offline talk's states, in the same shape (labels: realtimeToggle.*). */
+const OFFLINE_VIEW: Record<LocalTalkStatus, (typeof STATE_VIEW)[RealtimeStatus]> = {
+  off: { variant: 'secondary', labelKey: 'realtimeToggle.talkOffline', dot: 'var(--cth-ink-300)', helpKey: 'realtimeToggle.helpOffline' },
+  listening: { ...STATE_VIEW.listening, helpKey: 'realtimeToggle.helpOfflineListening' },
+  transcribing: { variant: 'secondary', labelKey: 'realtimeToggle.transcribing', dot: 'var(--cth-lemon)', anim: 'cth-blink 700ms steps(2, end) infinite', helpKey: 'realtimeToggle.helpOfflineBusy' },
+  waiting: { variant: 'secondary', labelKey: 'realtimeToggle.waiting', dot: 'var(--cth-lemon)', anim: 'cth-blink 1400ms steps(2, end) infinite', helpKey: 'realtimeToggle.helpOfflineWaiting' },
+  speaking: { ...STATE_VIEW.responding, helpKey: 'realtimeToggle.helpOfflineSpeaking' }
+};
+
 export interface RealtimeMichaelToggleProps {
   /** Compact form for the fullscreen header / tight rows — hides the text label. */
   compact?: boolean;
@@ -89,6 +99,15 @@ export function RealtimeMichaelToggle({ compact = false }: RealtimeMichaelToggle
   const { t } = useTranslation();
   const hasOpenAiKey = useStore((s) => s.hasOpenAiKey);
   const { status, error, connect, disconnect } = useRealtimeMichael();
+  // Offline talk (realtime/localTalk.ts): without an OpenAI key, when the local
+  // Whisper model is downloaded (Settings → Voice), talk works on this machine.
+  const [localReady, setLocalReady] = useState(false);
+  useEffect(() => {
+    if (hasOpenAiKey) return;
+    void window.cth.whisperStatus().then((w) => setLocalReady(!!w.small)).catch(() => {});
+  }, [hasOpenAiKey]);
+  const offline = useLocalTalk();
+  const godId = useStore((s) => s.agents.find((a) => a.isGod)?.id);
   // Measured viewport coords, not a CSS offset. The agent dock clips its
   // children, so a popover positioned inside the card gets sliced at the card's
   // edge no matter how it is anchored — which is exactly what happened. A portal
@@ -99,22 +118,26 @@ export function RealtimeMichaelToggle({ compact = false }: RealtimeMichaelToggle
   const panelRef = useRef<HTMLDivElement | null>(null);
   const hintOpen = hint !== null;
 
-  const view = STATE_VIEW[status];
-  const noKey = !hasOpenAiKey;
+  const useOffline = !hasOpenAiKey && localReady && !!godId;
+  const view = useOffline ? OFFLINE_VIEW[offline.status] : STATE_VIEW[status];
+  // "No key" now means: no OpenAI key AND no offline model to fall back on.
+  const noKey = !hasOpenAiKey && !useOffline;
 
   // Without a BYOK OpenAI key: stay visible but disabled (matches FreeFlowButton).
   // Talk mints an ephemeral token from the OpenAI key (apikey:openai) — the SAME
   // OpenAI provider key set under Agents & Models, used for the Realtime voice API.
   // The tooltip carries the full WHY; the quiet info affordance below gives a
   // discoverable cue so the user never just hits a silently-dead button.
+  const shownError = useOffline ? offline.error : error;
   const title = noKey
     ? t('realtimeToggle.noKeyTitle')
-    : error
-      ? `${t(view.helpKey)} — ${error}`
+    : shownError
+      ? `${t(view.helpKey)} — ${shownError}`
       : t(view.helpKey);
 
   const onClick = () => {
     if (noKey) return;
+    if (useOffline) { if (godId) localTalk.toggle(godId); return; }
     if (status === 'off') void connect();
     else disconnect();
   };

@@ -1558,6 +1558,9 @@ const api = {
   envSetRunner: (r: Partial<RunnerView>): Promise<{ ok: boolean; id?: string; error?: string }> => ipcRenderer.invoke('env:setRunner', r),
   /** Subagents agents started (their Task/Agent tool): running first. */
   subagentsList: (): Promise<SubagentView[]> => ipcRenderer.invoke('subagents:list'),
+  /** Read text aloud with the OS's own voices (offline talk). Resolves when done. */
+  voiceSpeak: (text: string, lang: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('voice:speak', text, lang),
+  voiceStopSpeaking: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('voice:stopSpeaking'),
   onSubagentsChanged: (cb: (list: SubagentView[]) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, list: SubagentView[]) => cb(list);
     ipcRenderer.on('subagents:changed', listener);

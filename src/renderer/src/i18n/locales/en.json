@@ -991,6 +991,14 @@
     "namesHint": "Device names appear after you first start a voice session and grant mic access. The microphone choice applies the next time {{godName}} connects; the speaker switches live."
   },
   "realtimeToggle": {
+    "helpOfflineSpeaking": "{{godName}} is answering aloud (click to stop)",
+    "talkOffline": "talk (offline)",
+    "transcribing": "writing…",
+    "waiting": "waiting",
+    "helpOffline": "Talk to {{godName}} on this machine: speak, click again to send; the reply is read aloud. No OpenAI key needed.",
+    "helpOfflineListening": "Listening — click to send what you said to {{godName}}",
+    "helpOfflineBusy": "Turning what you said into text, on this machine…",
+    "helpOfflineWaiting": "Sent. Waiting for {{godName}}'s reply to read it aloud (click to stop waiting)",
     "talk": "talk",
     "connecting": "…",
     "listening": "listening",

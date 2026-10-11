@@ -60,6 +60,12 @@ let chunks: Blob[] = [];
 let wantActive = false;
 /** True while getUserMedia is in flight, to ignore re-entrant start() calls. */
 let opening = false;
+/** Send the transcript to the agent (offline talk) instead of filling its draft. */
+let sendOnFinish = false;
+/** Transcribe on this machine whatever Settings → Voice says (offline talk). */
+let forceLocal = false;
+/** Told the transcript, or the error, once a sending capture finishes. */
+let onSent: ((r: { ok: boolean; text?: string; error?: string }) => void) | null = null;
 
 /** Prefer webm/opus (Groq-supported, Chromium default); fall back to whatever the
  *  platform offers. Returns '' to let MediaRecorder pick its default. */
@@ -83,6 +89,7 @@ function teardownStream(): void {
 /** Append `text` to the target agent's composer draft (with a separating space). */
 function deliverTranscript(agentId: string, text: string): void {
   const st = useStore.getState();
+  if (sendOnFinish) { st.enqueueMessage(agentId, text); return; }
   const cur = st.drafts[agentId] ?? '';
   const sep = cur && !/\s$/.test(cur) ? ' ' : '';
   st.setDraft(agentId, cur + sep + text);
@@ -90,8 +97,11 @@ function deliverTranscript(agentId: string, text: string): void {
 
 /** Begin capturing for `agentId`. Safe to call only from the idle state; surfaces
  *  a friendly error if the mic can't be opened. */
-async function start(agentId: string): Promise<void> {
+async function start(agentId: string, opts: { send?: boolean; local?: boolean; onSent?: (r: { ok: boolean; text?: string; error?: string }) => void } = {}): Promise<void> {
   if (state.status !== 'idle' || opening) return;
+  sendOnFinish = !!opts.send;
+  forceLocal = !!opts.local;
+  onSent = opts.onSent ?? null;
   if (!agentId) { setState({ error: 'no agent selected' }); return; }
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     setState({ error: 'microphone not available' });
@@ -154,14 +164,15 @@ async function finish(agentId: string): Promise<void> {
   chunks = [];
   if (blob.size === 0) {
     setState({ status: 'idle', error: 'nothing recorded' });
+    onSent?.({ ok: false, error: 'nothing recorded' });
     return;
   }
   setState({ status: 'transcribing', error: null });
   try {
     // Local Whisper (offline) or Groq, as set in Settings → Voice.
     const cfg = await window.cth.getConfig().catch(() => null);
-    const res = cfg?.freeflowEngine === 'local'
-      ? await transcribeLocal(blob, cfg.freeflowLocalModel ?? 'small', whisperLanguage(i18n.language))
+    const res = forceLocal || cfg?.freeflowEngine === 'local'
+      ? await transcribeLocal(blob, cfg?.freeflowLocalModel ?? 'small', whisperLanguage(i18n.language))
       : await window.cth.freeflowTranscribe({
         audio: await blob.arrayBuffer(),
         mimeType: type.split(';')[0],
@@ -170,8 +181,10 @@ async function finish(agentId: string): Promise<void> {
     if (res.ok && res.text) {
       deliverTranscript(agentId, res.text);
       setState({ status: 'idle', error: null });
+      onSent?.({ ok: true, text: res.text });
     } else {
       setState({ status: 'idle', error: res.error || 'transcription failed' });
+      onSent?.({ ok: false, error: res.error || 'transcription failed' });
     }
   } catch (e) {
     setState({ status: 'idle', error: e instanceof Error ? e.message : 'transcription failed' });

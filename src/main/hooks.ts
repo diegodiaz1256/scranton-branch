@@ -49,6 +49,8 @@ interface HookPayload {
   /** Claude: the tool call's id, the same on its Pre and Post events. */
   tool_use_id?: string;
   stop_hook_active?: boolean;
+  /** Claude Stop: the text of the last assistant reply. */
+  last_assistant_message?: string;
   /** PostToolUse: what the tool returned. PostToolUseFailure: its error. */
   tool_response?: unknown;
   error?: unknown;
@@ -749,6 +751,8 @@ export class HookServer {
       blocked,
       ...(detail ? { detail } : {}),
       ...(files.length ? { files } : {}),
+      ...(event === 'Stop' && typeof p.last_assistant_message === 'string' && p.last_assistant_message.trim()
+        ? { reply: redact(p.last_assistant_message).slice(0, 2000) } : {}),
       ts: Date.now()
     };
     if (!validateHookEvent(payload)) {

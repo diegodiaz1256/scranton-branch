@@ -13,9 +13,11 @@ export interface HookEvent {
   ts?: number;
   /** Files this tool call writes, absolute (any CLI: Write, apply_patch, write_to_file…). */
   files?: string[];
+  /** Stop: the agent's last reply (redacted, short), e.g. to read it aloud. */
+  reply?: string;
 }
 
-const OPTIONAL_STRING_FIELDS = ['tool', 'notificationType', 'source', 'message', 'detail'] as const;
+const OPTIONAL_STRING_FIELDS = ['tool', 'notificationType', 'source', 'message', 'detail', 'reply'] as const;
 
 /** Validate an untrusted payload before it crosses the Electron IPC boundary. */
 export function validateHookEvent(value: unknown): value is HookEvent {

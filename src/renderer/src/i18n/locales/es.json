@@ -991,6 +991,14 @@
     "namesHint": "Los nombres de los dispositivos aparecen después de iniciar una sesión de voz y dar acceso al micrófono. El micrófono elegido se aplica la próxima vez que {{godName}} se conecte; el altavoz cambia al momento."
   },
   "realtimeToggle": {
+    "helpOfflineSpeaking": "{{godName}} está respondiendo en voz alta (pulsa para parar)",
+    "talkOffline": "hablar (sin conexión)",
+    "transcribing": "escribiendo…",
+    "waiting": "esperando",
+    "helpOffline": "Habla con {{godName}} en este equipo: habla y vuelve a pulsar para enviar; su respuesta se lee en voz alta. No hace falta clave de OpenAI.",
+    "helpOfflineListening": "Escuchando: pulsa para enviar a {{godName}} lo que has dicho",
+    "helpOfflineBusy": "Pasando a texto lo que has dicho, en este equipo…",
+    "helpOfflineWaiting": "Enviado. Esperando la respuesta de {{godName}} para leerla en voz alta (pulsa para dejar de esperar)",
     "talk": "hablar",
     "connecting": "…",
     "listening": "escuchando",

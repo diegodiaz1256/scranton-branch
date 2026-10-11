@@ -54,6 +54,10 @@ env.customCache = {
 };
 
 const loaded = new Map<ModelId, Promise<Asr>>();
+/** WebGPU loaded the model but failed while transcribing (seen live: ONNX
+ *  Runtime's WebGPU backend threw "Cannot read properties of undefined (reading
+ *  'destroy')"). From then on this worker runs on WASM. */
+let gpuFailed = false;
 
 async function load(model: ModelId, download: boolean): Promise<Asr> {
   env.allowRemoteModels = download;
@@ -65,7 +69,7 @@ async function load(model: ModelId, download: boolean): Promise<Asr> {
   env.allowLocalModels = !download;
   env.localModelPath = '/__no_local_models__/';
   const m = MODELS[model];
-  const device = 'gpu' in navigator ? 'webgpu' : 'wasm';
+  const device = 'gpu' in navigator && !gpuFailed ? 'webgpu' : 'wasm';
   const make = (dev: string) => pipeline('automatic-speech-recognition', m.id, {
     dtype: m.dtype,
     device: dev,
@@ -98,7 +102,18 @@ self.onmessage = async (ev: MessageEvent) => {
       let p = loaded.get(m.model);
       if (!p) { p = load(m.model, false); loaded.set(m.model, p); }
       const asr = await p.catch((e) => { loaded.delete(m.model!); throw e; });
-      const out = await asr(m.audio, { language: m.language || undefined, task: 'transcribe', chunk_length_s: 30 });
+      const opts = { language: m.language || undefined, task: 'transcribe', chunk_length_s: 30 };
+      let out: Awaited<ReturnType<Asr>>;
+      try {
+        out = await asr(m.audio, opts);
+      } catch (e) {
+        // WebGPU failed mid-run: load the same model on WASM and try once more.
+        if (gpuFailed || !('gpu' in navigator)) throw e;
+        gpuFailed = true;
+        const wasm = load(m.model, false);
+        loaded.set(m.model, wasm);
+        out = await (await wasm.catch((err) => { loaded.delete(m.model!); throw err; }))(m.audio, opts);
+      }
       const text = (Array.isArray(out) ? out.map((o) => o.text).join(' ') : out.text).trim();
       post({ type: 'text', ref: m.id, text });
     }

@@ -144,6 +144,7 @@ import {
 } from '../shared/codexRemote';
 import { makeSpawnGate } from './spawnGate';
 import { clearWorkerScratch } from './workerScratch';
+import { speak as speakAloud, stopSpeaking } from './speak';
 import { appendWorkLog, workLogLine, type WorkLogEntry } from './workLog';
 import { messageBody } from '../shared/messageBody';
 import { FreezeMonitor, instrumentEvents, instrumentIpc, instrumentTimers, type FreezeEntry } from './freezeLog';
@@ -415,6 +416,10 @@ const hookServer = new HookServer(
 // Subagents agents start (Task/Agent tool), for Temps.
 hookServer.onSubagentsChanged = () => { try { liveWebContents()?.send('subagents:changed', hookServer.subagents.list()); } catch { /* window gone */ } };
 ipcMain.handle('subagents:list', () => hookServer.subagents.list());
+// Offline talk: read the orchestrator's reply with the OS's own voices.
+ipcMain.handle('voice:speak', (_evt, text: unknown, lang: unknown) =>
+  typeof text === 'string' && text.trim() ? speakAloud(text.slice(0, 4000), typeof lang === 'string' ? lang : 'en') : { ok: false, error: 'nothing to say' });
+ipcMain.handle('voice:stopSpeaking', () => { stopSpeaking(); return { ok: true }; });
 hookServer.notifyAs = (agentId) => ({
   name: hive.registry().agents?.[agentId]?.name,
   icon: agentFaces.get(agentId)
