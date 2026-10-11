@@ -146,9 +146,31 @@ export class Fortress {
   private get logDir(): string { return join(this.deps.baseDir, 'logs'); }
   private get marker(): string { return join(this.installDir, '.verified'); }
 
+  // Settings asks for the status every few seconds. Walking the 600 MB bundle
+  // for the launcher and a sync `where uv` / `where tilion` each time froze the
+  // main process for 200-370 ms per ask (freezes.jsonl: ipc fortress:status).
+  private launcherCache: string | null = null;
+  private lookups = new Map<string, { path: string | null; at: number }>();
+
+  /** A CLI lookup kept while the file exists; a missing one is retried every 30 s. */
+  private cachedLookup(name: string, find: (() => string | null) | undefined): string | null {
+    if (!find) return null;
+    const c = this.lookups.get(name);
+    if (c && (c.path ? existsSync(c.path) : Date.now() - c.at < 30_000)) return c.path;
+    const path = find();
+    this.lookups.set(name, { path, at: Date.now() });
+    return path;
+  }
+
   /** The engine's launcher in the extracted bundle (`tilion`, or `tillion.cmd` on Windows). */
   launcherPath(): string | null {
-    if (!existsSync(this.marker)) return null;
+    if (!existsSync(this.marker)) { this.launcherCache = null; return null; }
+    if (this.launcherCache && existsSync(this.launcherCache)) return this.launcherCache;
+    this.launcherCache = this.findLauncher();
+    return this.launcherCache;
+  }
+
+  private findLauncher(): string | null {
     const want = this.platform === 'win32' ? 'tillion.cmd' : 'tilion';
     const walk = (dir: string, depth: number): string | null => {
       if (depth > 4) return null;
@@ -167,9 +189,9 @@ export class Fortress {
   /** argv for Fortress's CLI: the user's own `tilion` when installed, else the
    *  one pinned to this release through uv (where it is named tilion-fortress). */
   private cli(args: string[]): { cmd: string; args: string[]; via: 'tilion' | 'uv' } | null {
-    const own = this.deps.tilionPath?.();
+    const own = this.cachedLookup('tilion', this.deps.tilionPath);
     if (own) return { cmd: own, args, via: 'tilion' };
-    const uv = this.deps.uvPath();
+    const uv = this.cachedLookup('uv', this.deps.uvPath);
     if (uv) return { cmd: uv, args: ['tool', 'run', '--from', FORTRESS_CLI_SPEC, 'tilion-fortress', ...args], via: 'uv' };
     return null;
   }
