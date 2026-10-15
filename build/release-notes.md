@@ -1,4 +1,2 @@
-- **Security**: subagent tool calls are checked against their agent's limits.
-- **Runner proposals** open in the app and can create secrets.
-- **Clearer Settings**, with search; subagents listed in Temps.
-- Faster start on slow disks.
+- **WSL offices**: agents can write in their own folders again.
+- Fewer freezes on WSL offices (start, log, agent launch).
