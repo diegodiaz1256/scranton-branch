@@ -4,6 +4,8 @@ import { request as httpsRequest } from 'node:https';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readConfig } from './config';
+import { repairLaunchers } from './appImageLauncher';
+import { homedir } from 'node:os';
 import { DEFAULT_DROP_HTML } from '../shared/releaseDrop';
 import { reduceStatus, clampPercent, isNewer, installerUrl, shouldShowReleaseDrop, REPO, type UpdateStatus } from '../shared/updateState';
 
@@ -106,6 +108,25 @@ function failPendingRestart(error: string): void {
 
 /** Append-only breadcrumb trail in userData. The whole point of this file's
  *  existence is that the last failure left no trace anywhere. */
+/** The version the updater last downloaded (for the AppImage launcher). */
+let downloadedVersion: string | undefined;
+
+/** Where desktop launchers live (XDG). */
+function applicationsDir(): string {
+  return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'applications');
+}
+
+/** At start, as an AppImage on Linux: launchers left pointing at an AppImage
+ *  an earlier update deleted (before the updater repaired them) are fixed. */
+export function repairAppImageLaunchers(): void {
+  const current = process.env.APPIMAGE;
+  if (process.platform !== 'linux' || !current) return;
+  try {
+    const changed = repairLaunchers(applicationsDir(), current, app.getVersion());
+    if (changed.length) logLine(`launchers pointed at ${current}: ${changed.join(', ')}`);
+  } catch (e) { logLine(`launcher repair failed: ${errText(e)}`); }
+}
+
 function logLine(msg: string): void {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
   console.log('[updater]', msg);
@@ -528,8 +549,16 @@ export function initAutoUpdater(getWebContents: () => WebContents | null): void 
         emit({ state: 'downloading', version, percent: clampPercent(p.percent) });
       });
       autoUpdater.on('update-downloaded', (info) => {
+        downloadedVersion = info.version;
         logLine(`update downloaded: ${info.version} — waiting for the user to restart`);
         emit({ state: 'downloaded', version: info.version, notes: typeof info.releaseNotes === 'string' ? info.releaseNotes : undefined });
+      });
+      // A versioned AppImage is replaced by a file with the new version in its
+      // name and the old one deleted: point the menu launcher at the new file
+      // before the app relaunches, or the launcher opens nothing.
+      autoUpdater.on('appimage-filename-updated', (path: string) => {
+        const changed = repairLaunchers(applicationsDir(), path, downloadedVersion ?? app.getVersion(), process.env.APPIMAGE);
+        logLine(`AppImage renamed to ${path}; launchers updated: ${changed.length ? changed.join(', ') : 'none'}`);
       });
       autoUpdater.on('error', (err) => {
         const message = errText(err);

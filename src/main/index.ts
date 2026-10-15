@@ -29,7 +29,7 @@ import { homedir, hostname } from 'node:os';
 import { request as httpsRequest } from 'node:https';
 import { PtyManager, type SpawnOptions } from './pty';
 import { resolveCommand as resolveCliCommand, resolveCommandAsync, isSafeCommandName, userShellPath } from './shellEnv';
-import { initAutoUpdater, abortPendingRestart } from './updater';
+import { initAutoUpdater, abortPendingRestart, repairAppImageLaunchers } from './updater';
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
 import {
   readConfig, writeConfig, setAgentTokenCap, setAgentMcpGrant, resetConfig, onConfigWritten, ensureHarnessHome, ensureClaudePermissionsAccepted,
@@ -7907,6 +7907,7 @@ app.whenReady().then(() => {
   // never restarts on its own. Falls back to a notify-only releases/latest
   // check where native updating isn't possible (win-portable, dev-ish builds).
   // The server is updated by its package (npm, docker pull), never in place.
+  if (!SERVER) repairAppImageLaunchers();
   if (!SERVER) initAutoUpdater(() => liveWebContents());
   // Bootstrap the hive (if harnessHome is configured) and start the message router.
   // Each slow boot step is named in the freeze log (freezeLog.ts).
