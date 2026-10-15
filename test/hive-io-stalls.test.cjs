@@ -32,10 +32,12 @@ test('the helper scripts are written once, then left alone until they change', (
   const hive = new HiveManager(() => home);
   hive.ensureHive();
   const shim = path.join(hive.root(), 'bin', 'md-run.cjs');
-  const old = new Date(Date.now() - 60_000);
+  // Whole seconds, and 1 ms of slack: some filesystems (CI's) store mtimes
+  // with less precision than JavaScript's.
+  const old = new Date(Math.floor((Date.now() - 60_000) / 1000) * 1000);
   fs.utimesSync(shim, old, old);
   hive.ensureHive();
-  assert.equal(fs.statSync(shim).mtimeMs, old.getTime(), 'unchanged: not rewritten');
+  assert.ok(Math.abs(fs.statSync(shim).mtimeMs - old.getTime()) < 1, 'unchanged: not rewritten');
   fs.rmSync(shim);
   hive.ensureHive();
   assert.ok(fs.existsSync(shim), 'a missing one is written back');
