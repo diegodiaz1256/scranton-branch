@@ -36,7 +36,7 @@ test('the restart handler waits for an outcome instead of assuming one', () => {
 
 test('cancelling the quit warning is wired to the restart handler', () => {
   const src = read('src/main/index.ts');
-  assert.ok(src.includes("import { initAutoUpdater, abortPendingRestart } from './updater';"),
+  assert.match(src, /import \{[^}]*\babortPendingRestart\b[^}]*\} from '\.\/updater';/,
     'index.ts must import the abort');
   const handler = src.slice(src.indexOf("ipcMain.handle('app:cancelClose'"));
   const body = handler.slice(0, handler.indexOf('\n});'));
