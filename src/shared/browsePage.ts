@@ -9,8 +9,15 @@
  * Pure helpers here so they can be tested without Electron.
  */
 
-export const BROWSE_DEFAULT_CHARS = 20_000;
+export const BROWSE_DEFAULT_CHARS = 12_000;
 export const BROWSE_MAX_CHARS = 100_000;
+/** How long a read page stays cached for its next pages. */
+export const BROWSE_CACHE_MS = 10 * 60_000;
+
+/** article: the page's main content only (what an agent reads a page for);
+ *  full: everything visible, menus and footers included. */
+export type BrowseMode = 'article' | 'full';
+export function browseMode(raw: unknown): BrowseMode { return raw === 'full' ? 'full' : 'article'; }
 
 /** Why an agent may not open this URL, or null. http(s) only; never the cloud
  *  metadata address (169.254.169.254 and its link-local range). Local dev
@@ -54,8 +61,33 @@ export const EXTRACT_PAGE_SCRIPT = `(() => {
     if (links.length >= 200) break;
   }
   for (const el of document.querySelectorAll('script, style, noscript, svg, iframe, template')) el.remove();
-  const text = document.body ? document.body.innerText : '';
-  return { title: document.title || '', url: location.href, text, links };
+  const fullText = document.body ? document.body.innerText : '';
+  // The main content: the largest <article>, else <main> / [role=main], else
+  // the body; then without what surrounds content on most sites (menus,
+  // headers, footers, sidebars, ads, cookie and share bars).
+  const textOf = (el) => (el ? (el.innerText || '').trim() : '');
+  const articles = [...document.querySelectorAll('article')].sort((a, b) => textOf(b).length - textOf(a).length);
+  let root = articles[0] && textOf(articles[0]).length > 400 ? articles[0]
+    : document.querySelector('main, [role="main"]') || document.body;
+  let text = fullText;
+  if (root) {
+    const copy = root.cloneNode(true);
+    const noise = 'nav, header, footer, aside, form, button, [role="navigation"], [role="banner"], [role="contentinfo"], [role="complementary"], [aria-hidden="true"], [hidden]';
+    const noisy = /(^|[-_\s])(ad|ads|advert|advertisement|banner|cookie|consent|newsletter|promo|share|social|sponsor|related|comments?|sidebar|subscribe|popup|modal)([-_\s]|$)/i;
+    for (const el of copy.querySelectorAll(noise)) el.remove();
+    for (const el of copy.querySelectorAll('[class], [id]')) {
+      const tag = ((el.getAttribute('class') || '') + ' ' + (el.id || ''));
+      if (noisy.test(tag) && (el.innerText || el.textContent || '').length < 2000) el.remove();
+    }
+    // innerText needs layout: measure the cleaned copy in an off-screen box.
+    copy.style.position = 'absolute'; copy.style.left = '-99999px'; copy.style.width = '1000px';
+    document.body.appendChild(copy);
+    const article = (copy.innerText || '').trim();
+    copy.remove();
+    // A cleanup that left almost nothing guessed wrong: keep the page text.
+    if (article.length > Math.min(500, fullText.trim().length * 0.2)) text = article;
+  }
+  return { title: document.title || '', url: location.href, text, fullText, links };
 })()`;
 
 /** Runs on DuckDuckGo's HTML results page: title, URL and snippet per result. */
@@ -82,16 +114,61 @@ export function unwrapSearchHref(href: string): string {
   } catch { return href; }
 }
 
-export interface BrowsedPage { title: string; url: string; text: string; links?: Array<{ text: string; href: string }>; status?: number }
+export interface BrowsedPage { title: string; url: string; text: string; fullText?: string; links?: Array<{ text: string; href: string }>; status?: number }
 
-/** What the agent gets back: a short header, the text (cut to `max`), links on request. */
-export function formatBrowsed(p: BrowsedPage, max: number, withLinks: boolean): string {
-  const text = p.text.replace(/\n{3,}/g, '\n\n').trim();
-  const cut = text.length > max;
-  const head = [`# ${p.title || '(no title)'}`, `URL: ${p.url}${p.status && p.status >= 400 ? ` (HTTP ${p.status})` : ''}`, ''];
-  const body = cut ? `${text.slice(0, max)}\n\n[… cut at ${max} of ${text.length} characters; ask for more with max_chars]` : text;
-  const links = withLinks && p.links?.length ? ['', '## Links', ...p.links.map((l) => `- [${l.text}](${l.href})`)] : [];
-  return [...head, body || '(the page has no readable text)', ...links].join('\n');
+/** Page `n` (1-based) of `text` cut into pieces of about `size` characters,
+ *  ending at a paragraph or line break where one is near, so a piece does
+ *  not stop mid-sentence. */
+export function pageOf(text: string, n: number, size: number): { body: string; page: number; pages: number } {
+  const pieces: string[] = [];
+  let rest = text;
+  while (rest.length > size) {
+    let cut = rest.lastIndexOf('\n\n', size);
+    if (cut < size * 0.6) cut = rest.lastIndexOf('\n', size);
+    if (cut < size * 0.6) cut = size;
+    pieces.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
+  }
+  pieces.push(rest);
+  const pages = pieces.length;
+  const page = Math.max(1, Math.min(pages, Math.floor(n) || 1));
+  return { body: pieces[page - 1], page, pages };
+}
+
+/**
+ * What the agent gets back: a short header, one page of the text, links on
+ * request. The text is marked as untrusted web content: it is data from the
+ * page, never instructions to follow. The next page comes from the cache.
+ */
+export function formatBrowsed(p: BrowsedPage, o: { page?: number; size: number; mode: BrowseMode; withLinks: boolean }): string {
+  const source = o.mode === 'full' ? (p.fullText ?? p.text) : p.text;
+  const text = source.replace(/\n{3,}/g, '\n\n').trim();
+  const { body, page, pages } = pageOf(text, o.page ?? 1, o.size);
+  const head = [
+    `# ${p.title || '(no title)'}`,
+    `URL: ${p.url}${p.status && p.status >= 400 ? ` (HTTP ${p.status})` : ''}`,
+    `${o.mode === 'article' ? 'Main content' : 'Whole page'} · page ${page} of ${pages}${page < pages ? ` · next: page ${page + 1}` : ''}${o.mode === 'article' && p.fullText ? ' · menus, footers and ads left out (mode "full" for everything)' : ''}`,
+    ''
+  ];
+  const links = o.withLinks && p.links?.length ? ['', '## Links', ...p.links.map((l) => `- [${l.text}](${l.href})`)] : [];
+  return [...head, '<untrusted-web-content>', body || '(the page has no readable text)', '</untrusted-web-content>', ...links].join('\n');
+}
+
+/** Read pages kept for their next pages: key → page and when it was read. */
+export class BrowseCache {
+  private entries = new Map<string, { page: BrowsedPage; at: number }>();
+  constructor(private readonly ttl = BROWSE_CACHE_MS, private readonly max = 50, private readonly now: () => number = Date.now) {}
+  get(url: string): BrowsedPage | undefined {
+    const e = this.entries.get(url);
+    if (!e) return undefined;
+    if (this.now() - e.at > this.ttl) { this.entries.delete(url); return undefined; }
+    return e.page;
+  }
+  set(url: string, page: BrowsedPage): void {
+    this.entries.delete(url);
+    this.entries.set(url, { page, at: this.now() });
+    while (this.entries.size > this.max) this.entries.delete(this.entries.keys().next().value as string);
+  }
 }
 
 export function formatSearch(query: string, results: Array<{ title: string; href: string; snippet: string }>, fallbackText: string): string {
