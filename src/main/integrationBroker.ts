@@ -88,7 +88,7 @@ export interface IntegrationBrokerDeps {
    *  app's Chromium. `blocked` says why this agent may not (Web switched off). */
   browser?: {
     blocked: (agentId: string | undefined) => string | null;
-    browse: (url: string, opts: { links: boolean; maxChars: number }) => Promise<string>;
+    browse: (url: string, opts: { links: boolean; maxChars: number; page?: number; mode?: string }) => Promise<string>;
     search: (query: string) => Promise<string>;
   };
 }
@@ -265,7 +265,12 @@ export class IntegrationBroker {
         try { a = JSON.parse(buf.toString('utf8') || '{}'); } catch { /* empty */ }
         const text = browse[1] === 'search'
           ? await browser.search(String(a.query ?? ''))
-          : await browser.browse(String(a.url ?? ''), { links: a.links === true, maxChars: typeof a.max_chars === 'number' ? a.max_chars : 0 });
+          : await browser.browse(String(a.url ?? ''), {
+            links: a.links === true,
+            maxChars: typeof a.max_chars === 'number' ? a.max_chars : 0,
+            page: typeof a.page === 'number' ? a.page : 1,
+            mode: typeof a.mode === 'string' ? a.mode : undefined
+          });
         res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
         res.end(text);
       }).catch((e) => IntegrationBroker.sendError(res, 422, 'browse_failed', e instanceof Error ? e.message : String(e)));

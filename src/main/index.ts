@@ -94,7 +94,10 @@ import { addConnection, connectionAccessFor, setConnectionAccess, connectionKeyS
 import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
-import { browseChars, formatBrowsed, formatSearch } from '../shared/browsePage';
+import { BrowseCache, browseChars, browseMode, formatBrowsed, formatSearch } from '../shared/browsePage';
+
+/** Pages agents read, kept 10 minutes for their next pages (browsePage.ts). */
+const browseCache = new BrowseCache();
 import { floorActiveSince } from '../shared/tokenDiet';
 import { browsePage, searchWeb, setExternalEngine } from './browser';
 import { Fortress } from './fortress';
@@ -705,7 +708,14 @@ const integrationBroker = new IntegrationBroker({
     blocked: (agentId) => (agentId && cleanToolBlocks(readConfig().agentToolBlocks?.[agentId]).includes('web')
       ? 'Web is switched off for this agent (Capabilities), so the office browser is too.'
       : null),
-    browse: async (url, o) => formatBrowsed(await browsePage(url), browseChars(o.maxChars || undefined), o.links),
+    browse: async (url, o) => {
+      // Page 1 is read fresh; the next pages come from what was just read, so
+      // reading on costs only the new text, not the whole page again.
+      const page = Math.max(1, Math.floor(o.page ?? 1) || 1);
+      let read = page > 1 ? browseCache.get(url) : undefined;
+      if (!read) { read = await browsePage(url); browseCache.set(url, read); }
+      return formatBrowsed(read, { page, size: browseChars(o.maxChars || undefined), mode: browseMode(o.mode), withLinks: o.links });
+    },
     search: async (query) => { const r = await searchWeb(query); return formatSearch(query, r.results, r.text); }
   }
 });

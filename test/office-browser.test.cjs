@@ -34,9 +34,9 @@ test('the user agent is the Chrome one, without Electron and the app', () => {
 });
 
 test('what the agent gets back', () => {
-  const out = B.formatBrowsed({ title: 'T', url: 'https://x/', text: 'a'.repeat(3000), links: [{ text: 'L', href: 'https://x/l' }], status: 403 }, 1000, true);
+  const out = B.formatBrowsed({ title: 'T', url: 'https://x/', text: 'a'.repeat(3000), links: [{ text: 'L', href: 'https://x/l' }], status: 403 }, { size: 1000, mode: 'article', withLinks: true });
   assert.match(out, /^# T\nURL: https:\/\/x\/ \(HTTP 403\)/);
-  assert.match(out, /cut at 1000 of 3000 characters/);
+  assert.match(out, /page 1 of 3 · next: page 2/);
   assert.match(out, /- \[L\]\(https:\/\/x\/l\)/);
   assert.equal(B.browseChars(undefined), B.BROWSE_DEFAULT_CHARS);
   assert.equal(B.browseChars(10_000_000), B.BROWSE_MAX_CHARS);
@@ -69,7 +69,7 @@ test('broker: /browse and /search reach the browser', async (t) => {
   assert.equal(await r1.text(), 'PAGE https://example.com');
   const r2 = await post(b, token, 'search', { query: 'warhammer' });
   assert.equal(await r2.text(), 'RESULTS warhammer');
-  assert.deepEqual(calls, [['browse', 'https://example.com', { links: true, maxChars: 5000 }], ['search', 'warhammer']]);
+  assert.deepEqual(calls, [['browse', 'https://example.com', { links: true, maxChars: 5000, page: 1, mode: undefined }], ['search', 'warhammer']]);
   const get = await fetch(`${b.url()}/browse`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(get.status, 405);
   const anon = await fetch(`${b.url()}/browse`, { method: 'POST', body: '{}' });
@@ -175,4 +175,44 @@ test('a failed WebFetch is answered with the office browser, not the prompt', as
   assert.equal(settings.hooks.PostToolUseFailure[0].matcher, 'WebFetch');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src/main/hooks.ts'), 'utf8');
   assert.match(src, /p\.tool_name === 'WebFetch' && webFetchFailed\(event, p\.error, p\.tool_response\) \? WEB_FETCH_HINT : null/);
+});
+
+// Lean output (the reader from the Crawl4AI/Fortress work): main content,
+// pages from a cache, and the page's words marked as data.
+test('pages break at paragraphs, and the last page says there is no next', () => {
+  const para = (n) => `Paragraph ${n}. ` + 'word '.repeat(60).trim();
+  const text = Array.from({ length: 40 }, (_, i) => para(i + 1)).join('\n\n');
+  const one = B.pageOf(text, 1, 2000);
+  assert.ok(one.pages > 1);
+  assert.ok(one.body.endsWith('word'), 'a piece ends at a paragraph, not mid-word');
+  const all = Array.from({ length: one.pages }, (_, i) => B.pageOf(text, i + 1, 2000).body).join('\n\n');
+  assert.equal(all, text, 'the pages put together are the whole text');
+  assert.equal(B.pageOf(text, 999, 2000).page, one.pages, 'a page past the end is the last one');
+  const last = B.formatBrowsed({ title: 'T', url: 'https://x/', text }, { page: one.pages, size: 2000, mode: 'article', withLinks: false });
+  assert.doesNotMatch(last, /next: page/);
+});
+
+test('the page text is marked as untrusted; article and full read different text', () => {
+  const p = { title: 'T', url: 'https://x/', text: 'Only the story.', fullText: 'Menu · Only the story. · Footer' };
+  const art = B.formatBrowsed(p, { size: 12000, mode: 'article', withLinks: false });
+  assert.match(art, /<untrusted-web-content>\nOnly the story\.\n<\/untrusted-web-content>/);
+  assert.match(art, /Main content · page 1 of 1 · menus, footers and ads left out/);
+  const full = B.formatBrowsed(p, { size: 12000, mode: 'full', withLinks: false });
+  assert.match(full, /Menu · Only the story\. · Footer/);
+  assert.equal(B.browseMode('full'), 'full');
+  assert.equal(B.browseMode('anything'), 'article', 'article unless full is asked for');
+});
+
+test('the cache keeps a page for its next pages, then forgets it', () => {
+  let now = 0;
+  const c = new B.BrowseCache(1000, 2, () => now);
+  c.set('https://a/', { title: 'A', url: 'https://a/', text: 'a' });
+  assert.equal(c.get('https://a/').title, 'A');
+  now = 1001;
+  assert.equal(c.get('https://a/'), undefined, 'expired');
+  c.set('https://1/', { title: '1', url: '', text: '' });
+  c.set('https://2/', { title: '2', url: '', text: '' });
+  c.set('https://3/', { title: '3', url: '', text: '' });
+  assert.equal(c.get('https://1/'), undefined, 'oldest dropped past the limit');
+  assert.equal(c.get('https://3/').title, '3');
 });
