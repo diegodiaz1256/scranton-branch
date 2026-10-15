@@ -21,7 +21,10 @@ function setup(t) {
   return { apps, bin, oldPath, newPath, entry };
 }
 
-test('a launcher left on the deleted AppImage is pointed at the current one', (t) => {
+// AppImages and their launchers exist on Linux only.
+const linuxOnly = { skip: process.platform === 'win32' && 'AppImage launchers are Linux only' };
+
+test('a launcher left on the deleted AppImage is pointed at the current one', linuxOnly, (t) => {
   const { apps, oldPath, newPath, entry } = setup(t);
   const f = path.join(apps, 'appimage-scranton-branch.desktop');
   fs.writeFileSync(f, entry(oldPath));
@@ -33,7 +36,7 @@ test('a launcher left on the deleted AppImage is pointed at the current one', (t
   assert.deepEqual(repairLaunchers(apps, newPath, '1.1.1'), [], 'nothing left to do');
 });
 
-test('the updater event names the replaced file; others are left alone', (t) => {
+test('the updater event names the replaced file; others are left alone', linuxOnly, (t) => {
   const { apps, bin, oldPath, newPath, entry } = setup(t);
   fs.writeFileSync(oldPath, ''); // still there at the moment of the event
   const ours = path.join(apps, 'ours.desktop'); fs.writeFileSync(ours, entry(oldPath));
