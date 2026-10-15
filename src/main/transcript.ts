@@ -88,6 +88,16 @@ export function projectDir(cwdIn: string): string {
  *  crafted id like `../../x` would otherwise traverse out of the project dirs). */
 const VALID_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 
+/** Is this session's transcript already in `cwd`'s own project folder? One
+ *  existence check, no scan of the other project folders. */
+export function hasLocalTranscript(cwd: string, sessionId: string): boolean {
+  try {
+    return !!sessionId && VALID_SESSION_ID.test(sessionId) && existsSync(path.join(projectDir(cwd), `${sessionId}.jsonl`));
+  } catch {
+    return false;
+  }
+}
+
 export function seedSessionTranscript(cwd: string, sessionId: string): boolean {
   try {
     if (!sessionId || !VALID_SESSION_ID.test(sessionId)) return false;
