@@ -127,18 +127,39 @@ export function getSecret(secretRef: string | undefined): string | undefined {
   if (!secretRef) return undefined;
   const cipher = readSecretBlob()[secretRef];
   if (!cipher) return undefined;
+  const hit = decryptedCache.get(cipher);
+  if (hit !== undefined) return hit;
   try {
     if (!safeStorage.isEncryptionAvailable()) return undefined;
-    return safeStorage.decryptString(Buffer.from(cipher, 'base64'));
+    const plain = safeStorage.decryptString(Buffer.from(cipher, 'base64'));
+    decryptedCache.set(cipher, plain);
+    return plain;
   } catch {
+    warnUnreadable(secretRef);
     return undefined;
   }
 }
 
-/** Whether a secret is stored for this ref (no decryption). */
+/** Decrypted values by ciphertext: hasSecret runs per broker request. A new or
+ *  changed key has a new ciphertext, so nothing stale is ever returned. */
+const decryptedCache = new Map<string, string>();
+
+const warnedUnreadable = new Set<string>();
+/** Said once per key: it is stored, but this profile cannot decrypt it (it was
+ *  encrypted under another profile's key). Typing it again fixes it. */
+function warnUnreadable(ref: string): void {
+  if (warnedUnreadable.has(ref)) return;
+  warnedUnreadable.add(ref);
+  console.warn(`[secrets] ${ref} is stored but cannot be decrypted in this profile; enter it again`);
+}
+
+/** Whether a USABLE secret is stored for this ref: present and decryptable.
+ *  One that cannot be decrypted counts as missing, so the app asks for it
+ *  instead of saying it is saved while every call fails with "no key". */
 export function hasSecret(secretRef: string | undefined): boolean {
   if (!secretRef) return false;
-  return !!readSecretBlob()[secretRef];
+  if (!readSecretBlob()[secretRef]) return false;
+  return getSecret(secretRef) !== undefined;
 }
 
 /** Delete a stored secret. Idempotent. */
