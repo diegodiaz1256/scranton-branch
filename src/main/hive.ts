@@ -20,7 +20,7 @@
  */
 import { messageBody } from '../shared/messageBody';
 import { mkdir as mkdirAsync, readdir as readdirAsync, readFile as readFileAsync, stat as statAsync, writeFile as writeFileAsync } from 'node:fs/promises';
-import { gitInvocation, linuxizeText, parseWslPath, runInDistro, runInDistroAsync, toWslUnc, type WslLocation } from './wsl';
+import { gitInvocation, linuxizeText, parseWslPath, runInDistro, runInDistroAsync, toWslUnc, type WslLocation, distroHomeUnc } from './wsl';
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync, renameSync,
   readdirSync, statSync, lstatSync, realpathSync, rmSync, appendFileSync,
@@ -1141,7 +1141,9 @@ export class HiveManager {
       roots: [...new Set([meta.cwd, ...this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), ...(opts.writableRoots ?? []),
         tmpdir(), '/tmp', join(homedir(), '.claude', 'projects')].filter((d): d is string => typeof d === 'string' && d.length > 0))],
       git: gitAllowed(opts.mcpDefaults, opts.mcpGrant),
-      contained: !opts.roam
+      contained: !opts.roam,
+      // A WSL floor's agents run in the distro: `~` is the distro user's home.
+      ...(() => { const w = this.wslRoot(); const h = w ? distroHomeUnc(w.distro) : null; return h ? { home: h } : {}; })()
     });
 
     // Non-hive-aware providers (for example Antigravity, Codex, Grok and Pi) don't

@@ -99,3 +99,29 @@ test('through the real hook server: Git off in Capabilities refuses git, the pro
   const ok = await server.handle({ agent_id: 'g2', session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status' } });
   assert.equal(ok.hookSpecificOutput, undefined);
 });
+
+// A WSL office (report 2026-10-14): the app, on Windows, records the folders
+// as \\wsl.localhost\<distro>\…, while the agent inside the distro writes
+// /home/…. Every write to its own outbox, tasks.json and research/ was refused.
+test('on a WSL floor the agent may write its own folders by their Linux paths', () => {
+  const unc = r`\\wsl.localhost\Ubuntu\home\me\office`;
+  const policy = {
+    cwd: unc,
+    roots: [unc, r`\\wsl.localhost\Ubuntu\home\me\office\hive`, r`\\wsl.localhost\Ubuntu\home\me\office\hive\agents\god`, '/tmp'],
+    git: true, contained: true, home: r`\\wsl.localhost\Ubuntu\home\me`
+  };
+  const hive = '/home/me/office/hive';
+  for (const [tool, input] of [
+    ['Write', { file_path: `${hive}/agents/god/outbox/to-worker.json`, content: '{}' }],
+    ['Bash', { command: `cat > ${hive}/agents/god/outbox/to-worker.json <<'X'\n{}\nX` }],
+    ['Bash', { command: `cd ${hive} && python3 -c "print(1)"` }],
+    ['Bash', { command: 'cd /home/me/office && ls hive/agents/god/outbox' }],
+    ['Write', { file_path: r`\\wsl.localhost\Ubuntu\home\me\office\hive\tasks.json`, content: '{}' }],
+    ['Write', { file_path: r`\\wsl$\Ubuntu\home\me\office\research\r.md`, content: 'x' }],
+    ['Bash', { command: 'echo hi > ~/office/hive/board.md' }]
+  ]) assert.equal(guardToolCall(tool, input, policy, '/c/Users/me'), null, `${tool} ${JSON.stringify(input)}`);
+  // Still fenced: somewhere else in the distro, or on the Windows side.
+  assert.ok(guardToolCall('Write', { file_path: '/home/me/other/x.txt', content: 'x' }, policy, '/c/Users/me'));
+  assert.ok(guardToolCall('Bash', { command: 'rm -rf /etc/x' }, policy, '/c/Users/me'));
+  assert.ok(guardToolCall('Write', { file_path: 'C:/Windows/x.txt', content: 'x' }, policy, '/c/Users/me'));
+});

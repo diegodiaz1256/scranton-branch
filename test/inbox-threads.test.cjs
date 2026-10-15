@@ -46,20 +46,20 @@ test('the list puts agents waiting on you first, then the most recent', () => {
 
 test('the answer mail to the orchestrator reads as the answer, with its question', () => {
   const body = [
-    'The human answered the open question on task plugins-forks ("Check fork status: time-machine, omaproton-vpn"):',
-    'Q: **Jim needs two things from you:**',
-    '1. When his fixes are ready, may he push?',
+    'The human answered the open question on task task-7 ("Check the release branches"):',
+    'Q: **Two things from you:**',
+    '1. When the fixes are ready, may they be pushed?',
     '   Answer: yes to both / only #1',
-    'A: Push the PR #9 rework',
+    'A: Push the first fix',
     'do this one',
     "The answer is also recorded in the card's humanQA. Act on it, unblock the card, and continue the work."
   ].join('\n');
-  const mail = msg('a1', 'human', 'god', '2026-10-07T19:14:00Z', { subject: 'HUMAN ANSWER on task "Check fork status: time-machine, omaproton-vpn"', body });
+  const mail = msg('a1', 'human', 'god', '2026-10-07T19:14:00Z', { subject: 'HUMAN ANSWER on task "Check the release branches"', body });
   const parsed = parseAnswerMail(mail);
-  assert.equal(parsed.taskId, 'plugins-forks');
-  assert.match(parsed.q, /^\*\*Jim needs two things/);
+  assert.equal(parsed.taskId, 'task-7');
+  assert.match(parsed.q, /^\*\*Two things from you/);
   assert.match(parsed.q, /Answer: yes to both/, 'an "Answer:" inside the question is not the answer');
-  assert.equal(parsed.a, 'Push the PR #9 rework\ndo this one');
+  assert.equal(parsed.a, 'Push the first fix\ndo this one');
 
   // God's thread: no card copy of this answer, so the mail becomes the answer item.
   const thread = buildThread('god', true, [mail], [], 'god');
@@ -68,7 +68,7 @@ test('the answer mail to the orchestrator reads as the answer, with its question
   assert.equal(thread[0].q, parsed.q);
 
   // When the card already records it, the mail is not shown twice.
-  const tasks = [{ id: 'plugins-forks', title: 'Check fork status', assignee: 'jim',
+  const tasks = [{ id: 'task-7', title: 'Check the release branches', assignee: 'jim',
     humanQA: [{ q: parsed.q, a: parsed.a, askedAt: '2026-10-07T19:00:00Z', answeredAt: '2026-10-07T19:14:00Z' }] }];
   const godThread = buildThread('god', true, [mail], tasks, 'god');
   assert.deepEqual(godThread.map((i) => i.kind), ['question', 'answer']);

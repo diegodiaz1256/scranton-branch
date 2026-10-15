@@ -8,7 +8,7 @@ const { isChromeLine, usageNotice } = loadTs('src/shared/terminalChrome.ts');
 test('Claude Code footer lines are chrome; conversation is not', () => {
   for (const l of [
     "——You've used 91% of your session limit · resets 10:40pm",
-    '(Europe/Madrid) · /upgr',
+    '(Europe/Paris) · /upgr',
     'ad                       · 5h 91%',
     'ctx 0k/1000k (0%) · 5h 91%',
     '›› bypass permissions on (shift+tab to cycle) · ← 2 agents'
