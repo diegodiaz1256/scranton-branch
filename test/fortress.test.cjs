@@ -94,3 +94,36 @@ test('the Fortress CLI gets UTF-8 output, so a cp1252 console cannot crash it', 
   assert.equal(env.PYTHONUTF8, '1');
   assert.equal(env.PYTHONUNBUFFERED, '1');
 });
+
+// A Fortress that did not shut down cleanly left SingletonLock on its profile,
+// and every later start failed (the office browser silently fell back).
+test('a stale or orphaned profile lock is cleared; anything else is left alone', { skip: process.platform === 'win32' && 'Chromium locks with a file handle on Windows' }, (t) => {
+  const { clearStaleProfileLock } = loadTs('src/main/fortress.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-fortress-lock-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const host = os.hostname();
+  const lockTo = (target) => {
+    for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) fs.rmSync(path.join(dir, f), { force: true });
+    fs.symlinkSync(target, path.join(dir, 'SingletonLock'));
+    fs.symlinkSync('123', path.join(dir, 'SingletonCookie'));
+  };
+  const gone = () => !fs.existsSync(path.join(dir, 'SingletonCookie')) && (() => { try { fs.readlinkSync(path.join(dir, 'SingletonLock')); return false; } catch { return true; } })();
+
+  assert.equal(clearStaleProfileLock(dir, 'linux'), 'none', 'no lock');
+
+  lockTo(`${host}-4242`);
+  assert.equal(clearStaleProfileLock(dir, 'linux', () => false), 'stale-removed');
+  assert.ok(gone(), 'the process is gone: lock files removed');
+
+  lockTo(`${host}-4242`);
+  const killed = [];
+  assert.equal(clearStaleProfileLock(dir, 'linux', () => true, () => `chrome --headless=new --user-data-dir=${dir}`, (p) => killed.push(p)), 'orphan-stopped');
+  assert.deepEqual(killed, [4242], 'our own orphaned engine is stopped');
+  assert.ok(gone());
+
+  lockTo(`${host}-4242`);
+  assert.equal(clearStaleProfileLock(dir, 'linux', () => true, () => 'firefox', () => assert.fail('must not kill')), 'in-use');
+  lockTo('another-host-4242');
+  assert.equal(clearStaleProfileLock(dir, 'linux', () => false), 'in-use', 'another machine\'s lock (a shared folder) is not ours');
+  assert.equal(clearStaleProfileLock(dir, 'win32'), 'none');
+});
