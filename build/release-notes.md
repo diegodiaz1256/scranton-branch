@@ -1,2 +1,3 @@
 - **WSL offices**: agents can write in their own folders again.
-- Fewer freezes on WSL offices (start, log, agent launch).
+- Fewer freezes on WSL offices at start and while working.
+- An agent launches without searching every project folder.
