@@ -30,7 +30,36 @@ export const FLOOR_ID = floorIdFrom(process.argv);
 if (FLOOR_ID) {
   const dir = join(BASE_USER_DATA, 'floors', FLOOR_ID);
   mkdirSync(dir, { recursive: true });
+  alignFloorKey(BASE_USER_DATA, dir, process.platform);
   app.setPath('userData', dir);
+}
+
+/**
+ * A floor encrypts with the same key as the main profile.
+ *
+ * On Windows Electron's safeStorage keeps its key in `<userData>/Local State`
+ * (`os_crypt`, protected by the Windows login), so a floor, with a userData of
+ * its own, got a key of its own: the keys copied into it by seedFloor (Jira,
+ * provider keys…) could not be decrypted there and read as missing. Before
+ * Chromium reads Local State, the floor takes the main profile's `os_crypt`.
+ * The floor's previous one is kept aside (a key typed into the floor before
+ * this has to be typed again; the app now says it cannot read it).
+ * On macOS and Linux the key comes from the keychain by app name: already shared.
+ */
+export function alignFloorKey(baseDir: string, floorDir: string, platform: string): boolean {
+  if (platform !== 'win32') return false;
+  const read = (p: string): Record<string, unknown> | null => {
+    try { return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>; } catch { return null; }
+  };
+  const base = read(join(baseDir, 'Local State'))?.os_crypt as Record<string, unknown> | undefined;
+  if (!base || typeof base.encrypted_key !== 'string') return false;
+  const path = join(floorDir, 'Local State');
+  const state = read(path) ?? {};
+  const own = state.os_crypt as Record<string, unknown> | undefined;
+  if (own && own.encrypted_key === base.encrypted_key) return false;
+  if (own && typeof own.encrypted_key === 'string') state.os_crypt_floor_previous = own;
+  state.os_crypt = base;
+  try { writeFileSync(path, JSON.stringify(state)); return true; } catch { return false; }
 }
 
 /** Settings a new floor must not inherit: the office it would open (or the

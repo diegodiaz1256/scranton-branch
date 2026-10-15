@@ -12,7 +12,7 @@ const base = fs.mkdtempSync(path.join(os.tmpdir(), 'md-floors-'));
 let userData = base;
 const electron = require.resolve('electron');
 require.cache[electron] = { id: electron, filename: electron, loaded: true, exports: { app: { getPath: () => userData, setPath: (_k, v) => { userData = v; } } } };
-const { floorIdFrom, floorArgs, floorConfigFrom, seedFloor } = loadTs('src/main/floorProfile.ts');
+const { floorIdFrom, floorArgs, floorConfigFrom, seedFloor, alignFloorKey } = loadTs('src/main/floorProfile.ts');
 const { claimOffice, officeHolder, releaseOffice, OFFICE_LOCK_FILE } = loadTs('src/main/officeLock.ts');
 test.after(() => fs.rmSync(base, { recursive: true, force: true }));
 
@@ -98,4 +98,26 @@ test('the floors list: main first, then the others, newest first, with their off
   assert.deepEqual(removeFloor(root, 'aaaaaaaaaa', 'bbbbbbbbbb', () => null), { ok: true });
   assert.equal(fs.existsSync(path.join(root, 'floors', 'aaaaaaaaaa')), false);
   assert.equal(fs.existsSync(path.join(root, 'Stamford')), false, 'never created, and never touched');
+});
+
+// Windows keeps safeStorage's key in <userData>/Local State, so a floor with a
+// key of its own could not read the keys copied into it (Jira, provider keys).
+test('on Windows a floor takes the main profile\'s encryption key; elsewhere nothing changes', () => {
+  const main = fs.mkdtempSync(path.join(base, 'main-'));
+  const floor = fs.mkdtempSync(path.join(base, 'floor-'));
+  const mainState = { os_crypt: { encrypted_key: 'MAIN-KEY', audit_enabled: true }, other: 1 };
+  fs.writeFileSync(path.join(main, 'Local State'), JSON.stringify(mainState));
+  fs.writeFileSync(path.join(floor, 'Local State'), JSON.stringify({ os_crypt: { encrypted_key: 'FLOOR-KEY' }, browser: { x: 1 } }));
+
+  assert.equal(alignFloorKey(main, floor, 'linux'), false, 'Linux and macOS share the keychain key already');
+  assert.equal(alignFloorKey(main, floor, 'win32'), true);
+  const after = JSON.parse(fs.readFileSync(path.join(floor, 'Local State'), 'utf8'));
+  assert.deepEqual(after.os_crypt, mainState.os_crypt, 'the main key, whole');
+  assert.deepEqual(after.os_crypt_floor_previous, { encrypted_key: 'FLOOR-KEY' }, 'its own kept aside');
+  assert.deepEqual(after.browser, { x: 1 }, 'the rest of its state untouched');
+  assert.equal(alignFloorKey(main, floor, 'win32'), false, 'already shared: nothing to do');
+
+  const fresh = fs.mkdtempSync(path.join(base, 'fresh-'));
+  assert.equal(alignFloorKey(main, fresh, 'win32'), true, 'a floor without Local State gets one');
+  assert.equal(alignFloorKey(fs.mkdtempSync(path.join(base, 'none-')), fresh, 'win32'), false, 'no main key: left alone');
 });

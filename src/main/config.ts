@@ -696,7 +696,12 @@ const codec: SecretCodec = {
       const v = safeStorage.decryptString(Buffer.from(cipher, 'base64'));
       decrypted.set(cipher, v);
       return v;
-    } catch { return undefined; }
+    } catch {
+      // Stored under another profile's key (a floor before its key was shared):
+      // reads as missing, so the app asks for it again.
+      console.warn('[config] a stored key cannot be decrypted in this profile; enter it again');
+      return undefined;
+    }
   }
 };
 function readSecretsFile(): Record<string, string> {
