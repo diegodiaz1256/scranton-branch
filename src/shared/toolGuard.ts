@@ -30,15 +30,25 @@ export interface GuardPolicy {
   git: boolean;
   /** False: the agent may write anywhere (the human let it out). */
   contained: boolean;
+  /** Where `~` points for this agent (on a WSL floor, the distro user's home,
+   *  not the Windows one the app runs as). Absent: the caller's home. */
+  home?: string;
 }
 
 export interface GuardVerdict { deny: true; reason: string }
 
 /** Comparable form of a path: forward slashes, drive letters as `/c/…`,
  *  WSL `/mnt/c/` and Cygwin `/cygdrive/c/` folded in, lower case for drive
- *  paths (Windows is case-insensitive), no trailing slash. */
+ *  paths (Windows is case-insensitive), no trailing slash.
+ *
+ *  A WSL share (`\\wsl.localhost\<distro>\x`, `\\wsl$\<distro>\x`) is the
+ *  same place as `/x` inside the distro. On a WSL floor the app runs on
+ *  Windows and records an agent's folders in the share form, while the agent,
+ *  inside the distro, names them `/home/…`: without this fold every write to
+ *  its own folders (outbox, tasks.json, research/) was refused. */
 export function normPath(p: string): string {
   let s = p.trim().replace(/^["']|["']$/g, '').replace(/\\/g, '/');
+  s = s.replace(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(?=\/|$)/i, '') || '/';
   const drive = /^([a-zA-Z]):(\/|$)/.exec(s);
   if (drive) s = `/${drive[1].toLowerCase()}/${s.slice(drive[0].length)}`;
   s = s.replace(/^\/(?:mnt|cygdrive)\/([a-zA-Z])(\/|$)/, (_m, d: string, sl: string) => `/${d.toLowerCase()}${sl}`);
@@ -257,9 +267,10 @@ function heredocs(cmd: string): Array<{ program: string; body: string }> {
 
 const gitOff: GuardVerdict = { deny: true, reason: 'Refused: git is switched off for you (Capabilities). Leave git to an agent that has it, or tell the human.' };
 
-/** Why a call is refused, or null. `home` resolves `~`. */
+/** Why a call is refused, or null. `home` resolves `~` (the policy's own home wins). */
 export function guardToolCall(tool: string | undefined, input: unknown, policy: GuardPolicy, home = ''): GuardVerdict | null {
   if (!tool) return null;
+  if (policy.home) home = policy.home;
   const inp = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
   const outside = (p: string): boolean => {
     const raw = p.trim().replace(/^["']|["']$/g, '');

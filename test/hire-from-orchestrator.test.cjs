@@ -70,10 +70,10 @@ test('restoreOfferedHire only moves a plain manifest name', (t) => {
 test('a manifest can name its folder and a session to continue', () => {
   const ok = validateHireManifest({
     spec: 'munder-difflin/hire@1', name: 'Dwight',
-    cwd: '/home/me/Projects/omarchy lock plus', sessionId: '0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0', tokenCap: 0
+    cwd: '/home/me/projects/my app', sessionId: '0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0', tokenCap: 0
   });
   assert.equal(ok.ok, true, ok.errors.join('; '));
-  assert.equal(ok.manifest.cwd, '/home/me/Projects/omarchy lock plus');
+  assert.equal(ok.manifest.cwd, '/home/me/projects/my app');
   assert.equal(ok.manifest.sessionId, '0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0');
   assert.equal(ok.manifest.tokenCap, undefined, 'tokenCap 0 is no cap');
   for (const cwd of ['C:\\code\\app', 'C:/code/app', '\\\\wsl.localhost\\Ubuntu\\home', '~/code']) {
