@@ -24,9 +24,10 @@
  *
  * Electron-free: paths and logging are injected, so this is testable in Node.
  */
-import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync, lstatSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync, lstatSync, readlinkSync, readFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -125,6 +126,55 @@ function freePort(): Promise<number> {
       s.close(() => resolve(port));
     });
   });
+}
+
+/**
+ * Clear what a Fortress that did not shut down cleanly left on its profile.
+ *
+ * Chromium on Linux and macOS locks a profile with a SingletonLock symlink to
+ * "<host>-<pid>". When the app quit badly the link stayed, every later start
+ * of the engine on that profile failed, and the office browser quietly used
+ * the built-in engine instead. Before a start:
+ *   - the process the lock names is gone: the lock files are removed;
+ *   - it is alive and it is a Fortress engine on this very profile (an orphan
+ *     of an earlier run): it is stopped, then the lock files removed;
+ *   - anything else (another host, an unrelated process): left alone.
+ * Windows locks with a file handle that dies with the process: nothing to do.
+ */
+export function clearStaleProfileLock(
+  profileDir: string,
+  platform: string = process.platform,
+  isAlive: (pid: number) => boolean = processAlive,
+  cmdlineOf: (pid: number) => string = processCmdline,
+  kill: (pid: number) => void = (pid) => { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+): 'none' | 'stale-removed' | 'orphan-stopped' | 'in-use' {
+  if (platform === 'win32') return 'none';
+  const lock = join(profileDir, 'SingletonLock');
+  let target: string;
+  try { target = readlinkSync(lock); } catch { return 'none'; }
+  const m = /^(.*)-(\d+)$/.exec(target);
+  if (!m || m[1] !== hostname()) return 'in-use';
+  const pid = Number(m[2]);
+  let result: 'stale-removed' | 'orphan-stopped' = 'stale-removed';
+  if (isAlive(pid)) {
+    if (!cmdlineOf(pid).includes(`--user-data-dir=${profileDir}`)) return 'in-use';
+    kill(pid);
+    result = 'orphan-stopped';
+  }
+  for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try { rmSync(join(profileDir, f), { force: true }); } catch { /* best effort */ }
+  }
+  return result;
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/** A process's command line (Linux /proc; elsewhere `ps`). Empty when unknown. */
+function processCmdline(pid: number): string {
+  try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' '); } catch { /* not Linux */ }
+  try { return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 }); } catch { return ''; }
 }
 
 export class Fortress {
@@ -359,6 +409,8 @@ export class Fortress {
     if (!launcher) throw new Error('Fortress is not installed');
     mkdirSync(this.profileDir, { recursive: true });
     mkdirSync(this.logDir, { recursive: true });
+    const lock = clearStaleProfileLock(this.profileDir, this.platform);
+    if (lock !== 'none') this.deps.log?.(`profile lock: ${lock}`);
     const port = await freePort();
     const flags = ['--headless=new', '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${port}`, `--user-data-dir=${this.profileDir}`];
     const log = createWriteStream(join(this.logDir, 'engine.log'), { flags: 'a' });
