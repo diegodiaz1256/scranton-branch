@@ -62,30 +62,46 @@ export const EXTRACT_PAGE_SCRIPT = `(() => {
   }
   for (const el of document.querySelectorAll('script, style, noscript, svg, iframe, template')) el.remove();
   const fullText = document.body ? document.body.innerText : '';
-  // The main content: the largest <article>, else <main> / [role=main], else
-  // the body; then without what surrounds content on most sites (menus,
-  // headers, footers, sidebars, ads, cookie and share bars).
+  // The main content: a long <article> that holds much of the page (a story,
+  // not one of a front page's many teasers), else <main> / [role=main], else
+  // the body; each without what surrounds content on most sites (menus,
+  // headers, footers, sidebars, ads, dialogs, cookie, consent and share bars).
+  // A candidate that cleans down to almost nothing gives way to the next one.
   const textOf = (el) => (el ? (el.innerText || '').trim() : '');
-  const articles = [...document.querySelectorAll('article')].sort((a, b) => textOf(b).length - textOf(a).length);
-  let root = articles[0] && textOf(articles[0]).length > 400 ? articles[0]
-    : document.querySelector('main, [role="main"]') || document.body;
-  let text = fullText;
-  if (root) {
+  const mainEl = document.querySelector('main, [role="main"]');
+  const mainLen = textOf(mainEl || document.body).length;
+  const story = [...document.querySelectorAll('article')]
+    .map((el) => ({ el, len: textOf(el).length }))
+    .sort((a, b) => b.len - a.len)[0];
+  const candidates = [];
+  if (story && story.len >= 1500 && story.len >= mainLen * 0.25) candidates.push(story.el);
+  if (mainEl) candidates.push(mainEl);
+  if (document.body) candidates.push(document.body);
+  const noise = 'nav, header, footer, aside, form, button, dialog, [role="navigation"], [role="banner"], [role="contentinfo"], [role="complementary"], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [aria-hidden="true"], [hidden]';
+  // Consent and paywall layers from the usual providers (Didomi, OneTrust,
+  // Sourcepoint, Quantcast, TrustArc, Cookiebot…), whatever their nesting.
+  const consent = /didomi|onetrust|sp_message|sp-message|qc-cmp|truste|cookiebot|usercentrics|consentwall|cmp-|-cmp|consent|cookie|gdpr|paywall/i;
+  const noisy = /(^|[-_\\s])(ad|ads|advert|advertisement|banner|newsletter|promo|share|social|sponsor|related|comments?|sidebar|subscribe|popup|modal)([-_\\s]|$)/i;
+  const clean = (root) => {
     const copy = root.cloneNode(true);
-    const noise = 'nav, header, footer, aside, form, button, [role="navigation"], [role="banner"], [role="contentinfo"], [role="complementary"], [aria-hidden="true"], [hidden]';
-    const noisy = /(^|[-_\s])(ad|ads|advert|advertisement|banner|cookie|consent|newsletter|promo|share|social|sponsor|related|comments?|sidebar|subscribe|popup|modal)([-_\s]|$)/i;
-    for (const el of copy.querySelectorAll(noise)) el.remove();
+    // A header or footer inside an <article> is the story's own (its headline,
+    // byline): only the site's are dropped.
+    for (const el of copy.querySelectorAll(noise)) if (!(el.matches('header, footer') && el.closest('article'))) el.remove();
     for (const el of copy.querySelectorAll('[class], [id]')) {
-      const tag = ((el.getAttribute('class') || '') + ' ' + (el.id || ''));
-      if (noisy.test(tag) && (el.innerText || el.textContent || '').length < 2000) el.remove();
+      const tag = (el.getAttribute('class') || '') + ' ' + (el.id || '');
+      if (consent.test(tag) || (noisy.test(tag) && (el.innerText || el.textContent || '').length < 2000)) el.remove();
     }
     // innerText needs layout: measure the cleaned copy in an off-screen box.
     copy.style.position = 'absolute'; copy.style.left = '-99999px'; copy.style.width = '1000px';
     document.body.appendChild(copy);
-    const article = (copy.innerText || '').trim();
+    const t = (copy.innerText || '').trim();
     copy.remove();
-    // A cleanup that left almost nothing guessed wrong: keep the page text.
-    if (article.length > Math.min(500, fullText.trim().length * 0.2)) text = article;
+    return t;
+  };
+  let text = fullText;
+  for (const root of candidates) {
+    const t = clean(root);
+    if (t.length > Math.min(500, fullText.trim().length * 0.2)) { text = t; break; }
   }
   return { title: document.title || '', url: location.href, text, fullText, links };
 })()`;
