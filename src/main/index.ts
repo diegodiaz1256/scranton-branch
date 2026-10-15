@@ -55,7 +55,7 @@ import { MemoryManager } from './memory';
 import { KnowledgeManager } from './knowledge';
 import { MemoryReflector, type ReflectSettings } from './reflect';
 import { PersistStore } from './db';
-import { readAgentUsage, readContextTokens, seedSessionTranscript, resolveSessionCwd } from './transcript';
+import { readAgentUsage, readContextTokens, seedSessionTranscript, resolveSessionCwd, hasLocalTranscript } from './transcript';
 import { listIssues, listCIRuns } from './github';
 import { SlackWebhookServer, SlackReplyServer, postSlackReply, type SlackEventFile } from './slack';
 import {
@@ -3081,7 +3081,13 @@ const offeredHireSources = new Map<string, { dir: string; file: string }>();
 /** Manifests the human closed without deciding: back in research/hires/, not
  *  offered again until the next launch (or the review would pop right back). */
 const deferredHireFiles = new Set<string>();
+// Checked every 5 s rather than every worker tick (1.5 s): each look is a
+// directory read, which on a WSL office crosses \\wsl.localhost.
+let hiresCheckedAt = 0;
 function offerOrchestratorHires(): void {
+  const now = Date.now();
+  if (now - hiresCheckedAt < 5000) return;
+  hiresCheckedAt = now;
   const root = hive.root();
   const home = readConfig().harnessHome;
   const dirs = [root ? join(root, 'research', 'hires') : null, home ? join(home, 'research', 'hires') : null]
@@ -4011,7 +4017,15 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     const explicitSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
     // Restore: the newest of this agent's sessions that still has a transcript.
     const sid = explicitSid || (opts.resume === true
-      ? (hive.recentSessions(opts.hive.id).find((x) => seedSessionTranscript(opts.cwd!, x)) ?? hive.lastSession(opts.hive.id))
+      ? (() => {
+          // Cheap first: a transcript already in this folder (one check each).
+          // Only then the full search of every project folder, which crosses
+          // \\wsl.localhost per folder on a WSL office.
+          const ids = hive.recentSessions(opts.hive!.id);
+          return ids.find((x) => hasLocalTranscript(opts.cwd!, x))
+            ?? ids.find((x) => seedSessionTranscript(opts.cwd!, x))
+            ?? hive.lastSession(opts.hive!.id);
+        })()
       : undefined);
     if (sid && !args.includes('--resume')) {
       if (seedSessionTranscript(opts.cwd, sid)) {

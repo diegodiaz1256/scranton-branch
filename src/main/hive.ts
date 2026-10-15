@@ -24,7 +24,7 @@ import { gitInvocation, linuxizeText, parseWslPath, runInDistro, runInDistroAsyn
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync, renameSync,
   readdirSync, statSync, lstatSync, realpathSync, rmSync, appendFileSync,
-  symlinkSync, unlinkSync, copyFileSync, cpSync, chmodSync
+  symlinkSync, unlinkSync, copyFileSync, cpSync, chmodSync, openSync, readSync, closeSync, fstatSync
 } from 'node:fs';
 import { join, dirname, basename, isAbsolute, relative, resolve, posix } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -472,6 +472,39 @@ function pruneCrashLogs(dir: string): void {
   } catch { /* unreadable directory is not worth failing an exit path over */ }
 }
 
+/**
+ * The last `n` lines of a file, reading it backwards in chunks instead of
+ * whole. log.jsonl only grows, and the app reads its tail every couple of
+ * seconds (the Now feed, the delegation map): a whole-file synchronous read
+ * blocked the main thread for longer and longer, worst on a WSL office.
+ */
+export function tailLines(path: string, n: number): string[] {
+  if (n <= 0) return [];
+  let fd: number;
+  try { fd = openSync(path, 'r'); } catch { return []; }
+  try {
+    let pos = fstatSync(fd).size;
+    const CHUNK = 64 * 1024;
+    let text = '';
+    let count = 0;
+    while (pos > 0 && count <= n) {
+      const len = Math.min(CHUNK, pos);
+      pos -= len;
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, pos);
+      const chunk = buf.toString('utf8');
+      for (let i = 0; i < chunk.length; i++) if (chunk.charCodeAt(i) === 10) count++;
+      text = chunk + text;
+    }
+    const lines = text.split('\n').filter(Boolean);
+    // A chunk can start mid-line (or mid-character): drop that partial first line.
+    if (pos > 0) lines.shift();
+    return lines.slice(-n);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export class HiveManager {
   /**
    * @param getHome  Lazily resolve harnessHome so the hive follows config changes.
@@ -899,19 +932,33 @@ export class HiveManager {
     // The hook shim: a dumb pipe between a `claude` hook and our UDS. Refreshed
     // on every bootstrap so it tracks code changes.
     mkdirSync(join(root, 'bin'), { recursive: true });
-    writeFileSync(this.shimPath()!, HOOK_SHIM, 'utf8');
-    // The proxy-bridge sidecar for hookless CLIs (qwen). Same refresh policy.
-    writeFileSync(this.proxyShimPath()!, PROXY_BRIDGE_SHIM, 'utf8');
-    // md-api: an agent's door to the REST integrations behind the key broker.
-    writeFileSync(join(root, 'bin', 'md-api.cjs'), MD_API_CLI, 'utf8');
-    // md-run: ask the app to run a runner (a command with secrets the agent never sees).
-    writeFileSync(join(root, 'bin', 'md-run.cjs'), MD_RUN_CLI, 'utf8');
-    // munder-lists: the human's lists as MCP tools (listsMcp.ts).
-    writeFileSync(join(root, 'bin', 'md-lists.cjs'), MD_LISTS_MCP, 'utf8');
-    // md-browse: the office browser (browser.ts), as a command and an MCP server.
-    writeFileSync(join(root, 'bin', 'md-browse.cjs'), MD_BROWSE, 'utf8');
-    // md-skills: the orchestrator's search of the skills catalog (skillsCli.ts).
-    writeFileSync(join(root, 'bin', 'md-skills.cjs'), MD_SKILLS, 'utf8');
+    // Written only when this build's versions differ from what is on disk (a
+    // stamp of their contents), or one is missing. Rewriting all of them on
+    // every launch cost seconds of blocked main thread on a WSL office, where
+    // each write crosses \\wsl.localhost.
+    const binFiles: Array<[string, string]> = [
+      [this.shimPath()!, HOOK_SHIM],
+      // The proxy-bridge sidecar for hookless CLIs (qwen).
+      [this.proxyShimPath()!, PROXY_BRIDGE_SHIM],
+      // md-api: an agent's door to the REST integrations behind the key broker.
+      [join(root, 'bin', 'md-api.cjs'), MD_API_CLI],
+      // md-run: ask the app to run a runner (a command with secrets the agent never sees).
+      [join(root, 'bin', 'md-run.cjs'), MD_RUN_CLI],
+      // munder-lists: the human's lists as MCP tools (listsMcp.ts).
+      [join(root, 'bin', 'md-lists.cjs'), MD_LISTS_MCP],
+      // md-browse: the office browser (browser.ts), as a command and an MCP server.
+      [join(root, 'bin', 'md-browse.cjs'), MD_BROWSE],
+      // md-skills: the orchestrator's search of the skills catalog (skillsCli.ts).
+      [join(root, 'bin', 'md-skills.cjs'), MD_SKILLS]
+    ];
+    const stampPath = join(root, 'bin', '.generated');
+    const stamp = createHash('sha1').update(binFiles.map(([p, c]) => `${p}\0${c}`).join('\0')).digest('hex');
+    let current = '';
+    try { current = readFileSync(stampPath, 'utf8').trim(); } catch { /* first run */ }
+    if (current !== stamp || binFiles.some(([p]) => !existsSync(p))) {
+      for (const [p, c] of binFiles) writeFileSync(p, c, 'utf8');
+      try { writeFileSync(stampPath, stamp, 'utf8'); } catch { /* next launch rewrites */ }
+    }
     // The bundled-node launcher every shim above is invoked through — MUST be
     // written before any hook installer runs (they probe for it).
     this.writeNodeLauncher();
@@ -1591,7 +1638,7 @@ export class HiveManager {
     const out: string[] = [];
     const add = (id: unknown) => { if (typeof id === 'string' && id && !out.includes(id)) out.push(id); };
     add(this.lastSession(agentId));
-    const log = this.logTail(20_000) as Array<{ kind?: string; agentId?: string; sessionId?: string }>;
+    const log = this.logTail(5_000) as Array<{ kind?: string; agentId?: string; sessionId?: string }>;
     for (let i = log.length - 1; i >= 0 && out.length < max; i--) {
       const e = log[i];
       if (e?.kind === 'session' && e.agentId === agentId) add(e.sessionId);
@@ -3518,9 +3565,9 @@ export class HiveManager {
   }
   logTail(n = 200): unknown[] {
     const root = this.root();
-    if (!root || !existsSync(join(root, 'log.jsonl'))) return [];
-    const lines = readFileSync(join(root, 'log.jsonl'), 'utf8').trim().split('\n').filter(Boolean);
-    return lines.slice(-n).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } });
+    if (!root) return [];
+    const lines = tailLines(join(root, 'log.jsonl'), n);
+    return lines.map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } });
   }
 
   /** An agent's inbox, read off the main thread (the renderer asks per agent). */
