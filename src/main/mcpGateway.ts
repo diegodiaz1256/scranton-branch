@@ -18,6 +18,11 @@
  * server never hangs; server notifications are dropped. GET (the optional SSE
  * stream) is 405, as the spec allows; DELETE ends the session.
  *
+ * A remote server whose key sits in a header (Authorization, X-API-Key…) is
+ * reached the same way: the agent talks to the gateway, and MAIN calls the real
+ * server with the stored headers added, one JSON-RPC message per request,
+ * reading the answer whether it comes back as JSON or as an SSE stream.
+ *
  * Electron-free: the spec resolver (catalog + decrypted keys) is injected.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -33,10 +38,18 @@ export interface McpLaunchSpec {
   env: Record<string, string>;
 }
 
+/** A remote (streamable-HTTP) server the gateway calls on the agent's behalf. */
+export interface McpRemoteSpec {
+  url: string;
+  /** Sent with every request. Holds the credentials. */
+  headers: Record<string, string>;
+}
+
 export interface McpGatewayDeps {
-  /** The launch spec for a server, keys included, or null when it cannot run
-   *  (unknown id, or a required key is not stored). Main-internal only. */
-  resolveSpec: (serverId: string) => McpLaunchSpec | null;
+  /** The launch spec (or remote address) for a server, keys included, or null
+   *  when it cannot run (unknown id, or a required key is not stored).
+   *  Main-internal only. */
+  resolveSpec: (serverId: string) => McpLaunchSpec | McpRemoteSpec | null;
   /** The catalog service a connection id belongs to (an added connection is
    *  `<service>--<name>`); the read-only rules are per service. Unset → the id. */
   serviceOf?: (serverId: string) => string | undefined;
@@ -64,7 +77,8 @@ export interface McpCallRecord {
  *  through; 'none' lets nothing through. */
 interface Grant { agentId: string; servers: Set<string>; access: Map<string, Access> }
 
-interface Session {
+interface StdioSession {
+  kind: 'stdio';
   proc: ChildProcess;
   buf: string;
   pending: Map<string, (msg: unknown) => void>;
@@ -73,6 +87,23 @@ interface Session {
   /** Annotations the server declared for its tools (from tools/list). */
   annotations: Map<string, { readOnlyHint?: boolean; destructiveHint?: boolean }>;
 }
+
+interface RemoteSession {
+  kind: 'remote';
+  url: string;
+  headers: Record<string, string>;
+  /** The upstream's Mcp-Session-Id, once it hands one out. */
+  sessionId?: string;
+  /** Negotiated at initialize; sent back as MCP-Protocol-Version. */
+  protocolVersion?: string;
+  initialized: boolean;
+  annotations: Map<string, { readOnlyHint?: boolean; destructiveHint?: boolean }>;
+  /** Requests in flight, aborted when the session ends. */
+  inflight: Set<AbortController>;
+  closed: boolean;
+}
+
+type Session = StdioSession | RemoteSession;
 
 const MAX_BODY = 8 * 1024 * 1024;
 
@@ -198,10 +229,14 @@ export class McpGateway {
         }
       }
       if (isRequest && msg.method === 'initialize') session.initialized = true;
-      this.write(session, msg);
+      const started = Date.now();
+      let reply: unknown = null;
+      if (session.kind === 'remote') reply = await this.forward(session, msg, isRequest, serverId);
+      else {
+        this.write(session, msg);
+        if (isRequest) reply = await this.await(session, msg.id, serverId);
+      }
       if (isRequest) {
-        const started = Date.now();
-        const reply = await this.await(session, msg.id, serverId);
         if (msg.method === 'tools/call') {
           const r = reply as { error?: unknown; result?: { isError?: boolean } };
           const tool = String((msg.params as { name?: unknown } | undefined)?.name ?? '');
@@ -233,21 +268,27 @@ export class McpGateway {
     res.end(JSON.stringify(value));
   }
 
-  // ─── stdio sessions ────────────────────────────────────────────────────────
+  // ─── sessions ──────────────────────────────────────────────────────────────
 
   private session(key: string, serverId: string): Session | null {
     const existing = this.sessions.get(key);
-    if (existing && existing.proc.exitCode === null && !existing.proc.killed) return existing;
+    if (existing?.kind === 'remote' && !existing.closed) return existing;
+    if (existing?.kind === 'stdio' && existing.proc.exitCode === null && !existing.proc.killed) return existing;
     if (existing) this.sessions.delete(key);
     const spec = this.deps.resolveSpec(serverId);
     if (!spec) return null;
+    if ('url' in spec) {
+      const r: RemoteSession = { kind: 'remote', url: spec.url, headers: spec.headers, initialized: false, annotations: new Map(), inflight: new Set(), closed: false };
+      this.sessions.set(key, r);
+      return r;
+    }
     const win = process.platform === 'win32';
     const proc = win
       ? spawn([spec.command, ...spec.args].map(quoteWin).join(' '), { shell: true, windowsHide: true, env: { ...process.env, ...spec.env }, stdio: ['pipe', 'pipe', 'pipe'] })
       // Own process group, so endSession can take down the whole tree (npx
       // starts the real server as a grandchild).
       : spawn(spec.command, spec.args, { env: { ...process.env, ...spec.env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
-    const s: Session = { proc, buf: '', pending: new Map(), initialized: false, stderrTail: '', annotations: new Map() };
+    const s: StdioSession = { kind: 'stdio', proc, buf: '', pending: new Map(), initialized: false, stderrTail: '', annotations: new Map() };
     proc.stdout?.setEncoding('utf8');
     proc.stdout?.on('data', (d: string) => this.read(s, d));
     proc.stderr?.setEncoding('utf8');
@@ -264,11 +305,11 @@ export class McpGateway {
     return s;
   }
 
-  private write(s: Session, msg: unknown): void {
+  private write(s: StdioSession, msg: unknown): void {
     try { s.proc.stdin?.write(JSON.stringify(msg) + '\n'); } catch { /* exit handler reports it */ }
   }
 
-  private read(s: Session, chunk: string): void {
+  private read(s: StdioSession, chunk: string): void {
     s.buf += chunk;
     let nl: number;
     while ((nl = s.buf.indexOf('\n')) >= 0) {
@@ -288,7 +329,7 @@ export class McpGateway {
     }
   }
 
-  private await(s: Session, id: unknown, serverId: string): Promise<unknown> {
+  private await(s: StdioSession, id: unknown, serverId: string): Promise<unknown> {
     return new Promise((resolve) => {
       const k = JSON.stringify(id);
       const timer = setTimeout(() => {
@@ -299,10 +340,105 @@ export class McpGateway {
     });
   }
 
+  // ─── remote sessions ───────────────────────────────────────────────────────
+
+  /** One message to the remote server, its stored headers added. Resolves to
+   *  the reply for a request, null for a notification. Never throws. */
+  private async forward(s: RemoteSession, msg: Record<string, unknown>, isRequest: boolean, serverId: string): Promise<unknown> {
+    const fail = (why: string): unknown => (isRequest ? rpcError(msg.id, -32000, `${serverId} ${why}`) : null);
+    const ac = new AbortController();
+    s.inflight.add(ac);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; ac.abort(); }, this.timeoutMs);
+    timer.unref?.();
+    try {
+      const res = await fetch(s.url, {
+        method: 'POST',
+        headers: {
+          ...s.headers,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...(s.sessionId ? { 'mcp-session-id': s.sessionId } : {}),
+          ...(s.protocolVersion ? { 'mcp-protocol-version': s.protocolVersion } : {})
+        },
+        body: JSON.stringify(msg),
+        signal: ac.signal
+      });
+      const sid = res.headers.get('mcp-session-id');
+      if (sid) s.sessionId = sid;
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => undefined);
+        if (res.status === 401 || res.status === 403) return fail(`refused the stored key (HTTP ${res.status}). Update it under MCP.`);
+        return fail(`answered HTTP ${res.status}`);
+      }
+      if (!isRequest) { await res.body?.cancel().catch(() => undefined); return null; }
+      const type = res.headers.get('content-type') ?? '';
+      const reply = type.includes('text/event-stream') ? await this.fromSse(res, msg.id) : await res.json().catch(() => null);
+      if (!reply) return fail('sent no answer');
+      if (msg.method === 'initialize') {
+        const v = (reply as { result?: { protocolVersion?: unknown } }).result?.protocolVersion;
+        if (typeof v === 'string') s.protocolVersion = v;
+      }
+      return reply;
+    } catch (e) {
+      if (timedOut) return fail(`did not answer in ${Math.round(this.timeoutMs / 1000)} s`);
+      if (s.closed) return fail('session ended');
+      return fail(`cannot be reached (${(e as Error).message})`);
+    } finally {
+      clearTimeout(timer);
+      s.inflight.delete(ac);
+    }
+  }
+
+  /** The reply to `id` from an SSE response. Server requests and notifications
+   *  on the stream are skipped: there is no agent-side stream to relay them on. */
+  private async fromSse(res: Response, id: unknown): Promise<unknown> {
+    if (!res.body) return null;
+    const want = JSON.stringify(id);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let data: string[] = [];
+    const take = (): unknown => {
+      const text = data.join('\n');
+      data = [];
+      if (!text) return null;
+      try {
+        const m = JSON.parse(text) as Record<string, unknown>;
+        return typeof m.method !== 'string' && JSON.stringify(m.id) === want ? m : null;
+      } catch { return null; }
+    };
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return take();
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).replace(/\r$/, '');
+          buf = buf.slice(nl + 1);
+          if (line === '') { const m = take(); if (m) return m; continue; }
+          if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+        }
+      }
+    } finally {
+      reader.cancel().catch(() => undefined);
+    }
+  }
+
   private endSession(key: string): void {
     const s = this.sessions.get(key);
     if (!s) return;
     this.sessions.delete(key);
+    if (s.kind === 'remote') {
+      s.closed = true;
+      for (const ac of s.inflight) ac.abort();
+      // Let the server drop its session; nobody waits on the answer.
+      if (s.sessionId) {
+        void fetch(s.url, { method: 'DELETE', headers: { ...s.headers, 'mcp-session-id': s.sessionId }, signal: AbortSignal.timeout(5000) }).catch(() => undefined);
+      }
+      return;
+    }
     try { s.proc.stdin?.end(); } catch { /* noop */ }
     // The whole tree: on Windows the direct child is cmd.exe (npx/uvx shims),
     // and killing only it would orphan the server, key and all.

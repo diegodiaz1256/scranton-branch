@@ -41,8 +41,8 @@ export type McpTransportView = { kind: 'stdio'; command: string; args: string[] 
 export interface SubagentView { id: string; parentId: string; type: string; description: string; startedAt: number; endedAt?: number; ok?: boolean }
 /** A runner an agent proposed, waiting for the human (main: approveProposal). */
 export interface RunnerProposalView { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[] }
-export interface McpMineView { id: string; name: string; transport: McpTransportView; env: Record<string, string>; secretEnv: string[]; enabled: boolean; agents: string[] | null; source?: string; secretsStored: Record<string, boolean> }
-export interface McpFoundView { source: string; file: string; name: string; transport: McpTransportView; env: Array<{ name: string; secret: boolean; value?: string }>; headerNames: string[]; imported: boolean; agent?: string; suggest: { kind: 'connection' | 'builtin'; id: string; label: string } | null }
+export interface McpMineView { id: string; name: string; transport: McpTransportView; env: Record<string, string>; secretEnv: string[]; headers: Record<string, string>; secretHeaders: string[]; enabled: boolean; agents: string[] | null; source?: string; secretsStored: Record<string, boolean>; headersStored: Record<string, boolean> }
+export interface McpFoundView { source: string; file: string; name: string; transport: McpTransportView; env: Array<{ name: string; secret: boolean; value?: string }>; headers: Array<{ name: string; secret: boolean; value?: string }>; imported: boolean; agent?: string; suggest: { kind: 'connection' | 'builtin'; id: string; label: string } | null }
 export interface McpOverviewView { agentId: string; name: string; provider: string; servers: Array<{ name: string; id: string; origin: 'connection' | 'builtin' | 'yours' | 'office'; access?: 'none' | 'read' | 'readwrite' }> }
 export interface RunnerView { id: string; name: string; command: string; description?: string; secrets: string[]; approval: 'always' | 'on-change' | 'never'; timeoutSec?: number }
 
@@ -1583,8 +1583,8 @@ const api = {
   mcpOverview: (): Promise<McpOverviewView[]> => ipcRenderer.invoke('mcp:overview'),
   mcpImport: (source: string, name: string, secretNames?: string[]): Promise<{ ok: boolean; id?: string; error?: string }> =>
     ipcRenderer.invoke('mcp:import', source, name, secretNames),
-  mcpSave: (input: { id?: string; name: string; transport: McpTransportView; env: Record<string, string> }, secretNames: string[]): Promise<{ ok: boolean; id?: string; error?: string }> =>
-    ipcRenderer.invoke('mcp:save', input, secretNames),
+  mcpSave: (input: { id?: string; name: string; transport: McpTransportView; env: Record<string, string>; headers?: Record<string, string> }, secretNames: string[], secretHeaderNames: string[] = []): Promise<{ ok: boolean; id?: string; error?: string }> =>
+    ipcRenderer.invoke('mcp:save', input, secretNames, secretHeaderNames),
   mcpSetEnabled: (id: string, on: boolean): Promise<{ ok: boolean }> => ipcRenderer.invoke('mcp:setEnabled', id, on),
   mcpSetAgents: (id: string, agents: string[] | null): Promise<{ ok: boolean }> => ipcRenderer.invoke('mcp:setAgents', id, agents),
   mcpRemove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('mcp:remove', id),

@@ -267,7 +267,7 @@ export interface HarnessConfig {
   officeBrowserEngine?: 'builtin' | 'fortress';
   /** Your own MCP servers (main/mcpServers.ts). Secret env values are NOT
    *  here: they live in the encrypted store as mcp:<id>:<ENV>. */
-  customMcp?: Array<{ id: string; name: string; transport: { kind: 'stdio'; command: string; args: string[] } | { kind: 'http'; url: string }; env: Record<string, string>; secretEnv: string[]; enabled: boolean; agents: string[] | null; source?: string }>;
+  customMcp?: Array<{ id: string; name: string; transport: { kind: 'stdio'; command: string; args: string[] } | { kind: 'http'; url: string }; env: Record<string, string>; secretEnv: string[]; headers?: Record<string, string>; secretHeaders?: string[]; enabled: boolean; agents: string[] | null; source?: string }>;
   /** Factories this office watches or sends work to (FACTORY-MCP.md). Tokens
    *  are in the encrypted store as factory:<id>, never here. */
   factories?: Array<{ id: string; name: string; url: string; addedAt: number }>;

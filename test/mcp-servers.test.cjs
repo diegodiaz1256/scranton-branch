@@ -77,11 +77,35 @@ test('a server with no secrets is handed to agents as is; scope limits who gets 
   assert.ok(s.m.forAgent('pam').plain[id]);
 });
 
-test('a remote server needing a key header is refused, not handed over with the key', () => {
-  const { m } = make();
-  const r = m.import('Cursor', 'linear');
-  assert.equal(r.ok, false);
-  assert.match(r.error, /header/);
+test('a remote server with a key header is imported behind the gateway, the key in the store', () => {
+  const s = make();
+  const r = s.m.import('Cursor', 'linear');
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual(s.custom[0].secretHeaders, ['Authorization']);
+  assert.ok(!JSON.stringify(s.custom).includes('lin_api_x'), 'config has no key');
+  assert.deepEqual(s.m.forAgent('god'), { gateway: [r.id], plain: {} }, 'never handed over with the key');
+  assert.deepEqual(s.m.remoteSpec(r.id), { url: 'https://mcp.linear.app/sse', headers: { Authorization: 'Bearer lin_api_x' } }, 'only main gets the key');
+  assert.equal(s.m.launchSpec(r.id), null);
+  assert.deepEqual(s.m.listCustom()[0].headersStored, { Authorization: true });
+  s.m.remove(r.id);
+  assert.equal(s.secrets.size, 0, 'removing it deletes the key');
+});
+
+test('a remote server with only plain headers is handed over as is', () => {
+  const s = make();
+  const r = s.m.save({ name: 'docs', transport: { kind: 'http', url: 'https://docs.example.com/mcp' }, env: {}, headers: { 'X-Tenant': 'acme', 'Content-Type': 'text/plain' } }, []);
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual(s.m.forAgent('god').plain[r.id], { type: 'http', url: 'https://docs.example.com/mcp', headers: { 'X-Tenant': 'acme' } }, 'reserved headers are dropped');
+});
+
+test('editing a remote server keeps a stored header key when left empty, and drops it when no longer secret', () => {
+  const s = make();
+  const { id } = s.m.import('Cursor', 'linear');
+  s.m.save({ id, name: 'linear', transport: { kind: 'http', url: 'https://mcp.linear.app/sse' }, env: {}, headers: { Authorization: '' } }, [], ['Authorization']);
+  assert.equal(s.m.remoteSpec(id).headers.Authorization, 'Bearer lin_api_x');
+  s.m.save({ id, name: 'linear', transport: { kind: 'http', url: 'https://mcp.linear.app/sse' }, env: {}, headers: {} }, [], []);
+  assert.equal(s.secrets.size, 0);
+  assert.equal(s.custom[0].secretHeaders, undefined);
 });
 
 test('codex TOML reader and secret detection', () => {
