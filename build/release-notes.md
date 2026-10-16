@@ -1,3 +1,3 @@
-- **Office browser**: main content, cached pages, fewer tokens.
-- Keys work in a second office (floor) on Windows.
-- Linux launcher survives updates; Fortress starts after a crash.
+- **MCP**: import remote servers that log in with a key in a header.
+- The key is encrypted and stays in the app; agents never see it.
+- Add and edit a server's headers, with a secret toggle.
