@@ -113,3 +113,64 @@ test('a server that cannot start answers with an error instead of hanging', asyn
   assert.equal(r.status, 200);
   assert.match(r.json.error.message, /cannot start/);
 });
+
+// A remote MCP server that wants a key in a header. It answers initialize as
+// JSON and everything else as an SSE stream, with a stray notification first.
+async function remote(t, key = KEY) {
+  const http = require('node:http');
+  const seen = [];
+  const srv = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    seen.push({ method: req.method, headers: req.headers });
+    if (req.headers.authorization !== `Bearer ${key}`) { res.writeHead(401); res.end(); return; }
+    if (req.method === 'DELETE') { res.writeHead(200); res.end(); return; }
+    const m = JSON.parse(body);
+    if (m.id === undefined) { res.writeHead(202); res.end(); return; }
+    if (m.method === 'initialize') {
+      res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'sess-1' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'remote', version: '1' } } }));
+      return;
+    }
+    const result = m.method === 'tools/list'
+      ? { tools: [{ name: 'whoami', inputSchema: { type: 'object' } }] }
+      : { content: [{ type: 'text', text: `session ${req.headers['mcp-session-id']}, version ${req.headers['mcp-protocol-version']}` }] };
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: {} })}\n\n`);
+    res.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: m.id, result })}\n\n`);
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${srv.address().port}/mcp`;
+  const gw = new McpGateway({
+    resolveSpec: (id) => (id === 'brain' ? { url, headers: { Authorization: `Bearer ${key}` } } : id === 'stale' ? { url, headers: { Authorization: 'Bearer old' } } : null),
+    requestTimeoutMs: 5000
+  });
+  assert.equal((await gw.start()).ok, true);
+  t.after(() => { gw.stop(); srv.close(); });
+  return { gw, seen };
+}
+
+test('a remote server gets its key header from the gateway; the agent never sees it', async (t) => {
+  const { gw, seen } = await remote(t);
+  const token = gw.grant('dwight', ['brain']);
+  const a = await rpc(gw, token, 'brain', init());
+  assert.equal(a.json.result.serverInfo.name, 'remote');
+  assert.equal((await rpc(gw, token, 'brain', { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
+  const list = await rpc(gw, token, 'brain', { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  assert.equal(list.json.result.tools[0].name, 'whoami', 'the answer is read out of the SSE stream');
+  const call = await rpc(gw, token, 'brain', { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'whoami', arguments: {} } });
+  assert.equal(call.json.result.content[0].text, 'session sess-1, version 2025-06-18', 'session id and protocol version are carried');
+  for (const r of [a, list, call]) assert.ok(!r.text.includes(KEY), 'the key is never in a response');
+  assert.ok(seen.every((s) => s.headers.authorization === `Bearer ${KEY}`), 'every upstream call carries the key');
+  gw.revoke('dwight');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(seen.at(-1).method, 'DELETE', 'ending the agent ends the upstream session');
+});
+
+test('a remote server refusing the stored key answers with a readable error', async (t) => {
+  const { gw } = await remote(t);
+  const token = gw.grant('dwight', ['stale']);
+  const r = await rpc(gw, token, 'stale', init());
+  assert.equal(r.status, 200);
+  assert.match(r.json.error.message, /refused the stored key \(HTTP 401\)/);
+});

@@ -116,8 +116,7 @@ export function McpView({ roster, config }: { roster: Agent[]; config: HarnessCo
 
 function FoundRow({ f, blocked, onImport, onConnection }: { f: McpFoundView; blocked: boolean; onImport: () => void; onConnection: () => void }) {
   const { t } = useTranslation();
-  const secrets = f.env.filter((e) => e.secret).map((e) => e.name);
-  const needsHeader = f.transport.kind === 'http' && f.headerNames.length > 0;
+  const secrets = [...f.env, ...f.headers].filter((e) => e.secret).map((e) => e.name);
   return (
     <div className="pro-row" style={{ padding: '10px 14px', borderBottom: '1px solid var(--pro-line)', gap: 12 }}>
       <span style={{ fontSize: 13, fontWeight: 600, minWidth: 120 }}>{f.name}</span>
@@ -134,12 +133,12 @@ function FoundRow({ f, blocked, onImport, onConnection }: { f: McpFoundView; blo
           ? (
             <>
               <button className="pro-btn pro-btn-primary" title={t('pro.mcp.useConnectionTip', { name: f.suggest.label })} onClick={onConnection}>{t('pro.mcp.useConnection', { name: f.suggest.label })}</button>
-              <button className="pro-btn" disabled={needsHeader} onClick={onImport}>{t('pro.mcp.import')}</button>
+              <button className="pro-btn" onClick={onImport}>{t('pro.mcp.import')}</button>
             </>
           )
           : f.suggest?.kind === 'builtin'
             ? <StateBadge label={t('pro.mcp.alreadyBuiltIn', { name: f.suggest.label })} tone="green" />
-            : <button className="pro-btn" disabled={needsHeader} title={needsHeader ? t('pro.mcp.headerKey') : undefined} onClick={onImport}>{t('pro.mcp.import')}</button>}
+            : <button className="pro-btn" onClick={onImport}>{t('pro.mcp.import')}</button>}
     </div>
   );
 }
@@ -147,9 +146,9 @@ function FoundRow({ f, blocked, onImport, onConnection }: { f: McpFoundView; blo
 function MineCard({ s, agents, onChanged, onError }: { s: McpMineView; agents: Agent[]; onChanged: () => void; onError: (e: string | null) => void }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
-  const missing = s.secretEnv.filter((e) => !s.secretsStored[e]);
+  const missing = [...s.secretEnv.filter((e) => !s.secretsStored[e]), ...s.secretHeaders.filter((h) => !s.headersStored[h])];
   const remove = async () => {
-    if (!(await window.cth.confirm(t('pro.mcp.removeConfirm', { name: s.name }), { detail: s.secretEnv.length ? t('pro.mcp.removeDetail') : undefined, ok: t('pro.conn.remove') }))) return;
+    if (!(await window.cth.confirm(t('pro.mcp.removeConfirm', { name: s.name }), { detail: s.secretEnv.length || s.secretHeaders.length ? t('pro.mcp.removeDetail') : undefined, ok: t('pro.conn.remove') }))) return;
     await window.cth.mcpRemove(s.id);
     onChanged();
   };
@@ -165,7 +164,7 @@ function MineCard({ s, agents, onChanged, onError }: { s: McpMineView; agents: A
       <div className="pro-row" style={{ gap: 8 }}>
         <strong style={{ fontSize: 13 }}>{s.name}</strong>
         <StateBadge label={s.transport.kind === 'stdio' ? t('pro.mcp.local') : t('pro.mcp.remote')} tone={s.transport.kind === 'stdio' ? 'grey' : 'blue'} />
-        {s.secretEnv.length > 0 && <StateBadge label={t('pro.mcp.throughApp')} tone="gold" />}
+        {(s.secretEnv.length > 0 || s.secretHeaders.length > 0) && <StateBadge label={t('pro.mcp.throughApp')} tone="gold" />}
         {s.source && <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.mcp.from', { source: s.source })}</span>}
         <div className="pro-switch" role="group" aria-label={t('pro.mcp.onOff')} style={{ marginInlineStart: 'auto' }}>
           <button aria-pressed={s.enabled} onClick={() => void window.cth.mcpSetEnabled(s.id, true).then(onChanged)}>{t('pro.conn.on')}</button>
@@ -175,10 +174,12 @@ function MineCard({ s, agents, onChanged, onError }: { s: McpMineView; agents: A
         <button className="pro-btn" onClick={() => void remove()}>{t('pro.conn.remove')}</button>
       </div>
       <code className="pro-mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{transportText(s.transport)}</code>
-      {(s.secretEnv.length > 0 || Object.keys(s.env).length > 0) && (
+      {(s.secretEnv.length > 0 || Object.keys(s.env).length > 0 || s.secretHeaders.length > 0 || Object.keys(s.headers).length > 0) && (
         <div className="pro-row" style={{ gap: 6, flexWrap: 'wrap' }}>
           {s.secretEnv.map((e) => <span key={e} className="pro-chip pro-mono" style={{ fontSize: 11 }}>{e} {s.secretsStored[e] ? `•••• ${t('pro.env.stored')}` : t('pro.mcp.missing')}</span>)}
           {Object.entries(s.env).map(([k, v]) => <span key={k} className="pro-chip pro-mono" style={{ fontSize: 11 }}>{k}={v}</span>)}
+          {s.secretHeaders.map((h) => <span key={`h:${h}`} className="pro-chip pro-mono" style={{ fontSize: 11 }}>{h}: {s.headersStored[h] ? `•••• ${t('pro.env.stored')}` : t('pro.mcp.missing')}</span>)}
+          {Object.entries(s.headers).map(([k, v]) => <span key={`h:${k}`} className="pro-chip pro-mono" style={{ fontSize: 11 }}>{k}: {v}</span>)}
         </div>
       )}
       {missing.length > 0 && <span className="pro-sub" style={{ fontSize: 11, color: 'var(--cth-coral)' }}>{t('pro.mcp.missingHint', { names: missing.join(', ') })}</span>}
@@ -208,17 +209,27 @@ function ServerForm({ initial, onDone, onCancel, onError }: { initial?: McpMineV
     ...Object.entries(initial?.env ?? {}).map(([n, v]) => ({ name: n, value: v, secret: false })),
     ...(initial?.secretEnv ?? []).map((n) => ({ name: n, value: '', secret: true }))
   ]);
+  const [headers, setHeaders] = useState<EnvRow[]>(() => [
+    ...Object.entries(initial?.headers ?? {}).map(([n, v]) => ({ name: n, value: v, secret: false })),
+    ...(initial?.secretHeaders ?? []).map((n) => ({ name: n, value: '', secret: true }))
+  ]);
   const save = async () => {
     onError(null);
     // Simple splitting: quoted parts stay together ("C:\Program Files\…").
     const parts = (command.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((p) => p.replace(/^["']|["']$/g, ''));
     const transport: McpTransportView = kind === 'stdio' ? { kind, command: parts[0] ?? '', args: parts.slice(1) } : { kind, url: url.trim() };
     const rows = env.filter((r) => r.name.trim());
-    const r = await window.cth.mcpSave({ id: initial?.id, name, transport, env: Object.fromEntries(rows.map((x) => [x.name.trim(), x.value])) }, rows.filter((x) => x.secret).map((x) => x.name.trim()));
+    const hrows = kind === 'http' ? headers.filter((r) => r.name.trim()) : [];
+    const r = await window.cth.mcpSave(
+      { id: initial?.id, name, transport, env: Object.fromEntries(rows.map((x) => [x.name.trim(), x.value])), headers: Object.fromEntries(hrows.map((x) => [x.name.trim(), x.value])) },
+      rows.filter((x) => x.secret).map((x) => x.name.trim()),
+      hrows.filter((x) => x.secret).map((x) => x.name.trim())
+    );
     if (!r.ok) { onError(r.error ?? t('pro.env.notSaved')); return; }
     onDone();
   };
   const setRow = (i: number, patch: Partial<EnvRow>) => setEnv((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const setHeader = (i: number, patch: Partial<EnvRow>) => setHeaders((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <section className="pro-card" style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
       <div className="pro-row" style={{ gap: 8, flexWrap: 'wrap' }}>
@@ -248,7 +259,23 @@ function ServerForm({ initial, onDone, onCancel, onError }: { initial?: McpMineV
           <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.mcp.secretHint')}</span>
         </>
       )}
-      {kind === 'http' && <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.mcp.remoteHint')}</span>}
+      {kind === 'http' && (
+        <>
+          <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.mcp.headers')}</span>
+          {headers.map((r, i) => (
+            <div key={i} className="pro-row" style={{ gap: 6 }}>
+              <input className="pro-input pro-mono" placeholder="Authorization" value={r.name} onChange={(e) => setHeader(i, { name: e.target.value.replace(/[^A-Za-z0-9!#$%&'*+.^_`|~-]/g, '-') })} style={{ width: 200 }} />
+              <input className="pro-input pro-mono" type={r.secret ? 'password' : 'text'} autoComplete="off" style={{ flex: 1 }}
+                placeholder={r.secret ? (initial?.headersStored[r.name] ? t('pro.env.storedPh') : 'Bearer …') : t('pro.env.valuePh')}
+                value={r.value} onChange={(e) => setHeader(i, { value: e.target.value })} />
+              <button className={`pro-chip${r.secret ? ' pro-chip-on' : ''}`} onClick={() => setHeader(i, { secret: !r.secret })}>{t('pro.env.kind_secret')}</button>
+              <button className="pro-btn" onClick={() => setHeaders((rows) => rows.filter((_, j) => j !== i))}>×</button>
+            </div>
+          ))}
+          <button className="pro-btn" style={{ alignSelf: 'flex-start' }} onClick={() => setHeaders((rows) => [...rows, { name: '', value: '', secret: true }])}>+ {t('pro.mcp.header')}</button>
+          <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.mcp.headerHint')}</span>
+        </>
+      )}
       <div className="pro-row" style={{ gap: 8 }}>
         <button className="pro-btn pro-btn-primary" disabled={!name.trim() || (kind === 'stdio' ? !command.trim() : !url.trim())} onClick={() => void save()}>{t('common.save')}</button>
         <button className="pro-btn" onClick={onCancel}>{t('common.cancel')}</button>

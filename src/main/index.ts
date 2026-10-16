@@ -516,6 +516,8 @@ const mcpGateway = new McpGateway({
   onCall: (e) => { mcpCalls.push(e); if (mcpCalls.length > 1000) mcpCalls.splice(0, mcpCalls.length - 1000); },
   resolveSpec: (serverId) => {
     if (serverId.startsWith('custom--')) {
+      const remote = mcpServers.remoteSpec(serverId);
+      if (remote) return remote;
       const spec = mcpServers.launchSpec(serverId);
       if (!spec) return null;
       const path = process.platform === 'win32' ? (process.env.PATH ?? '') : userShellPath();
@@ -4722,16 +4724,17 @@ ipcMain.handle('mcp:import', (_evt, source: unknown, name: unknown, secretNames:
     return mcpServers.import(source, name, Array.isArray(secretNames) ? secretNames.filter((x): x is string => typeof x === 'string') : undefined);
   } catch (e) { return mcpErr(e); }
 });
-ipcMain.handle('mcp:save', (_evt, input: unknown, secretNames: unknown) => {
-  const i = (input ?? {}) as { id?: unknown; name?: unknown; transport?: unknown; env?: unknown };
+ipcMain.handle('mcp:save', (_evt, input: unknown, secretNames: unknown, secretHeaderNames: unknown) => {
+  const i = (input ?? {}) as { id?: unknown; name?: unknown; transport?: unknown; env?: unknown; headers?: unknown };
   const t = (i.transport ?? {}) as { kind?: unknown; command?: unknown; args?: unknown; url?: unknown };
   const transport = t.kind === 'http'
     ? { kind: 'http' as const, url: String(t.url ?? '').trim() }
     : { kind: 'stdio' as const, command: String(t.command ?? '').trim(), args: Array.isArray(t.args) ? t.args.map(String) : [] };
-  const env = i.env && typeof i.env === 'object' ? Object.fromEntries(Object.entries(i.env as Record<string, unknown>).map(([k, v]) => [k, String(v ?? '')])) : {};
+  const strings = (v: unknown): Record<string, string> => v && typeof v === 'object' ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, String(x ?? '')])) : {};
+  const names = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   try {
-    return mcpServers.save({ id: typeof i.id === 'string' && i.id.startsWith('custom--') ? i.id : undefined, name: String(i.name ?? ''), transport, env },
-      Array.isArray(secretNames) ? secretNames.filter((x): x is string => typeof x === 'string') : []);
+    return mcpServers.save({ id: typeof i.id === 'string' && i.id.startsWith('custom--') ? i.id : undefined, name: String(i.name ?? ''), transport, env: strings(i.env), headers: strings(i.headers) },
+      names(secretNames), names(secretHeaderNames));
   } catch (e) { return mcpErr(e); }
 });
 ipcMain.handle('mcp:setEnabled', (_evt, id: unknown, on: unknown) => { if (typeof id === 'string') mcpServers.setEnabled(id, on === true); return { ok: true }; });

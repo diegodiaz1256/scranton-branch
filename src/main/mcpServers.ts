@@ -5,11 +5,13 @@
  * CLI / Antigravity and Windsurf (read-only) so a server you already use there
  * can be imported here in one click, and keeps the ones you add by hand.
  *
- * Those configs usually hold API keys in plain text, in each server's env. An
- * imported or added server's secret env values go to the encrypted store
- * (mcp:custom--<id>:<ENV>) and the server then runs inside the app, behind the
- * MCP gateway — agents get a capability token, never the key (mcpGateway.ts).
- * A server with no secrets is handed to agents as is.
+ * Those configs usually hold API keys in plain text, in each server's env (or,
+ * for a remote server, its headers). An imported or added server's secret env
+ * values and headers go to the encrypted store (mcp:custom--<id>:<ENV>,
+ * mcp:custom--<id>:header:<Name>) and the server is then reached through the
+ * MCP gateway: a local one runs inside the app, a remote one is called by the
+ * app with its headers added. Agents get a capability token, never the key
+ * (mcpGateway.ts). A server with no secrets is handed to agents as is.
  *
  * Electron-free: file reads, config and the secret store are injected.
  */
@@ -41,6 +43,10 @@ export interface CustomServer {
   env: Record<string, string>;
   /** Names of env vars whose values are in the encrypted store. */
   secretEnv: string[];
+  /** Remote servers: non-secret headers, kept in config. */
+  headers?: Record<string, string>;
+  /** Remote servers: names of headers whose values are in the encrypted store. */
+  secretHeaders?: string[];
   enabled: boolean;
   /** Agent ids; null = every agent. */
   agents: string[] | null;
@@ -74,6 +80,10 @@ export function looksSecret(name: string, value: string): boolean {
 export const customId = (name: string): string =>
   `custom--${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'server'}`;
 const secretRef = (id: string, env: string) => `mcp:${id}:${env}`;
+const headerRef = (id: string, header: string) => `mcp:${id}:header:${header}`;
+const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+/** Set by the gateway itself or by the agent's own MCP client; never forwarded. */
+const RESERVED_HEADERS = new Set(['host', 'content-type', 'content-length', 'accept', 'mcp-session-id', 'mcp-protocol-version']);
 
 function strMap(v: unknown): Record<string, string> {
   if (!v || typeof v !== 'object') return {};
@@ -225,39 +235,46 @@ export class McpServers {
 
   /** Found servers for the UI: env values that look secret are hidden, and
    *  each says whether it is already imported. */
-  scanForUi(): Array<Omit<FoundServer, 'env' | 'headers'> & { env: Array<{ name: string; secret: boolean; value?: string }>; headerNames: string[]; imported: boolean; suggest: McpSuggestion | null }> {
+  scanForUi(): Array<Omit<FoundServer, 'env' | 'headers'> & { env: Array<{ name: string; secret: boolean; value?: string }>; headers: Array<{ name: string; secret: boolean; value?: string }>; imported: boolean; suggest: McpSuggestion | null }> {
     const mine = new Set(this.deps.readCustom().map((c) => c.id));
     return this.scan().map((f) => ({
       source: f.source, file: f.file, name: f.name, transport: f.transport, ...(f.agent ? { agent: f.agent } : {}),
       env: Object.entries(f.env).map(([name, value]) => looksSecret(name, value) ? { name, secret: true } : { name, secret: false, value }),
-      headerNames: Object.keys(f.headers),
+      headers: Object.entries(f.headers).map(([name, value]) => looksSecret(name, value) ? { name, secret: true } : { name, secret: false, value }),
       imported: mine.has(customId(f.name)),
       suggest: suggestFor(f.transport, Object.keys(f.env))
     }));
   }
 
-  listCustom(): Array<CustomServer & { secretsStored: Record<string, boolean> }> {
-    return this.deps.readCustom().map((c) => ({ ...c, secretsStored: Object.fromEntries(c.secretEnv.map((e) => [e, !!this.deps.getSecret(secretRef(c.id, e))])) }));
+  listCustom(): Array<CustomServer & { headers: Record<string, string>; secretHeaders: string[]; secretsStored: Record<string, boolean>; headersStored: Record<string, boolean> }> {
+    return this.deps.readCustom().map((c) => ({
+      ...c, headers: c.headers ?? {}, secretHeaders: c.secretHeaders ?? [],
+      secretsStored: Object.fromEntries(c.secretEnv.map((e) => [e, !!this.deps.getSecret(secretRef(c.id, e))])),
+      headersStored: Object.fromEntries((c.secretHeaders ?? []).map((h) => [h, !!this.deps.getSecret(headerRef(c.id, h))]))
+    }));
   }
 
   /**
    * Import a found server (by source + name). `secretNames` overrides which env
-   * vars are treated as secrets (default: the ones that look like one).
-   * Remote servers that need a header (an API key) cannot go through the
-   * gateway yet and are refused rather than handed over with the key.
+   * vars are treated as secrets (default: the ones that look like one). A remote
+   * server's headers that look secret (Authorization, X-API-Key…) go to the
+   * store too, and the server is then called through the gateway.
    */
   import(source: string, name: string, secretNames?: string[]): { ok: boolean; id?: string; error?: string } {
     const f = this.scan().find((x) => x.source === source && x.name === name);
     if (!f) return { ok: false, error: 'that server is no longer in its config' };
-    if (f.transport.kind === 'http' && Object.keys(f.headers).length) {
-      return { ok: false, error: 'this remote server needs a key in a header; that kind cannot be imported safely yet' };
-    }
-    return this.save({ name: f.name, transport: f.transport, env: f.env, source: f.source }, secretNames ?? Object.entries(f.env).filter(([k, v]) => looksSecret(k, v)).map(([k]) => k));
+    const headers = f.transport.kind === 'http' ? f.headers : {};
+    return this.save(
+      { name: f.name, transport: f.transport, env: f.env, headers, source: f.source },
+      secretNames ?? Object.entries(f.env).filter(([k, v]) => looksSecret(k, v)).map(([k]) => k),
+      Object.entries(headers).filter(([k, v]) => looksSecret(k, v)).map(([k]) => k)
+    );
   }
 
-  /** Add or replace a server. Env values named in `secretNames` go to the
-   *  encrypted store; an empty value keeps the stored one. */
-  save(input: { id?: string; name: string; transport: McpTransport; env: Record<string, string>; source?: string; enabled?: boolean; agents?: string[] | null }, secretNames: string[]): { ok: boolean; id?: string; error?: string } {
+  /** Add or replace a server. Env values named in `secretNames` and headers
+   *  named in `secretHeaderNames` go to the encrypted store; an empty value
+   *  keeps the stored one. Headers apply to remote servers only. */
+  save(input: { id?: string; name: string; transport: McpTransport; env: Record<string, string>; headers?: Record<string, string>; source?: string; enabled?: boolean; agents?: string[] | null }, secretNames: string[], secretHeaderNames: string[] = []): { ok: boolean; id?: string; error?: string } {
     const name = input.name.trim().slice(0, 60);
     if (!name) return { ok: false, error: 'give it a name' };
     if (input.transport.kind === 'stdio' && !input.transport.command.trim()) return { ok: false, error: 'give it a command' };
@@ -272,9 +289,23 @@ export class McpServers {
       } else env[k] = v;
     }
     const prev = this.deps.readCustom().find((c) => c.id === id);
+    const remote = input.transport.kind === 'http';
+    const inHeaders = remote ? input.headers ?? {} : {};
+    const secretHeaders = new Set(remote ? secretHeaderNames : []);
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(inHeaders)) {
+      if (!HEADER_NAME.test(k) || RESERVED_HEADERS.has(k.toLowerCase())) continue;
+      if (secretHeaders.has(k)) {
+        if (v) { const r = this.deps.setSecret(headerRef(id, k), v); if (!r.ok) return { ok: false, error: r.error ?? 'could not store a key securely' }; }
+      } else headers[k] = v;
+    }
     for (const old of prev?.secretEnv ?? []) if (!secrets.has(old)) this.deps.deleteSecret(secretRef(id, old));
+    for (const old of prev?.secretHeaders ?? []) if (!secretHeaders.has(old)) this.deps.deleteSecret(headerRef(id, old));
+    const keptHeaders = [...secretHeaders].filter((h) => HEADER_NAME.test(h) && !RESERVED_HEADERS.has(h.toLowerCase()) && (h in inHeaders || prev?.secretHeaders?.includes(h)));
     const rec: CustomServer = {
       id, name, transport: input.transport, env, secretEnv: [...secrets].filter((s) => s in input.env || prev?.secretEnv.includes(s)),
+      ...(Object.keys(headers).length ? { headers } : {}),
+      ...(keptHeaders.length ? { secretHeaders: keptHeaders } : {}),
       enabled: input.enabled ?? prev?.enabled ?? true, agents: input.agents !== undefined ? input.agents : prev?.agents ?? null,
       ...(input.source ?? prev?.source ? { source: input.source ?? prev?.source } : {})
     };
@@ -293,6 +324,7 @@ export class McpServers {
   remove(id: string): void {
     const c = this.deps.readCustom().find((x) => x.id === id);
     for (const e of c?.secretEnv ?? []) this.deps.deleteSecret(secretRef(id, e));
+    for (const h of c?.secretHeaders ?? []) this.deps.deleteSecret(headerRef(id, h));
     this.deps.writeCustom(this.deps.readCustom().filter((x) => x.id !== id));
   }
 
@@ -304,10 +336,15 @@ export class McpServers {
     for (const c of this.deps.readCustom()) {
       if (!c.enabled) continue;
       if (c.agents && c.agents.length && !c.agents.includes(agentId)) continue;
-      if (c.secretEnv.length) { if (c.secretEnv.every((e) => this.deps.getSecret(secretRef(c.id, e)))) gateway.push(c.id); continue; }
+      const secretHeaders = c.transport.kind === 'http' ? c.secretHeaders ?? [] : [];
+      if (c.secretEnv.length || secretHeaders.length) {
+        const stored = c.secretEnv.every((e) => this.deps.getSecret(secretRef(c.id, e))) && secretHeaders.every((h) => this.deps.getSecret(headerRef(c.id, h)));
+        if (stored) gateway.push(c.id);
+        continue;
+      }
       plain[c.id] = c.transport.kind === 'stdio'
         ? { command: c.transport.command, args: c.transport.args, ...(Object.keys(c.env).length ? { env: c.env } : {}) }
-        : { type: 'http', url: c.transport.url, headers: {} };
+        : { type: 'http', url: c.transport.url, headers: { ...(c.headers ?? {}) } };
     }
     return { gateway, plain };
   }
@@ -319,5 +356,14 @@ export class McpServers {
     const env: Record<string, string> = { ...c.env };
     for (const e of c.secretEnv) { const v = this.deps.getSecret(secretRef(c.id, e)); if (!v) return null; env[e] = v; }
     return { command: c.transport.command, args: c.transport.args, env };
+  }
+
+  /** The gateway's upstream for a custom remote server, keyed headers included (main only). */
+  remoteSpec(id: string): { url: string; headers: Record<string, string> } | null {
+    const c = this.deps.readCustom().find((x) => x.id === id);
+    if (!c || c.transport.kind !== 'http') return null;
+    const headers: Record<string, string> = { ...(c.headers ?? {}) };
+    for (const h of c.secretHeaders ?? []) { const v = this.deps.getSecret(headerRef(c.id, h)); if (!v) return null; headers[h] = v; }
+    return { url: c.transport.url, headers };
   }
 }
