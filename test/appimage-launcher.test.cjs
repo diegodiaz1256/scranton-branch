@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const loadTs = require('./load-ts.cjs');
-const { repairLaunchers } = loadTs('src/main/appImageLauncher.ts');
+const { repairLaunchers, appImageRelaunch } = loadTs('src/main/appImageLauncher.ts');
 
 function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'md-appimage-'));
@@ -46,4 +46,25 @@ test('the updater event names the replaced file; others are left alone', linuxOn
   assert.deepEqual(repairLaunchers(apps, newPath, '1.1.1', oldPath), [ours]);
   assert.match(fs.readFileSync(other, 'utf8'), /Other-App-2\.0/, 'another app untouched');
   assert.match(fs.readFileSync(live, 'utf8'), /0\.9\.0/, 'a copy that still exists is someone else\'s choice');
+});
+
+test('a restart from an AppImage waits for this process, then runs the AppImage file, not its vanishing mount', linuxOnly, async () => {
+  const img = '/home/u/Applications/Scranton-Branch-1.1.3-linux-x86_64.AppImage';
+  const r = appImageRelaunch({ APPIMAGE: img }, ['/tmp/.mount_ScrantX/munder-difflin', '--no-sandbox'], 4242);
+  assert.equal(r.command, '/bin/sh');
+  assert.deepEqual(r.args.slice(3), ['4242', img, '--no-sandbox']);
+  assert.equal(appImageRelaunch({}, ['/usr/bin/munder-difflin'], 1), null, 'anything else uses app.relaunch');
+
+  // The script itself: waits while the pid lives, then execs the given command.
+  const { spawn } = require('node:child_process');
+  const sleeper = spawn('sleep', ['0.6']);
+  const started = Date.now();
+  const out = await new Promise((resolve) => {
+    const p = spawn(r.command, [r.args[0], r.args[1], 'sh', String(sleeper.pid), 'echo', 'started', '--no-sandbox']);
+    let text = '';
+    p.stdout.on('data', (d) => { text += d; });
+    p.on('exit', () => resolve(text.trim()));
+  });
+  assert.equal(out, 'started --no-sandbox');
+  assert.ok(Date.now() - started >= 400, 'it waited for the old process to exit');
 });

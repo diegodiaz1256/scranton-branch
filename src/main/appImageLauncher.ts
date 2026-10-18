@@ -47,3 +47,19 @@ export function repairLaunchers(applicationsDir: string, current: string, versio
   }
   return changed;
 }
+
+/** How to restart the app when it runs as an AppImage, or null otherwise.
+ *
+ *  The executable lives in the AppImage's FUSE mount (/tmp/.mount_…), which is
+ *  unmounted the moment this process exits. app.relaunch() hands the restart to
+ *  a helper that is this same mounted executable, so it dies with the mount
+ *  (or starts the app from it as it vanishes, and Chromium aborts with
+ *  SIGTRAP). Instead a /bin/sh outside the mount waits for this process to exit,
+ *  then starts the AppImage file itself, which mounts a fresh copy. */
+export function appImageRelaunch(env: NodeJS.ProcessEnv, argv: string[], pid: number): { command: string; args: string[] } | null {
+  if (!env.APPIMAGE) return null;
+  return {
+    command: '/bin/sh',
+    args: ['-c', 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; shift; exec "$@"', 'sh', String(pid), env.APPIMAGE, ...argv.slice(1)]
+  };
+}
