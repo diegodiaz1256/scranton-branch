@@ -19,7 +19,9 @@ const { app } = require('electron');
 
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const out = arg('out');
-const done = (result) => { fs.writeFileSync(out, JSON.stringify(result)); process.argv.includes('--hard-exit') ? app.exit(0) : app.quit(); };
+// app.quit(), not app.exit(): app.exit skips writing <userData>/Local State, so
+// the safeStorage key would be lost and every launch would make a new one.
+const done = (result) => { fs.writeFileSync(out, JSON.stringify(result)); app.quit(); };
 
 app.setPath('userData', arg('user-data'));
 const loadTs = require(path.join(__dirname, '..', 'load-ts.cjs'));
