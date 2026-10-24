@@ -12,10 +12,10 @@ services:
     restart: unless-stopped
     init: false            # tini is the entrypoint
     environment:
-      MD_NAME: "Docker office"
-      MD_MAX_WORKERS: "4"
-      MD_SECRET_KEY_FILE: /run/secrets/md_secret_key
-      # MD_TEAM_JOIN: "mdteam1...."   # one-time invite from Manager → Team
+      SB_NAME: "Docker office"
+      SB_MAX_WORKERS: "4"
+      SB_SECRET_KEY_FILE: /run/secrets/md_secret_key
+      # SB_TEAM_JOIN: "mdteam1...."   # one-time invite from Manager → Team
       # ANTHROPIC_API_KEY: ...         # or: docker compose exec -u agent office claude
     secrets: [md_secret_key]
     volumes:

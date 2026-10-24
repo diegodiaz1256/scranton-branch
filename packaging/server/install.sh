@@ -42,15 +42,15 @@ if [ ! -f "$etc/secret.key" ]; then
 fi
 chmod 600 "$etc/secret.key"
 if [ ! -f "$etc/server.env" ]; then
-  sed -e "s/^MD_AGENT_UID=$/MD_AGENT_UID=$(id -u agent)/" \
-      -e "s/^MD_AGENT_GID=$/MD_AGENT_GID=$(getent group office | cut -d: -f3)/" \
+  sed -e "s/^SB_AGENT_UID=$/SB_AGENT_UID=$(id -u agent)/" \
+      -e "s/^SB_AGENT_GID=$/SB_AGENT_GID=$(getent group office | cut -d: -f3)/" \
       "$here/packaging/server.env.example" > "$etc/server.env"
   chmod 600 "$etc/server.env"
-  echo "wrote $etc/server.env — set MD_OFFICE / MD_NAME / MD_TEAM_JOIN there"
+  echo "wrote $etc/server.env — set SB_OFFICE / SB_NAME / SB_TEAM_JOIN there"
 fi
 
 # The office: group office, setgid so everything created in it stays shared.
-office="$(. "$etc/server.env"; echo "${MD_OFFICE:-/srv/office}")"
+office="$(. "$etc/server.env"; echo "${SB_OFFICE:-${MD_OFFICE:-/srv/office}}")"
 mkdir -p "$office"
 chgrp office "$office" && chmod 2775 "$office"
 git config --system --get-all safe.directory | grep -qx '\*' || git config --system --add safe.directory '*'

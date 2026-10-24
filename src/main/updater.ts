@@ -452,21 +452,21 @@ export function initAutoUpdater(getWebContents: () => WebContents | null): void 
     logLine(`SIMULATED ${o.state === 'downloaded' ? 'downloaded' : 'available-manual'} ${version} (dev only)`);
     return { ok: true };
   });
-  // DEV ONLY — `MD_DROP_PREVIEW=<path to a release body .md>` (see
+  // DEV ONLY — `SB_DROP_PREVIEW=<path to a release body .md>` (see
   // `npm run dev:drop`) feeds that file through the simulate path on boot, so a
   // drop under authoring opens centred the moment the window is up, with no
   // DevTools paste. The renderer pulls `update:current` on mount, so emitting
   // before the window exists is fine. Same hard gate as `update:simulate`.
-  const previewPath = process.env.MD_DROP_PREVIEW;
+  const previewPath = process.env.SB_DROP_PREVIEW || process.env.MD_DROP_PREVIEW;
   if (!app.isPackaged && previewPath) {
     try {
       const notes = readFileSync(previewPath, 'utf8');
       const m = notes.match(/what[’']?s\s+new\s+in\s+v?(\d+\.\d+\.\d+)/i) ?? notes.match(/\bv(\d+\.\d+\.\d+)\b/);
       const version = m?.[1] ?? '9.9.9';
       emit({ state: 'available-manual', version, notes, url: `https://github.com/${REPO}/releases/tag/v${version}`, downloadUrl: installerUrl(version, process.platform, process.arch) });
-      logLine(`SIMULATED available-manual ${version} from MD_DROP_PREVIEW=${previewPath} (dev only)`);
+      logLine(`SIMULATED available-manual ${version} from SB_DROP_PREVIEW=${previewPath} (dev only)`);
     } catch (e) {
-      logLine(`MD_DROP_PREVIEW unreadable: ${errText(e)}`);
+      logLine(`SB_DROP_PREVIEW unreadable: ${errText(e)}`);
     }
   }
   // First launch after the version moved: show THIS release's page. The stamp

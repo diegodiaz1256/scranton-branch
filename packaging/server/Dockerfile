@@ -29,14 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
  && useradd --create-home --uid 1001 --gid office --shell /bin/bash agent \
  && if [ -n "$AGENT_CLIS" ]; then npm install -g $AGENT_CLIS && npm cache clean --force; fi
 COPY --from=build /src/out/server /opt/scranton-branch
-COPY packaging/server/docker-entrypoint.sh /usr/local/bin/md-entrypoint
-RUN chmod +x /usr/local/bin/md-entrypoint
-ENV MD_DATA_DIR=/data \
-    MD_OFFICE=/office \
-    MD_AGENT_UID=1001 \
-    MD_AGENT_GID=1001 \
-    MD_AGENT_HOME=/home/agent \
-    MD_AGENT_USER=agent \
-    NODE_ENV=production
+COPY packaging/server/docker-entrypoint.sh /usr/local/bin/sb-entrypoint
+RUN chmod +x /usr/local/bin/sb-entrypoint
+# SB_DATA_DIR, SB_OFFICE and SB_AGENT_* default in the entrypoint (/data,
+# /office, uid/gid 1001, /home/agent, agent), after any SB_* or older MD_* override.
+ENV NODE_ENV=production
 VOLUME ["/data", "/office", "/home/agent"]
-ENTRYPOINT ["tini", "--", "md-entrypoint"]
+ENTRYPOINT ["tini", "--", "sb-entrypoint"]

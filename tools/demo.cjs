@@ -34,7 +34,7 @@ if (launch) {
   const child = spawn(process.execPath, [cli, 'dev', ...passThrough], {
     cwd: path.resolve(__dirname, '..'),
     stdio: 'inherit',
-    env: { ...process.env, MD_DEMO_HOME: home }
+    env: { ...process.env, SB_DEMO_HOME: home }
   });
   child.on('exit', (code) => process.exit(code ?? 0));
 }

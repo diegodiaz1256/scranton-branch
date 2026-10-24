@@ -5,7 +5,7 @@
  *   md-browse --search "<query>"
  * Without arguments it is a stdio MCP server (munder-browser) with the tools
  * browse_page and web_search, for Claude Code. Both talk to the integration
- * broker (MD_BROKER_URL / MD_BROKER_TOKEN, already in every agent's env), so
+ * broker (SB_BROKER_URL / SB_BROKER_TOKEN, already in every agent's env; MD_* before the rename), so
  * WSL floors reach the app's Chromium too. Plain Node, no dependencies.
  * Requests go through brokerClient.ts so the command also works inside
  * Claude Code's sandbox.
@@ -15,7 +15,7 @@ import { BROKER_CLIENT_JS } from './brokerClient';
 export const MD_BROWSE = String.raw`#!/usr/bin/env node
 'use strict';
 // md-browse — written by Scranton Branch; do not edit (it is rewritten).
-const base = process.env.MD_BROKER_URL, token = process.env.MD_BROKER_TOKEN;
+const base = process.env.SB_BROKER_URL || process.env.MD_BROKER_URL, token = process.env.SB_BROKER_TOKEN || process.env.MD_BROKER_TOKEN;
 ${BROKER_CLIENT_JS}
 async function ask(route, body) {
   if (!base || !token) throw new Error('the office browser is not available to this agent');

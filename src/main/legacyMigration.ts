@@ -25,6 +25,7 @@ import { execFile, spawn } from 'node:child_process';
 import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { DEMO_HOME } from './demo';
+import { appEnv } from '../shared/envName';
 
 // The old builds named the data folder after package.json's "name"
 // (`munder-difflin`); `Munder Difflin` covers a build that set productName.
@@ -43,7 +44,7 @@ let result: MigrationResult | null = null;
 export function legacyMigration(): MigrationResult | null { return result; }
 
 function migrateLegacyData(): void {
-  if (DEMO_HOME || process.env.MD_SERVER === '1') return;
+  if (DEMO_HOME || appEnv('SERVER') === '1') return;
   const target = app.getPath('userData');
   if (existsSync(join(target, 'config.json')) || existsSync(join(target, MARKER))) return;
   const appData = app.getPath('appData');

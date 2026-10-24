@@ -1,7 +1,7 @@
 # Scranton Branch server — systemd unit (installed by install.sh).
 #
 # The server runs as root ONLY so it can start agents as the unprivileged
-# `agent` user (MD_AGENT_UID/GID): that way agents cannot read the secret key
+# `agent` user (SB_AGENT_UID/GID): that way agents cannot read the secret key
 # (a systemd credential, readable by this service alone) or this process's
 # environment. Everything else it does stays in /var/lib/scranton-branch and the
 # office.
@@ -14,8 +14,8 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=/etc/scranton-branch/server.env
 LoadCredential=md-secret-key:/etc/scranton-branch/secret.key
-Environment=MD_SECRET_KEY_FILE=%d/md-secret-key
-Environment=MD_DATA_DIR=/var/lib/scranton-branch
+Environment=SB_SECRET_KEY_FILE=%d/md-secret-key
+Environment=SB_DATA_DIR=/var/lib/scranton-branch
 ExecStart=/usr/bin/env node /opt/scranton-branch/index.cjs
 Restart=on-failure
 RestartSec=5

@@ -71,6 +71,8 @@ import { BROKER_CLIENT_JS } from './brokerClient';
 import { MD_SSH_CLI, MD_SSH_SIGN_CLI, sshWrapperScript } from './sshRelayClient';
 import { HOOK_OFFLINE_JS } from '../shared/hookOffline';
 import { MD_LISTS_MCP } from './listsMcp';
+import { bothEnv } from '../shared/envName';
+import { withToolAliases } from './agentBinAliases';
 import { liveNamesakes, similarLive, supersededArchived } from './namesakes';
 
 /** The subset of HarnessConfig the hive consumes for the default-MCP merge.
@@ -1078,7 +1080,8 @@ export class HiveManager {
     // stamp of their contents), or one is missing. Rewriting all of them on
     // every launch cost seconds of blocked main thread on a WSL office, where
     // each write crosses \\wsl.localhost.
-    const binFiles: Array<[string, string]> = [
+    // The hive commands go out under both names, sb-* and md-* (agentBinAliases.ts).
+    const binFiles: Array<[string, string]> = withToolAliases([
       [this.shimPath()!, HOOK_SHIM],
       // The proxy-bridge sidecar for hookless CLIs (qwen).
       [this.proxyShimPath()!, PROXY_BRIDGE_SHIM],
@@ -1102,7 +1105,7 @@ export class HiveManager {
         [join(this.sshWrapperDir()!, 'ssh'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh.cjs')))] as [string, string],
         [join(this.sshWrapperDir()!, 'md-ssh-sign'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh-sign.cjs')), 'commit signer: signed by the app with your SSH key (md-ssh-sign.cjs)')] as [string, string]
       ] : [])
-    ];
+    ]);
     if (this.sshWrapperDir()) mkdirSync(this.sshWrapperDir()!, { recursive: true });
     const stampPath = join(root, 'bin', '.generated');
     const stamp = createHash('sha1').update(binFiles.map(([p, c]) => `${p}\0${c}`).join('\0')).digest('hex');
@@ -1200,7 +1203,7 @@ export class HiveManager {
        *  verification off only when the user chose it). */
       tls?: { caFile?: string; insecure?: boolean };
       /** REST integrations this agent may call through the key broker (its
-       *  MD_BROKER_TOKEN is granted for exactly these). Listed in its prompt with
+       *  SB_BROKER_TOKEN is granted for exactly these). Listed in its prompt with
        *  the md-api command; empty/undefined → no line. */
       integrations?: Array<{ id: string; label: string }>;
       /** Runners this agent may ask for (envVault.ts): names only, never values. */
@@ -1272,7 +1275,7 @@ export class HiveManager {
       /** Cloud CLI logins the human let it read (shared/cloudCredentials.ts);
        *  the rest stay hidden. Never for a custodian. */
       exposeCredentials?: string[];
-      /** The key broker this agent was handed (MD_BROKER_URL): its sandbox may
+      /** The key broker this agent was handed (SB_BROKER_URL): its sandbox may
        *  reach that one loopback port (hookSettings). */
       brokerUrl?: string;
     } = {}
@@ -1673,7 +1676,7 @@ export class HiveManager {
     if (blockedTools.length) args.push('--disallowedTools', ...blockedTools);
     // The human already authorised these connections (and the gateway enforces
     // what each may do): no permission prompt per call, or an agent just waits.
-    const allowedConnections = Object.keys(mcp.servers).filter((n) => mcp.env.MD_MCP_TOKEN && (mcp.servers[n] as { type?: string }).type === 'http');
+    const allowedConnections = Object.keys(mcp.servers).filter((n) => mcp.env.SB_MCP_TOKEN && (mcp.servers[n] as { type?: string }).type === 'http');
     if (allowedConnections.length) args.push('--allowedTools', ...allowedConnections.map((n) => `mcp__${n}`));
     args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults, opts.lockdown?.outgoing));
 
@@ -2347,11 +2350,11 @@ export class HiveManager {
     const gw = keyed.length && agentId ? (dryRun ? { url: 'http://127.0.0.1:0', token: '' } : this.mcpGateway(agentId, keyed, this.mcpAccessMap(agentId, keyed))) : null;
     if (gw) {
       for (const id of keyed) {
-        // `${MD_MCP_TOKEN}` is expanded by Claude Code from the process env, so
+        // `${SB_MCP_TOKEN}` is expanded by Claude Code from the process env, so
         // not even the capability token is written into the (committed) hive.
-        servers[`munder-${id}`] = { type: 'http', url: `${gw.url}/mcp/${id}`, headers: { Authorization: 'Bearer ${MD_MCP_TOKEN}' } };
+        servers[`munder-${id}`] = { type: 'http', url: `${gw.url}/mcp/${id}`, headers: { Authorization: 'Bearer ${SB_MCP_TOKEN}' } };
       }
-      env.MD_MCP_TOKEN = gw.token;
+      Object.assign(env, bothEnv('MCP_TOKEN', gw.token));
     }
     return { servers, env };
   }
@@ -2765,7 +2768,7 @@ export class HiveManager {
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
     const guardrailsLine = 'Guardrails: a circuit breaker watches the floor — a "Circuit breaker: steer/constrain" message means you are looping or overspending, so STOP repeating, summarize what you tried, and follow it. Be token-frugal (a floor-wide or per-agent token budget can pause you). The shared plan has two parts: board.md (freeform; god is the sole scribe) and tasks.json (structured kanban — backlog/todo/doing/blocked/done/cancelled; backlog = parked, nobody is working on it; cancelled = the human stopped it: nobody works on it and nobody moves it out of cancelled).';
     // REST integrations through the loopback key broker. The agent never holds a
-    // key: md-api reads MD_BROKER_URL/MD_BROKER_TOKEN from its env, and the
+    // key: md-api reads SB_BROKER_URL/SB_BROKER_TOKEN from its env, and the
     // broker adds the credential upstream. Absolute paths, not `$VAR` (cmd.exe).
     const apiCli = inRoot('bin', 'md-api.cjs');
     const runCli = inRoot('bin', 'md-run.cjs');
@@ -3918,7 +3921,7 @@ export class HiveManager {
     const gateDir = join(dir, '.netgate');
     mkdirSync(gateDir, { recursive: true });
     const script = join(gateDir, 'md-netgate.cjs');
-    writeFileSync(script, MD_NETGATE, 'utf8');
+    for (const [p, c] of withToolAliases([[script, MD_NETGATE]])) writeFileSync(p, c, 'utf8');
     const read = (f: string): string | null => { try { return readFileSync(join(piDir, f), 'utf8'); } catch { return null; } };
     const hosts = resolvePiModelHosts([...piModelHosts(read('settings.json'), read('models.json')), ...customProviderHosts(customBaseUrls)], modelHosts);
     const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
@@ -4830,6 +4833,10 @@ function renderCommandsMd(): string {
 }
 const COMMANDS_MD = renderCommandsMd();
 
+/** The broker URL and token every hive command reads: SB_* (this app's name),
+ *  else MD_* (the name before the rename, still set by older builds). */
+const BROKER_ENV_JS = 'const base = process.env.SB_BROKER_URL || process.env.MD_BROKER_URL, token = process.env.SB_BROKER_TOKEN || process.env.MD_BROKER_TOKEN;';
+
 // ─── md-api (written to <hive>/bin/md-api.cjs) ───────────────────────────────
 // `md-api <integration> <METHOD> <path> [body]` → the loopback key broker.
 // The agent's env carries the broker URL and its per-agent capability token (a
@@ -4838,7 +4845,7 @@ const COMMANDS_MD = renderCommandsMd();
 const MD_API_CLI = `#!/usr/bin/env node
 'use strict';
 const [id, methodArg, pathArg, body] = process.argv.slice(2);
-const base = process.env.MD_BROKER_URL, token = process.env.MD_BROKER_TOKEN;
+${BROKER_ENV_JS}
 if (!base || !token) {
   console.error('md-api: this agent was started without the app key broker (the app was still starting, or it is an old session). Ask the human to restart this agent.');
   process.exit(2);
@@ -4889,7 +4896,7 @@ const MD_RUN_CLI = `#!/usr/bin/env node
 //   md-run --propose <name> --secrets A,B [--why "<reason>"] -- <command…>
 //                               ask the human to add a runner (they see the command)
 const argv = process.argv.slice(2);
-const base = process.env.MD_BROKER_URL, token = process.env.MD_BROKER_TOKEN;
+${BROKER_ENV_JS}
 if (!base || !token) { console.error('md-run: no runners are available to this agent.'); process.exit(2); }
 ${BROKER_CLIENT_JS}
 const headers = { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' };
