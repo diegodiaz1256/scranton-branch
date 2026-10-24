@@ -39,6 +39,20 @@ export interface McpSecretField {
   placeholder?: string;
   /** Optional fields may stay empty (e.g. a self-hosted Sentry host). */
   optional?: boolean;
+  /** A bare host name (host[:port]): a pasted URL keeps only its host, since the
+   *  server refuses one with a scheme (Sentry's SENTRY_HOST). */
+  hostOnly?: boolean;
+}
+
+/** A credential value as its server expects it (see `hostOnly`). */
+export function cleanSecretValue(field: Pick<McpSecretField, 'hostOnly'> | undefined, value: string): string {
+  const v = value.trim();
+  if (!field?.hostOnly || !v) return v;
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `https://${v}`).host || v;
+  } catch {
+    return v;
+  }
 }
 
 export interface McpCatalogEntry {
@@ -235,7 +249,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
         help: 'Scopes: org:read, project:read, project:write, team:read, team:write, event:write.',
         placeholder: 'sntryu_…'
       },
-      { env: 'SENTRY_HOST', label: 'Host (self-hosted only)', help: 'Leave empty for sentry.io.', placeholder: 'sentry.example.com', optional: true }
+      { env: 'SENTRY_HOST', label: 'Host (self-hosted only)', help: 'Leave empty for sentry.io.', placeholder: 'sentry.example.com', optional: true, hostOnly: true }
     ],
     docsUrl: 'https://sentry.io/settings/account/api/auth-tokens/',
     examples: [
