@@ -1979,6 +1979,10 @@ export class HiveManager {
             sandbox: {
               enabled: true,
               ...(requireSandbox ? { failIfUnavailable: true } : {}),
+              // No way out of it: a command asking to run outside the sandbox
+              // (`dangerouslyDisableSandbox`) used to run unconfined in bypass
+              // mode. Held here, a project's settings cannot reopen it.
+              allowUnsandboxedCommands: false,
               filesystem: { allowWrite: writableDirs, ...(denyDirs.length ? { denyRead: denyDirs } : {}) },
               ...(onlyBroker
                 ? { network: { allowedDomains: broker ? [broker] : [], strictAllowlist: true } }
