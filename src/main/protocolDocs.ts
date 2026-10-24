@@ -218,9 +218,9 @@ when it arrives.`
   "objective": "what the worker must do (required)",
   "cwd": "/absolute/path (required: a registered repo, this office, or an agent's folder)",
   "name": "display name (optional)",
-  "provider": "claude | codex | cursor | antigravity | … (optional)",
+  "provider": "claude | codex | antigravity | gemini | pi | opencode | cursor | copilot | … (optional)",
   "command": "engine CLI (optional; an agent CLI only, no settings/MCP/backend flags)",
-  "model": "model override (optional)",
+  "model": "model id as that engine takes it (optional; pi and opencode: provider/model)",
   "isolate": true,
   "tokenCap": 0,
   "slack": { "channel": "C…", "thread_ts": "…" },
@@ -229,21 +229,19 @@ when it arrives.`
 }
 \`\`\`
 
-The harness spawns \`worker-<id>\` and moves the request to \`spawn-requests/.done/\`, or to
-\`.failed/\` with a reason. \`isolate\` (default true) gives it its own git worktree; \`slack\` routes its
-failures to a thread; \`character\`/\`accent\` set its look (a cast member's name already does).
+Within seconds the harness spawns \`worker-<id>\`, puts the objective in its inbox and moves the
+request to \`.done/\` (or \`.failed/\` with a reason). Don't sleep or poll: a refusal and the worker's
+\`done\` both reach your inbox. \`isolate\` (default true): its own git worktree; \`slack\`: failures
+go to that thread; \`character\`/\`accent\`: its look.
 
-**It can be switched off** (Settings → Autonomy & limits, off by default). While off, a request
-waits in \`spawn-requests/\` untouched; raise it with the human instead of retrying. Route work to an
-agent already on the floor first either way. A temp is archived when its job is done (when it sends
-its \`done\`, also after an app restart): for a permanent member of the office, see \`hire.md\`.
+**Switched off** (Settings → Autonomy & limits, the default), the human is asked to start or
+decline each request; a decline reaches your inbox: don't write it again. Route work to an agent
+already on the floor first either way. A permanent member of the office: \`hire.md\`.
 
-**Archiving a temp yourself.** When a temp you started is no longer needed (it finished without
-sending \`done\`, or its job was dropped), write \`archive-requests/<any-name>.json\` in the hive root:
-\`{"id": "worker-<id>"}\`. The harness closes its terminal, archives it (its folder, memory and
-committed work are kept), moves the request to \`archive-requests/.done/\` and tells you in your inbox.
-Only a temp you hired through \`spawn-requests\` can be archived this way: anyone else is refused
-(the request goes to \`.failed/\` and you hear why). The live roster marks temps with \`temp\`.`
+**The harness archives a temp when it sends \`done\`**: no archive request for that. Only one you no
+longer need that never sent \`done\` is yours to archive: write \`archive-requests/<any-name>.json\`
+with \`{"id": "worker-<id>"}\`. The harness closes its terminal, archives it (folder, memory and
+committed work kept) and tells you in your inbox; anyone but your own temps is refused.`
   },
   {
     file: 'hire.md',

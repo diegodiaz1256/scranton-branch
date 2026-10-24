@@ -7938,8 +7938,11 @@ async function ephemeralWorkerTick(): Promise<void> {
 
 function startEphemeralWorkerWatcher(): void {
   if (workerWatchTimer || !hive.enabled()) return;
-  const dir = spawnRequestsDir();
-  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }
+  // Both queues exist up front: an orchestrator writing its first archive
+  // request into a missing folder got "No such file or directory".
+  for (const dir of [spawnRequestsDir(), archiveRequestsDir()]) {
+    if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }
+  }
   workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);
 }
 
