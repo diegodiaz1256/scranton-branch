@@ -273,6 +273,29 @@ export function runInDistroAsync(distro: string, cmd: string, args: string[], cw
 }
 
 /**
+ * Claude Code keeps its temp files in `${CLAUDE_CODE_TMPDIR:-${TMPDIR:-/tmp}}/claude-<uid>`
+ * and refuses to start when that folder is not the user's own with sane
+ * permissions ("Temp directory … is not readable … Refusing to use it", or
+ * "is owned by uid …"). /tmp is wiped on every WSL restart and shared with
+ * every identity in the distro, so a WSL office's agents kept failing until
+ * someone fixed /tmp/claude-<uid> by hand. This script makes the folder under
+ * the user's own cache instead, persistent and private (700, repaired if it
+ * was changed), and prints it on the last line. Claude creates claude-<uid>
+ * inside it itself.
+ */
+export const AGENT_TMP_SCRIPT = 'd="${XDG_CACHE_HOME:-$HOME/.cache}/scranton-branch/tmp"; mkdir -p "$d" && chmod 700 "$d" && printf \'\\n%s\\n\' "$d"';
+
+/** The folder to hand a WSL agent as CLAUDE_CODE_TMPDIR (see AGENT_TMP_SCRIPT),
+ *  made and repaired now; null when the distro did not answer (the agent then
+ *  falls back to Claude's default). */
+export async function wslAgentTmpDir(distro: string): Promise<string | null> {
+  try {
+    const last = (await runInDistroAsync(distro, 'sh', ['-c', AGENT_TMP_SCRIPT])).split(/\r?\n/).pop()?.trim() ?? '';
+    return last.startsWith('/') ? last : null;
+  } catch { return null; }
+}
+
+/**
  * Create `~/offices/<name>` inside `distro` and return its Windows (UNC) path.
  * The name is reduced to a safe folder name.
  */

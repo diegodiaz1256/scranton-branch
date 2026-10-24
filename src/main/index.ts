@@ -86,7 +86,7 @@ import * as integrations from './integrations';
 import { applyMissionRequest, type MissionLike } from '../shared/missionRequests';
 import { cleanCustomBundles } from '../shared/roleBundles';
 import { Factories } from './factories';
-import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toWslUnc, mirroredNetworking, parseWslPath, probeInDistro, WSL_INSTALL } from './wsl';
+import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toWslUnc, mirroredNetworking, parseWslPath, probeInDistro, WSL_INSTALL, wslAgentTmpDir } from './wsl';
 import { WslBridge } from './wslBridge';
 import { McpServers } from './mcpServers';
 import { EnvVault, fingerprintOf, type ProposalAnswer } from './envVault';
@@ -4275,6 +4275,13 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // Set on the app's own env for Windows agents; a WSL agent only gets what
       // its spawn carries (pty.ts), so hand it over here (as a /mnt path).
       if (process.env.MD_SLACK_REPLY_CONFIG) opts.env = { ...(opts.env ?? {}), MD_SLACK_REPLY_CONFIG: process.env.MD_SLACK_REPLY_CONFIG };
+      // Claude's temp folder in the user's own cache, not /tmp (wsl.ts
+      // AGENT_TMP_SCRIPT): made and repaired before every spawn.
+      if (provider === 'claude' && !opts.env?.CLAUDE_CODE_TMPDIR) {
+        spawnStep(opts.id, 'WSL temp folder');
+        const tmp = await wslAgentTmpDir(wslLoc.distro);
+        if (tmp) opts.env = { ...(opts.env ?? {}), CLAUDE_CODE_TMPDIR: tmp };
+      }
     } catch (e) {
       console.error('[wsl-bridge] start failed:', e);
       return { ok: false, error: `Could not start the agent in WSL (${wslLoc.distro}): ${e instanceof Error ? e.message : describeWslError(e, wslLoc.distro)}` };
