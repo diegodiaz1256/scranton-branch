@@ -11,7 +11,8 @@ const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 
 test('PDFs are drawn by the app (pdf.js, lazy), with no browser plugin or blob frames', () => {
   assert.doesNotMatch(read('src/main/index.ts'), /plugins: true/);
-  assert.doesNotMatch(read('src/renderer/index.html'), /frame-src/);
+  // The only frames are HTML deliverables, served from md-dlv:// (never blob:).
+  assert.match(read('src/renderer/index.html'), /frame-src md-dlv:;/);
   const v = read('src/renderer/src/pro/DeliverablesView.tsx');
   assert.match(v, /kind === 'pdf'\) \{[\s\S]*?readBinary[\s\S]*?state: 'pdf', bytes:/);
   assert.match(v, /<PdfPreview bytes=\{loaded\.bytes\}/);

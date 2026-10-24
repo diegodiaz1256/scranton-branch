@@ -6,6 +6,7 @@ import { confluenceToMarkdown } from '@shared/confluenceWiki';
 import { DELIVERABLE_SORTS, compareDeliverables, ticketQuery, type DeliverableSort } from '@shared/deliverableSort';
 import { DELIVERABLE_VIEWS, bundleAssets, folderTree, groupByAgent, groupByTask, taskOfFolder, type DeliverableView, type FolderNode, type OrgEntry, type OrgGroup, type TaskInfo } from '@shared/deliverableOrganize';
 import { canOpenExternally, deliverablePaths, parseDelimited, previewKind, splitPath, extOf } from '@shared/deliverables';
+import { PREVIEW_BUDGET, headOf, piecesWithin, splitMarkdown } from '@shared/previewChunks';
 import { useStore, type Agent } from '@/store/store';
 import type { KeyedTask } from './data';
 import { useProStore } from './proStore';
@@ -388,12 +389,31 @@ type Loaded =
   | { state: 'text'; text: string }
   | { state: 'image'; url: string }
   | { state: 'pdf'; bytes: Uint8Array }
+  | { state: 'html'; url: string }
+  | { state: 'large'; size: number }
   | { state: 'none'; reason: string };
 
-function Preview({ abs, meta, tasks, hidden, deletable, onChanged }: { abs: string; meta?: Item; tasks: Array<{ id: string; label: string }>; hidden: boolean; deletable: boolean; onChanged: () => void }) {
+/** Text files the app reads to show (main's fs.ts reads up to 2 MB). A bigger
+ *  one is listed and says so, with "Open in its app"; HTML renders at any size. */
+const TEXT_READ_MAX = 2 * 1024 * 1024;
+
+type PreviewProps = { abs: string; meta?: Item; tasks: Array<{ id: string; label: string }>; hidden: boolean; deletable: boolean; onChanged: () => void };
+
+/**
+ * The open document. Memoised: the list polls every few seconds, and a new
+ * listing (or board, or roster) must not render a 1 MB report again when
+ * nothing about this file changed.
+ */
+const Preview = memo(PreviewBody, (a, b) => a.abs === b.abs && a.hidden === b.hidden && a.deletable === b.deletable
+  && a.meta?.ts === b.meta?.ts && a.meta?.size === b.meta?.size && a.meta?.by === b.meta?.by && a.meta?.created === b.meta?.created
+  && (a.meta?.authors ?? []).join() === (b.meta?.authors ?? []).join()
+  && a.tasks.map((x) => x.id + x.label).join() === b.tasks.map((x) => x.id + x.label).join());
+
+function PreviewBody({ abs, meta, tasks, hidden, deletable, onChanged }: PreviewProps) {
   const { t } = useTranslation();
   const { dir, name } = splitPath(abs);
   const kind = previewKind(name);
+  const size = meta?.size;
   const [loaded, setLoaded] = useState<Loaded>({ state: 'loading' });
   const [copied, setCopied] = useState(false);
   // Markdown and tables: as rendered, or the file as it is.
@@ -455,6 +475,13 @@ function Preview({ abs, meta, tasks, hidden, deletable, onChanged }: { abs: stri
       });
     } else if (kind === 'binary') {
       setLoaded({ state: 'none', reason: t('pro.dlv.cannotPreview') });
+    } else if (kind === 'html' && !source) {
+      // Rendered for real, in a sandboxed frame that loads it from disk.
+      void window.cth.deliverablesFileUrl(abs).then((u) => {
+        if (alive) setLoaded(u ? { state: 'html', url: u } : { state: 'none', reason: t('pro.dlv.openFailed') });
+      });
+    } else if ((size ?? 0) > TEXT_READ_MAX) {
+      setLoaded({ state: 'large', size: size! });
     } else {
       void window.cth.readFile(dir, name).then((r) => {
         if (!alive) return;
@@ -462,7 +489,8 @@ function Preview({ abs, meta, tasks, hidden, deletable, onChanged }: { abs: stri
       });
     }
     return () => { alive = false; if (url) URL.revokeObjectURL(url); };
-  }, [abs, dir, name, kind, t]);
+    // `source` only changes what an HTML file loads.
+  }, [abs, dir, name, kind, t, size, kind === 'html' && source]);
 
   return (
     // maxHeight: the row wraps on narrow windows, and a wrapping flex line grows
@@ -474,7 +502,7 @@ function Preview({ abs, meta, tasks, hidden, deletable, onChanged }: { abs: stri
         <strong style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{name}</strong>
         <span className="pro-sub pro-mono" style={{ fontSize: 11, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={abs}>{abs}</span>
         <button className="pro-btn" onClick={() => { void navigator.clipboard.writeText(abs).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}>{copied ? t('pro.conn.copied') : t('pro.dlv.copyPath')}</button>
-        {(kind === 'markdown' || kind === 'wiki' || kind === 'mermaid' || kind === 'csv' || kind === 'json') && loaded.state === 'text' && (
+        {((kind === 'markdown' || kind === 'wiki' || kind === 'mermaid' || kind === 'csv' || kind === 'json') && loaded.state === 'text' || kind === 'html' && (loaded.state === 'html' || loaded.state === 'text')) && (
           <div className="pro-switch" role="group" aria-label={t('pro.dlv.view')}>
             <button aria-pressed={!source} onClick={() => setSource(false)}>{t('pro.dlv.rendered')}</button>
             <button aria-pressed={source} onClick={() => setSource(true)}>{t('pro.dlv.source')}</button>
@@ -536,13 +564,28 @@ function Preview({ abs, meta, tasks, hidden, deletable, onChanged }: { abs: stri
           <button className="pro-btn" style={{ padding: '1px 8px' }} onClick={() => setVersion(null)}>{t('pro.dlv.backToCurrent')}</button>
         </div>
       )}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '4px 18px 18px', ...(loaded.state === 'pdf' && !diff && !version ? { display: 'flex', flexDirection: 'column' } : {}) }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: loaded.state === 'html' && !diff && !version ? 0 : '4px 18px 18px', ...((loaded.state === 'pdf' || loaded.state === 'html') && !diff && !version ? { display: 'flex', flexDirection: 'column' } : {}) }}>
         {diff ? <DiffView text={diff.text} label={t('pro.dlv.changesBy', { who: diff.author === 'Hive' ? t('pro.dlv.app') : diff.author, when: fmtWhen(new Date(diff.ts).getTime()) })} onClose={() => setDiff(null)} />
         : version ? <TextPreview kind={source ? 'text' : kind} text={version.text} dir={dir} name={name} /> : <>
         {loaded.state === 'loading' && <p className="pro-sub">{t('pro.dlv.loading')}</p>}
         {loaded.state === 'none' && <p className="pro-sub">{loaded.reason}</p>}
         {loaded.state === 'image' && <img src={loaded.url} alt={name} style={{ maxWidth: '100%', imageRendering: 'auto' }} />}
         {loaded.state === 'pdf' && <PdfPreview bytes={loaded.bytes} name={name} />}
+        {/* No scripts, its own opaque origin (no window.cth, no app storage),
+            no top navigation, no forms; links to the web open in the browser
+            (main's will-frame-navigate and window-open handlers). */}
+        {loaded.state === 'html' && <iframe key={loaded.url} src={loaded.url} title={name} sandbox="allow-popups allow-popups-to-escape-sandbox"
+          referrerPolicy="no-referrer" style={{ flex: 1, width: '100%', minHeight: 0, border: 'none', background: 'var(--cth-page)', borderEndStartRadius: 'inherit', borderEndEndRadius: 'inherit' }} />}
+        {loaded.state === 'large' && (
+          <div style={{ marginTop: 12 }}>
+            <p className="pro-sub">{t('pro.dlv.tooLarge', { size: fmtSize(loaded.size) })}</p>
+            {external && (
+              <button className="pro-btn pro-btn-primary" onClick={() => { setOpenError(null); void window.cth.deliverablesOpenExternal(abs).then((r) => { if (!r.ok) setOpenError(r.error ?? t('pro.dlv.openFailed')); }); }}>
+                {t('pro.dlv.openOutside')}
+              </button>
+            )}
+          </div>
+        )}
         {loaded.state === 'text' && <TextPreview kind={source ? 'text' : kind} text={loaded.text} dir={dir} name={name} />}
         </>}
       </div>
@@ -572,10 +615,11 @@ function DiffView({ text, label, onClose }: { text: string; label: string; onClo
   );
 }
 
-export function TextPreview({ kind, text, dir, name }: { kind: ReturnType<typeof previewKind>; text: string; dir: string; name: string }) {
+export const TextPreview = memo(function TextPreview({ kind, text, dir, name }: { kind: ReturnType<typeof previewKind>; text: string; dir: string; name: string }) {
   const { t } = useTranslation();
-  if (kind === 'markdown') return <MarkdownPreview source={text} root={dir} baseRel={name} />;
-  if (kind === 'wiki') return <MarkdownPreview source={confluenceToMarkdown(text)} root={dir} baseRel={name} />;
+  const wiki = useMemo(() => (kind === 'wiki' ? confluenceToMarkdown(text) : ''), [kind, text]);
+  if (kind === 'markdown') return <PiecedMarkdown source={text} root={dir} baseRel={name} />;
+  if (kind === 'wiki') return <PiecedMarkdown source={wiki} root={dir} baseRel={name} />;
   if (kind === 'mermaid') return <MermaidDiagram source={text} />;
   if (kind === 'csv') {
     const rows = parseDelimited(text, extOf(name) === 'tsv' ? '\t' : ',');
@@ -591,12 +635,60 @@ export function TextPreview({ kind, text, dir, name }: { kind: ReturnType<typeof
       </div>
     );
   }
-  let body = text;
-  if (kind === 'json') { try { body = JSON.stringify(JSON.parse(text), null, 2); } catch { /* show as is */ } }
+  return <PlainText text={text} json={kind === 'json'} />;
+});
+
+/** A file as text; a long one shows its start until asked for all of it (a
+ *  multi-MB <pre> takes seconds to lay out, every time it is shown). */
+function PlainText({ text, json }: { text: string; json: boolean }) {
+  const { t } = useTranslation();
+  const [all, setAll] = useState(false);
+  const body = useMemo(() => {
+    if (!json) return text;
+    try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
+  }, [text, json]);
+  const { head, cut } = useMemo(() => (all ? { head: body, cut: false } : headOf(body)), [body, all]);
   return (
     <>
-      {kind === 'html' && <p className="pro-sub" style={{ fontSize: 11 }}>{t('pro.dlv.htmlSource')}</p>}
-      <pre className="pro-mono" style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: '10px 0 0' }}>{body}</pre>
+      <pre className="pro-mono" style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: '10px 0 0' }}>{head}</pre>
+      {cut && <ShowRest shown={head.length} total={body.length} onClick={() => setAll(true)} label={t('pro.dlv.showRest', { size: fmtSize(body.length - head.length) })} />}
     </>
+  );
+}
+
+/**
+ * Markdown in pieces, one per frame: a long report fills in while the window
+ * keeps answering, instead of freezing it until the whole document is built.
+ * Past PREVIEW_BUDGET it waits for "Show the rest".
+ */
+function PiecedMarkdown({ source, root, baseRel }: { source: string; root: string; baseRel: string }) {
+  const { t } = useTranslation();
+  const pieces = useMemo(() => splitMarkdown(source, 16 * 1024), [source]);
+  const [limit, setLimit] = useState(() => piecesWithin(pieces, PREVIEW_BUDGET));
+  const [shown, setShown] = useState(1);
+  useEffect(() => {
+    if (shown >= Math.min(limit, pieces.length)) return;
+    const id = setTimeout(() => setShown((n) => n + 1), 0);
+    return () => clearTimeout(id);
+  }, [shown, limit, pieces.length]);
+  if (pieces.length === 1) return <MarkdownPreview source={source} root={root} baseRel={baseRel} />;
+  const rest = pieces.slice(limit).reduce((n, p) => n + p.length, 0);
+  return (
+    <div className="pro-md-pieces">
+      {pieces.slice(0, shown).map((p, i) => <MarkdownPreview key={i} source={p} root={root} baseRel={baseRel} />)}
+      {shown >= limit && limit < pieces.length && (
+        <ShowRest shown={source.length - rest} total={source.length} onClick={() => setLimit(pieces.length)} label={t('pro.dlv.showRest', { size: fmtSize(rest) })} />
+      )}
+    </div>
+  );
+}
+
+function ShowRest({ shown, total, label, onClick }: { shown: number; total: number; label: string; onClick: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="pro-row" style={{ gap: 8, margin: '12px 0', flexWrap: 'wrap' }}>
+      <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.dlv.shownOf', { shown: fmtSize(shown), total: fmtSize(total) })}</span>
+      <button className="pro-btn" onClick={onClick}>{label}</button>
+    </div>
   );
 }

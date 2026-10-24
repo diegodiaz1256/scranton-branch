@@ -1077,6 +1077,8 @@ const api = {
     ipcRenderer.invoke('deliverables:list'),
   /** Open a deliverable in its default program (document types only). */
   deliverablesOpenExternal: (path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('deliverables:openExternal', path),
+  /** Where an HTML deliverable renders from (a sandboxed md-dlv:// URL), or null. */
+  deliverablesFileUrl: (path: string): Promise<string | null> => ipcRenderer.invoke('deliverables:fileUrl', path),
   /** A deliverable's committed versions, newest first (author = the agent). */
   deliverablesHistory: (path: string): Promise<Array<{ hash: string; ts: string; author: string; subject: string }>> => ipcRenderer.invoke('deliverables:history', path),
   /** A deliverable's text as it was in one of those versions. */
