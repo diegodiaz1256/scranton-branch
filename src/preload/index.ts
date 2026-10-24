@@ -1654,6 +1654,15 @@ const api = {
   criticalAudit: (kind: 'mcp' | 'api', id: string): Promise<Array<{ time: string; ts: number; agentId: string; agentName?: string; call: string; allowed: boolean; ok?: boolean }>> =>
     ipcRenderer.invoke('critical:audit', kind, id),
   criticalRevealAudit: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('critical:revealAudit'),
+  /** A critical connection's confidential vault, for the human only: its files, one file, the folder. */
+  criticalVaultList: (kind: 'mcp' | 'api', id: string): Promise<{ dir: string | null; files: Array<{ rel: string; size: number; mtime: number }> }> =>
+    ipcRenderer.invoke('critical:vaultList', kind, id),
+  criticalVaultRead: (kind: 'mcp' | 'api', id: string, rel: string): Promise<{ ok: boolean; text?: string; base64?: string; error?: string }> =>
+    ipcRenderer.invoke('critical:vaultRead', kind, id, rel),
+  criticalVaultReveal: (kind: 'mcp' | 'api', id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('critical:vaultReveal', kind, id),
+  /** Ask the custodian for a full, unredacted report: filed in the vault, written back into it. */
+  criticalRequestReport: (kind: 'mcp' | 'api', id: string, text: string): Promise<{ ok: boolean; file?: string; error?: string }> =>
+    ipcRenderer.invoke('critical:requestReport', kind, id, text),
   // Team: paired installs, sealed end to end over a public relay. Private keys
   // never leave main; this surface sees names, status and the conversation.
   teamStatus: (): Promise<TeamStatusView> => ipcRenderer.invoke('team:status'),

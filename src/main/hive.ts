@@ -44,7 +44,7 @@ import { MCP_CATALOG } from '../shared/mcpCatalog';
 import { GENERATED_DOC_NOTICE, PROTOCOL_DIR, protocolFiles } from './protocolDocs';
 import { connectionsPromptLine, envPromptLine, type PromptConnection } from '../shared/agentConnections';
 import type { Access } from '../shared/connectionAccess';
-import { confidentialityPromptLine, criticalAllows, heldIds, isCustodian, type CriticalMap } from '../shared/criticalConnections';
+import { confidentialityPromptLine, criticalAllows, heldIds, isCustodian, VAULT_ROOT, type CriticalMap } from '../shared/criticalConnections';
 import { selectBroadcastTargets } from '../shared/broadcast';
 import { preferredAgentRole } from '../shared/agentRole';
 import { mergeTaskLedger, patchTaskInLedger } from '../shared/taskLedger';
@@ -57,7 +57,7 @@ import { detectProjectType, memoryInstruction, memoryTemplate, parseMemory, type
 import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
 import { bwrapArgs, mountPoints } from '../shared/bwrapSandbox';
-import type { GuardPolicy } from '../shared/toolGuard';
+import { within, type GuardPolicy } from '../shared/toolGuard';
 import { MD_SKILLS } from './skillsCli';
 import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
@@ -1112,6 +1112,14 @@ export class HiveManager {
       /** The critical connections this agent is the custodian of (labels), for
        *  its CONFIDENTIALITY block. Empty/undefined → not a custodian. */
       critical?: string[];
+      /** A custodian's confidential vaults (one per critical connection it
+       *  holds): writable for it, named in its prompt. Pass them in
+       *  extraWritableDirs too. */
+      vaults?: string[];
+      /** Folders this agent may not even read: other agents' confidential
+       *  vaults. Refused by the path guard, hidden by the OS sandbox
+       *  (denyRead) and by Claude Code's permission rules. */
+      denyDirs?: string[];
       theme?: 'light' | 'dark';
       /** Consent state for the default-MCP bundle (W3). Threaded from the live
        *  HarnessConfig by the caller; undefined → catalog defaults apply. */
@@ -1264,6 +1272,7 @@ export class HiveManager {
         ...agentPlaces].filter((d): d is string => typeof d === 'string' && d.length > 0))],
       git: gitAllowed(opts.mcpDefaults, opts.mcpGrant),
       contained: !opts.roam,
+      ...(opts.denyDirs?.length ? { deny: opts.denyDirs } : {}),
       ...(wslHome ? { home: wslHome } : {})
     });
 
@@ -1284,7 +1293,7 @@ export class HiveManager {
     if (!isHiveAwareProvider(meta.provider)) {
       const preset = providerPreset(meta.provider ?? 'claude');
       const flag = preset.initialPromptFlag;
-      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical);
+      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults);
       // agy, codex, and grok expose a Claude-style lifecycle-hook surface, so each
       // gets the SAME live status + Stop→inbox-drain Claude does — selected by the
       // preset's `hookBridge`. agy needs a translating shim (its hook stdin/stdout
@@ -1476,7 +1485,7 @@ export class HiveManager {
     // what each may do): no permission prompt per call, or an agent just waits.
     const allowedConnections = Object.keys(mcp.servers).filter((n) => mcp.env.MD_MCP_TOKEN && (mcp.servers[n] as { type?: string }).type === 'http');
     if (allowedConnections.length) args.push('--allowedTools', ...allowedConnections.map((n) => `mcp__${n}`));
-    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical));
+    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults));
 
     // Phase 1 — autonomy: attach lifecycle hooks via --settings (no edits to the
     // user's repo) so the agent reports activity and drains its inbox on Stop.
@@ -1486,7 +1495,7 @@ export class HiveManager {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
       const requireSandbox = await this.sandboxAvailable();
-      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox, opts.brokerUrl)));
+      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox, opts.brokerUrl, opts.denyDirs)));
       args.push('--settings', settingsPath);
     }
     return { args, env };
@@ -1884,7 +1893,7 @@ export class HiveManager {
     return p;
   }
 
-  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string): unknown {
+  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = []): unknown {
     // The sandbox gives Bash its own network: the app's loopback broker is
     // reachable only through the sandbox proxy, and only where allowed. The
     // hive's commands (md-api, md-run, md-browse) go through that proxy
@@ -1933,13 +1942,20 @@ export class HiveManager {
             // Where the sandbox CAN run (bubblewrap found on Linux / in a WSL
             // floor's distro), it must: if it ever fails to start, the agent's
             // shell refuses to run rather than running unconfined.
+            // Other agents' confidential vaults: hidden from the shell
+            // (denyRead), and refused to the file tools by permission rules
+            // (which bypass mode still honours; Read and Edit rules cover every
+            // file tool) as well as by the path guard.
             sandbox: {
               enabled: true,
               ...(requireSandbox ? { failIfUnavailable: true } : {}),
-              filesystem: { allowWrite: writableDirs },
+              filesystem: { allowWrite: writableDirs, ...(denyDirs.length ? { denyRead: denyDirs } : {}) },
               ...(broker ? { network: { allowedDomains: [broker] } } : {})
             },
-            permissions: { additionalDirectories: writableDirs }
+            permissions: {
+              additionalDirectories: writableDirs,
+              ...(denyDirs.length ? { deny: denyDirs.flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(/${d.replace(/\\/g, '/')}/**)`)) } : {})
+            }
           }
         : {}),
       hooks: {
@@ -2021,6 +2037,11 @@ export class HiveManager {
         if (!repo) continue;
         repoCwd = repo;
       }
+      // An MCP server runs outside the agent's OS sandbox: one rooted at a
+      // folder that holds the confidential vaults (the orchestrator's cwd is
+      // the office home) could read them, so it is left out.
+      const home = this.getHome();
+      if (e.spec.args.includes('<cwd>') && home && Object.keys(this.criticalMap()).length && within(join(home, VAULT_ROOT), repoCwd)) continue;
       const args = e.spec.args.map((a) => (a === '<cwd>' ? repoCwd : a));
       servers[`munder-${e.id}`] = { command: e.spec.command, args };
     }
@@ -2115,6 +2136,14 @@ export class HiveManager {
       }
     }
     return keyed;
+  }
+
+  /** What happens to a message an agent sends before it is routed: a
+   *  custodian's is redacted (criticalConnections.ts). Injected by main; unset
+   *  means as is. `note` set = changed. */
+  private outgoing: (msg: HiveMessage) => { msg: HiveMessage; note?: string } = (msg) => ({ msg });
+  setOutgoing(filter: (msg: HiveMessage) => { msg: HiveMessage; note?: string }): void {
+    this.outgoing = filter;
   }
 
   /** Critical connections and their custodians (criticalConnections.ts).
@@ -2379,7 +2408,8 @@ export class HiveManager {
     connections?: PromptConnection[],
     envNames?: string[],
     webOff = false,
-    critical?: string[]
+    critical?: string[],
+    vaults?: string[]
   ): string {
     // Native-separator path helpers — see the 🪟 note above.
     const inDir = (...parts: string[]): string => join(dir, ...parts);
@@ -2532,7 +2562,7 @@ export class HiveManager {
       deliverablesLine,
       integrationsLine,
       connectionsPromptLine(connections),
-      confidentialityPromptLine(critical),
+      confidentialityPromptLine(critical, vaults?.map((v) => this.forAgent(v))),
       envPromptLine(envNames),
       runnersLine,
       listsLine,
@@ -2884,8 +2914,20 @@ export class HiveManager {
               repair: 'literal-line-break'
             });
           }
-          const msg = this.normalize(partial, id);
+          let msg = this.normalize(partial, id);
           msg.from = id; // sender is authoritative — the owning directory
+          // What leaves a custodian is redacted first (criticalConnections.ts);
+          // the archived copy is the redacted one, never the raw text.
+          const out = this.outgoing(msg);
+          if (out.note) {
+            msg = out.msg;
+            writeFileSync(join(outbox, '.sent', f), JSON.stringify(msg, null, 2), 'utf8');
+            rmSync(full, { force: true });
+            this.appendLog({ kind: 'outbox-redacted', from: id, id: msg.id, note: out.note });
+            this.routeMessage(msg);
+            routed++;
+            continue;
+          }
           this.routeMessage(msg);
           renameSync(full, join(outbox, '.sent', f)); // archive, don't reprocess
           routed++;

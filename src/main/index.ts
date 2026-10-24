@@ -21,7 +21,7 @@ import { buildCaBundle, tlsActive, tlsEnv, WINDOWS_STORE_SCRIPT } from './caBund
 import {
   rmSync, existsSync, readFileSync, appendFileSync, readdirSync, statSync, cpSync, writeFileSync,
   unlinkSync, mkdirSync, renameSync, createWriteStream, copyFileSync, lstatSync,
-  readlinkSync, symlinkSync
+  readlinkSync, symlinkSync, chmodSync
 } from 'node:fs';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { join, resolve, relative, sep, basename, dirname, isAbsolute } from 'node:path';
@@ -96,7 +96,8 @@ import { addConnection, connectionAccessFor, setConnectionAccess, connectionKeyS
 import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
-import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, heldIds, isCritical, isCustodian, setCritical, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
+import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
+import { redactConfidential, redactionTotal } from '../shared/confidentialRedact';
 import { BrowseCache, browseChars, browseMode, formatBrowsed, formatSearch } from '../shared/browsePage';
 
 /** Pages agents read, kept 10 minutes for their next pages (browsePage.ts). */
@@ -3964,6 +3965,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // For diagnosis: which APIs this agent had when it started (log.jsonl).
       try { hive.appendLog({ kind: 'broker-grant', agentId: opts.hive.id, apis: ids.map((id) => `${id}:${access[id]}`) }); } catch { /* log is best-effort */ }
     }
+    // Confidential vaults: its own (a custodian), and the ones it may not read.
+    const spawnVaults = await prepareVaults(opts.hive.id, provider);
     try {
       spawnStep(opts.id, 'preparing the agent in the hive');
       const inj = await hive.ensureAgent(
@@ -3988,12 +3991,14 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           mcpGrant: readConfig().agentMcpGrants?.[opts.hive.id],
           toolBlocks: toolBlocksFor(opts.hive.id),
           critical: criticalLabelsFor(opts.hive.id, provider),
+          vaults: spawnVaults.own,
+          denyDirs: spawnVaults.deny,
           mcpScopes: readConfig().connectionScopes,
           mcpOnlyManaged: readConfig().mcpOnlyManaged !== false,
           skillsDir: skillsResourceDir(),
           // The shared palace is mutated by the agent's own `mempalace` calls, so
           // the OS sandbox must let it through (empty when memory is off).
-          extraWritableDirs: [memory.env().MEMPALACE_PALACE_PATH].filter((p): p is string => !!p),
+          extraWritableDirs: [memory.env().MEMPALACE_PALACE_PATH, ...spawnVaults.own].filter((p): p is string => !!p),
           // Its folders (toolGuard.ts): the orchestrator also writes in the
           // office's repos (it integrates branches); the human may let anyone out.
           writableRoots: opts.hive.isGod ? (readConfig().registeredRepos ?? []) : [],
@@ -5306,6 +5311,140 @@ ipcMain.handle('critical:set', (_evt, kind: unknown, id: unknown, critical: unkn
   }
   writeConfig({ criticalCustodians: setCritical(criticalMap(), kind, id, critical === true, who) });
   return { ok: true };
+});
+// ─── Confidential vaults (criticalConnections.ts) ───────────────────────────
+// <office home>/confidential/<kind>-<id>: the custodian's raw material and the
+// human's full reports. Outside the hive's git repo, never indexed, denied to
+// every other agent (guard + sandbox denyRead + permission rules).
+
+function vaultRoot(): string | null {
+  const home = readConfig().harnessHome;
+  return home ? join(expandTilde(home), VAULT_ROOT) : null;
+}
+
+function vaultDir(kind: CriticalKind, id: string): string | null {
+  const root = vaultRoot();
+  return root ? join(root, vaultName(kind, id)) : null;
+}
+
+/** Create a vault with owner-only permissions: chmod 700 on Linux/macOS and,
+ *  for a WSL floor, inside the distro. On Windows the folder inherits the
+ *  user profile's ACL (only this user). */
+async function ensureVault(dir: string): Promise<void> {
+  mkdirSync(join(dir, VAULT_REQUESTS), { recursive: true, mode: 0o700 });
+  mkdirSync(join(dir, 'reports'), { recursive: true, mode: 0o700 });
+  const w = parseWslPath(dir);
+  if (w) {
+    try { await runInDistroAsync(w.distro, 'chmod', ['-R', 'go-rwx', w.linuxPath], '/'); } catch (e) { console.error('[critical] chmod vault in WSL failed:', e); }
+  } else if (process.platform !== 'win32') {
+    try { chmodSync(dir, 0o700); chmodSync(dirname(dir), 0o700); } catch { /* best effort */ }
+  }
+}
+
+/** What an agent gets at spawn: the vaults it may write (its own, created
+ *  now) and the folders it may not read. */
+async function prepareVaults(agentId: string, provider: string | undefined): Promise<{ own: string[]; deny: string[] }> {
+  const root = vaultRoot();
+  if (!root) return { own: [], deny: [] };
+  const access = vaultAccess(criticalMap(), canBeCustodian(provider) ? agentId : undefined);
+  const own: string[] = [];
+  for (const name of access.own) {
+    const dir = join(root, name);
+    try { await ensureVault(dir); own.push(dir); } catch (e) { console.error('[critical] vault', name, e); }
+  }
+  return { own, deny: access.denyAll ? [root] : access.denyOthers.map((n) => join(root, n)) };
+}
+
+/** Hosts of the critical connections an agent holds: links to them are redacted. */
+function criticalHosts(agentId: string): string[] {
+  const map = criticalMap();
+  const hosts = new Set<string>();
+  const add = (u: string | undefined) => { try { if (u) hosts.add(new URL(u).hostname); } catch { /* not a URL */ } };
+  for (const id of heldIds(map, agentId, 'api')) add(integrations.getRecord(id)?.baseUrl);
+  for (const id of heldIds(map, agentId, 'mcp')) {
+    const c = (readConfig().customMcp ?? []).find((x) => x.id === id);
+    if (c?.transport.kind === 'http') add(c.transport.url);
+  }
+  return [...hosts];
+}
+
+// What a custodian sends is redacted before it is routed (the safety net
+// under its prompt); the redacted copy is the one archived and delivered.
+hive.setOutgoing((msg) => {
+  if (!isCustodian(criticalMap(), msg.from)) return { msg };
+  const hosts = criticalHosts(msg.from);
+  const subject = redactConfidential(msg.subject, { hosts });
+  const body = redactConfidential(msg.body, { hosts });
+  const total = redactionTotal(subject) + redactionTotal(body);
+  if (!total) return { msg };
+  const kinds = [...new Set([...Object.keys(subject.counts), ...Object.keys(body.counts)])].join(', ');
+  for (const k of custodianships(criticalMap(), msg.from)) {
+    criticalAudit({ ts: Date.now(), kind: k.slice(0, 3) as CriticalKind, id: k.slice(4), agentId: msg.from, call: `message ${msg.id} to ${msg.to}: ${total} redaction(s) (${kinds})`, allowed: true });
+  }
+  return { msg: { ...msg, subject: subject.text, body: body.text }, note: `${total} redaction(s): ${kinds}` };
+});
+
+function vaultFiles(dir: string): Array<{ rel: string; size: number; mtime: number }> {
+  const out: Array<{ rel: string; size: number; mtime: number }> = [];
+  const walk = (abs: string, rel: string, depth: number): void => {
+    if (depth > 4 || out.length >= 500) return;
+    let entries: import('node:fs').Dirent[] = [];
+    try { entries = readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const a = join(abs, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(a, r, depth + 1);
+      else if (e.isFile()) { try { const st = statSync(a); out.push({ rel: r, size: st.size, mtime: st.mtimeMs }); } catch { /* gone */ } }
+    }
+  };
+  walk(dir, '', 0);
+  return out.sort((a, b) => b.mtime - a.mtime);
+}
+
+const vaultArgs = (kind: unknown, id: unknown): string | null =>
+  (kind === 'mcp' || kind === 'api') && typeof id === 'string' && isCritical(criticalMap(), kind, id) ? vaultDir(kind, id) : null;
+
+// The human only: these are renderer IPC (the app window), never reachable by
+// an agent, which talks to the app through hooks, the gateway and the broker.
+ipcMain.handle('critical:vaultList', (_evt, kind: unknown, id: unknown) => {
+  const dir = vaultArgs(kind, id);
+  return dir ? { dir, files: vaultFiles(dir) } : { dir: null, files: [] };
+});
+ipcMain.handle('critical:vaultRead', (_evt, kind: unknown, id: unknown, rel: unknown) => {
+  const dir = vaultArgs(kind, id);
+  const clean = vaultRelPath(rel);
+  if (!dir || !clean) return { ok: false, error: 'bad request' };
+  const abs = join(dir, ...clean.split('/'));
+  try {
+    const st = statSync(abs);
+    if (!st.isFile() || st.size > 20 * 1024 * 1024) return { ok: false, error: 'not a readable file' };
+    const buf = readFileSync(abs);
+    const binary = /\.pdf$/i.test(clean) || buf.subarray(0, 4096).includes(0);
+    return binary ? { ok: true, base64: buf.toString('base64') } : { ok: true, text: buf.toString('utf8') };
+  } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+ipcMain.handle('critical:vaultReveal', async (_evt, kind: unknown, id: unknown) => {
+  const dir = vaultArgs(kind, id);
+  if (!dir) return { ok: false, error: 'bad request' };
+  await ensureVault(dir);
+  const err = await shell.openPath(dir);
+  return err ? { ok: false, error: err } : { ok: true };
+});
+// The human asks the custodian for a full, unredacted report: the request is
+// filed in the vault (the only channel that is the human's alone) and the
+// custodian is told where it is. The report goes back into the vault.
+ipcMain.handle('critical:requestReport', async (_evt, kind: unknown, id: unknown, text: unknown) => {
+  const dir = vaultArgs(kind, id);
+  const custodian = (kind === 'mcp' || kind === 'api') && typeof id === 'string' ? custodianOf(criticalMap(), kind, id) : undefined;
+  if (!dir || !custodian || typeof text !== 'string' || !text.trim()) return { ok: false, error: 'bad request' };
+  await ensureVault(dir);
+  const name = `${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
+  const file = join(dir, VAULT_REQUESTS, name);
+  writeFileSync(file, `# Full report requested by the human\n\n${text.trim().slice(0, 4000)}\n`, { encoding: 'utf8', mode: 0o600 });
+  criticalAudit({ ts: Date.now(), kind: kind as CriticalKind, id: id as string, agentId: 'human', call: `full report requested: ${VAULT_REQUESTS}/${name}`, allowed: true });
+  const where = hive.forAgent(file);
+  try { liveWebContents()?.send('hive:enqueueToAgent', { targetId: custodian, text: `The human filed a full-report request in your confidential vault: ${where}. Read it, write the unredacted report into the vault's reports/ folder only, and answer with a pointer to the file.` }); } catch { /* window gone */ }
+  return { ok: true, file: `${VAULT_REQUESTS}/${name}` };
 });
 ipcMain.handle('critical:audit', (_evt, kind: unknown, id: unknown) =>
   (kind === 'mcp' || kind === 'api') && typeof id === 'string' ? readCriticalAudit(kind, id) : []);
