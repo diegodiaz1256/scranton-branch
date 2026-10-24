@@ -100,6 +100,7 @@ import { addConnection, connectionAccessFor, setConnectionAccess, connectionKeyS
 import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
+import { runsUnsandboxed, unsandboxedAgents, unsandboxRefusal } from '../shared/unsandboxed';
 import { ensureVaultRoot } from './vaultRoot';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
 import { redactConfidential, redactionTotal } from '../shared/confidentialRedact';
@@ -585,7 +586,7 @@ function workerByPty(ptyId: string): WorkerRec | undefined {
 }
 /** Whether each agent runs in an OS sandbox (its CLI's own, the app's bubblewrap,
  *  or none), as of its last spawn. For its card. */
-const osSandboxes = new Map<string, 'cli' | 'app' | 'none'>();
+const osSandboxes = new Map<string, 'cli' | 'app' | 'none' | 'off'>();
 
 /** The loopback secret broker (Phase 2). Workers reach registered integrations through
  *  it without ever seeing a credential. getRecord/getSecret are injected so the broker
@@ -4088,19 +4089,21 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           // office's repos (it integrates branches); the human may let anyone out.
           writableRoots: opts.hive.isGod ? (readConfig().registeredRepos ?? []) : [],
           roam: (readConfig().agentRoam ?? []).includes(opts.hive.id),
+          // The human's "Run without sandbox" (never for a custodian).
+          unsandboxed: runsUnsandboxed(readConfig().agentUnsandboxed, readConfig().criticalCustodians, opts.hive.id),
           // Its sandboxed shell may reach this broker port (md-api, md-run…).
           brokerUrl: opts.env?.MD_BROKER_URL
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
-      // The app's OS sandbox for a CLI without one (pi): the CLI runs inside
+      // The app's OS sandbox for a CLI without one that holds (pi, agy): the CLI runs inside
       // bubblewrap. If bubblewrap then fails to start, so does the agent: it
       // never falls back to running unconfined.
       if (inj.wrap) {
         opts.args = [...inj.wrap, '--', opts.command, ...opts.args];
         opts.command = inj.wrapCommand ?? 'bwrap';
       }
-      if (inj.osSandbox) osSandboxes.set(opts.hive.id, inj.osSandbox);
+      if (inj.osSandbox) osSandboxes.set(opts.hive.id, inj.osSandbox); else osSandboxes.delete(opts.hive.id);
       seedPrompt = inj.seedPrompt;
       // A degraded spawn (proxy bridge never bound) is told to the user the same
       // way breaker escalations are: a native toast, gated on the notifications
@@ -4110,8 +4113,13 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // enterprise knowledge store (both no-ops / empty when their flags are off).
       opts.env = { ...(opts.env ?? {}), ...inj.env, ...memory.env(), ...knowledge.env() };
     } catch (e) {
-      // Hive provisioning is best-effort; never block a spawn on it.
+      // Not started: without its preparation the agent would run with no
+      // sandbox, no guard and no hooks (in auto mode, free to write anywhere).
+      // That is how agents got out when the hive had a problem.
       console.error('[hive] ensureAgent failed:', e);
+      try { integrationBroker.revoke(opts.id); } catch { /* best-effort */ }
+      const why = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: `${opts.hive.name ?? opts.hive.id} was not started: the office could not prepare it (${why}). It never runs without its sandbox and guard. Try again in a moment; if it keeps failing, check that the office folder is reachable.` };
     }
   }
   // Long-run guardrails + tiering (Lane A #6.4/#6.6). All additive to the args
@@ -4727,7 +4735,10 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   // transition so ordinary config writes never re-enter it.
   const hiveWasEnabled = hive.enabled();
   const wasOnboarded = readConfig().onboardingComplete;
-  const next = writeConfig(patch);
+  // "Run without sandbox" is set only by agent:setUnsandboxed (its typed
+  // confirmation, custodian check and audit line); never through here.
+  const { agentUnsandboxed: _unsandboxed, ...safePatch } = patch ?? {};
+  const next = writeConfig(safePatch);
   // Live opt-in/out from Settings → Privacy (TELEMETRY.md).
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);
   // Activation funnel (v0.4.6): onboarding just finished (false → true) — the top of
@@ -5398,9 +5409,28 @@ ipcMain.handle('critical:set', async (_evt, kind: unknown, id: unknown, critical
     if (a.isGod) return { ok: false, error: 'the orchestrator routes everyone\'s work; choose another agent as custodian' };
     if (a.provider === 'pi' && !(appSandbox = await hive.sandboxAvailable())) return { ok: false, error: 'a pi agent can be a custodian only where the app can sandbox it: a Linux or WSL floor with bubblewrap. Use a WSL floor, or a Claude Code agent.' };
     if (!canBeCustodian(a.provider, { osSandbox: appSandbox })) return { ok: false, error: 'only a Claude Code agent, or a pi agent on a Linux or WSL floor, can be a custodian' };
+    if (unsandboxedAgents(readConfig().agentUnsandboxed).includes(custodian)) return { ok: false, error: `${a.name ?? custodian} runs without its sandbox (Capabilities). Turn that off first: a custodian always runs sandboxed.` };
     who = custodian;
   }
   writeConfig({ criticalCustodians: setCritical(criticalMap(), kind, id, critical === true, who) });
+  return { ok: true };
+});
+
+// ─── Run without sandbox (shared/unsandboxed.ts) ────────────────────────────
+// The human's own switch: only this handler sets agentUnsandboxed (the generic
+// config write drops it), turning it on needs the agent's name typed back, a
+// custodian is refused, and every change is written to the hive's log.
+ipcMain.handle('agent:setUnsandboxed', (_evt, agentId: unknown, on: unknown, typed: unknown) => {
+  if (typeof agentId !== 'string' || !agentId || typeof on !== 'boolean') return { ok: false, error: 'bad request' };
+  const a = hive.enabled() ? hive.registry().agents?.[agentId] : undefined;
+  const name = a?.name ?? agentId;
+  const why = unsandboxRefusal({ on, name, typed, custodian: isCustodian(criticalMap(), agentId), known: !!a });
+  if (why) return { ok: false, error: why };
+  const cur = unsandboxedAgents(readConfig().agentUnsandboxed);
+  const next = on ? [...new Set([...cur, agentId])] : cur.filter((x) => x !== agentId);
+  writeConfig({ agentUnsandboxed: next });
+  try { hive.appendLog({ kind: 'unsandboxed', agentId, name, on, by: 'human' }); hive.commit(`hive: ${name} ${on ? 'runs without its sandbox' : 'runs in its sandbox again'}`); } catch { /* the config change stands */ }
+  console.warn(`[hive] ${name} (${agentId}) ${on ? 'will run WITHOUT its OS sandbox' : 'runs in its OS sandbox again'} from its next start`);
   return { ok: true };
 });
 // ─── Confidential vaults (criticalConnections.ts) ───────────────────────────

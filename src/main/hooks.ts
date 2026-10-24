@@ -360,7 +360,13 @@ export class HookServer {
       try { payload = JSON.parse(frame); } catch { /* ignore */ }
       if (typeof payload.ping === 'string') { conn.end(JSON.stringify({ pong: payload.ping, instance: this.instanceId })); return; }
       let res: unknown = {};
-      try { res = this.handle(payload); } catch { res = {}; }
+      try { res = this.handle(payload); } catch (e) {
+        console.error('[hive] hook handler failed:', e);
+        // A tool call the office failed to check is not let through unchecked.
+        res = payload.hook_event_name === 'PreToolUse' && payload.agent_id
+          ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'The office could not check this call (its guard hit an error). Try again in a moment; if it keeps happening, tell the human.' } }
+          : {};
+      }
       conn.end(JSON.stringify(res ?? {}));
     });
     conn.on('error', () => { /* shim hung up — ignore */ });

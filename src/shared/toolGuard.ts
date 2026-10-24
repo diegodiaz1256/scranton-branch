@@ -40,6 +40,38 @@ export interface GuardPolicy {
   /** Said instead of the usual "you work in…" when a write is refused (a
    *  custodian is told how its things leave: through the human's sign-off). */
   fenceHint?: string;
+  /** The office's own controls inside folders the agent may write: agents'
+   *  settings.json/mcp.json and hook configs, the hive's bin/, the project's
+   *  .claude/settings*.json. No agent changes them, even one let out of its
+   *  folders: an agent that rewrote them could turn its own sandbox and guard
+   *  off. A `*` stands for one folder name (`hive/agents/*` is every agent). */
+  controls?: string[];
+}
+
+/** Inside an agent's hive folder: what configures its CLI and hooks
+ *  (Claude's settings.json and mcp.json, Codex's config.toml, the Gemini
+ *  bridge, pi's extension, OpenCode's plugin). Relative, `/`-separated. */
+export const AGENT_CONTROL_FILES: readonly string[] = [
+  'settings.json', 'mcp.json', '.codex/config.toml', '.gemini-hive',
+  '.pi-agent/extensions', '.pi-agent/extensions.json',
+  '.opencode/plugin', '.opencode/plugins', '.opencode/opencode.json'
+];
+
+/** True when `p` is `pattern` or inside it; `*` matches one whole folder name. */
+export function withinPattern(p: string, pattern: string): boolean {
+  if (!pattern.includes('*')) return within(p, pattern);
+  const a = normPath(p);
+  const b = normPath(pattern);
+  const ci = /^\/[a-z](\/|$)/.test(b);
+  const xs = (ci ? a.toLowerCase() : a).split('/');
+  const ys = (ci ? b.toLowerCase() : b).split('/');
+  if (xs.length < ys.length) return false;
+  return ys.every((y, i) => y === '*' ? xs[i] !== '' : y === xs[i]);
+}
+
+/** Why the office's controls are refused, in the agent's terms. */
+export function controlReason(p: string): string {
+  return `Refused: ${p} is one of the office's control files (agent settings, hooks, the hive's bin/, the project's Claude settings). Agents never change them. If something there needs changing, tell the human what and why.`;
 }
 
 export interface GuardVerdict { deny: true; reason: string }
@@ -98,7 +130,8 @@ export function within(p: string, root: string): boolean {
 const SINKS = new Set(['/dev/null', '/dev/stdout', '/dev/stderr', 'nul', '$null']);
 
 
-const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'bash', 'shell', 'run_shell_command', 'exec_command', 'local_shell']);
+// run_command: Antigravity's shell (its command in CommandLine).
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'bash', 'shell', 'run_shell_command', 'exec_command', 'local_shell', 'run_command']);
 
 /** Commands that move the shell somewhere else. */
 const MOVES = new Set(['cd', 'pushd', 'chdir', 'set-location', 'sl', 'push-location']);
@@ -392,6 +425,20 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
     const abs = resolve(raw, base);
     return abs !== null && !policy.roots.some((r) => within(abs, r));
   };
+  const controls = (policy.controls ?? []).filter(Boolean);
+  /** A control file, from `base` (whether or not the agent is contained). */
+  const isControl = (p: string, base = start): boolean => {
+    const raw = p.trim().replace(/^["']|["']$/g, '');
+    if (!raw || !controls.length) return false;
+    const abs = resolve(raw, base);
+    return abs !== null && controls.some((c) => withinPattern(abs, c));
+  };
+  /** Why writing `p` from `base` is refused, or null. */
+  const writeRefusal = (p: string, base = start): GuardVerdict | null => {
+    if (isControl(p, base)) return { deny: true, reason: controlReason(p) };
+    if (policy.contained && outside(p, base)) return { deny: true, reason: fenceReason(p) };
+    return null;
+  };
   // A denied folder (another agent's confidential vault): reading counts too.
   if (policy.deny?.length) {
     const hit = deniedPath(tool, inp, policy, home);
@@ -403,10 +450,10 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
 
   // Files a tool writes, in every CLI's spelling (Write/Edit, write_to_file,
   // apply_patch...): the same reading the Deliverables use.
-  if (policy.contained) for (const p of writtenPathsOf(tool, inp)) if (outside(p)) return { deny: true, reason: fenceReason(p) };
+  for (const p of writtenPathsOf(tool, inp)) { const v = writeRefusal(p); if (v) return v; }
 
   if (!SHELL_TOOLS.has(tool)) return null;
-  const cmd = typeof inp.command === 'string' ? inp.command : Array.isArray(inp.command) ? (inp.command as unknown[]).join(' ') : typeof inp.cmd === 'string' ? inp.cmd : '';
+  const cmd = typeof inp.command === 'string' ? inp.command : Array.isArray(inp.command) ? (inp.command as unknown[]).join(' ') : typeof inp.cmd === 'string' ? inp.cmd : typeof inp.CommandLine === 'string' ? inp.CommandLine : '';
   if (!cmd) return null;
   return checkShell(cmd, 0, start);
 
@@ -415,8 +462,8 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
   function checkCode(code: string, base: string, program: string): GuardVerdict | null {
     const runs = CODE_RUNS.test(code) || (BACKTICK_RUNS.has(program) && code.includes('`'));
     if (!policy.git && runs && CODE_GIT.test(code)) return gitOff;
-    if (!policy.contained || !CODE_WRITES.test(code)) return null;
-    for (const p of codePaths(code)) if (outside(p, base)) return { deny: true, reason: fenceReason(p) };
+    if (!(policy.contained || controls.length) || !CODE_WRITES.test(code)) return null;
+    for (const p of codePaths(code)) { const v = writeRefusal(p, base); if (v) return v; }
     return null;
   }
 
@@ -448,12 +495,12 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
     }
     const code = inlineCode(prog.name, prog.args);
     if (code !== null) { const v = checkCode(code, here, prog.name); if (v) return v; }
-    if (!policy.contained) continue;
+    if (!policy.contained && !controls.length) continue;
     if (MOVES.has(prog.name)) {
       // cmd's `cd /d D:\x`: /d is a switch, not a folder.
       const args = prog.args[0]?.toLowerCase() === '/d' ? prog.args.slice(1) : prog.args;
       const target = args.find((a) => !/^-/.test(a));
-      if (target && target !== '-' && outside(target, here)) return { deny: true, reason: fenceReason(target) };
+      if (policy.contained && target && target !== '-' && outside(target, here)) return { deny: true, reason: fenceReason(target) };
       const to = target === undefined ? (home || null) : target === '-' ? null : resolve(target, here);
       if (prog.name === 'pushd' || prog.name === 'push-location') pushed.push(here);
       if (to) here = to;
@@ -462,12 +509,16 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
     }
     if (prog.name === 'git') {
       const c = prog.args.indexOf('-C');
-      if (c >= 0 && prog.args[c + 1] && outside(prog.args[c + 1], here)) return { deny: true, reason: fenceReason(prog.args[c + 1]) };
+      if (policy.contained && c >= 0 && prog.args[c + 1] && outside(prog.args[c + 1], here)) return { deny: true, reason: fenceReason(prog.args[c + 1]) };
     }
     if (WRITES.has(prog.name)) {
-      for (const a of writtenPaths(prog.name, prog.args)) if (outside(a, here)) return { deny: true, reason: fenceReason(a) };
+      // A move or a link changes its source too (`mv hive/bin x`).
+      const changed = prog.name === 'mv' || prog.name === 'move' || prog.name === 'move-item' || prog.name === 'mi' || prog.name === 'ln'
+        ? pathArgs(prog.args) : writtenPaths(prog.name, prog.args);
+      for (const a of writtenPaths(prog.name, prog.args)) { const v = writeRefusal(a, here); if (v) return v; }
+      for (const a of changed) if (isControl(a, here)) return { deny: true, reason: controlReason(a) };
     }
-    for (const t of redirectTargets(words)) if (outside(t, here)) return { deny: true, reason: fenceReason(t) };
+    for (const t of redirectTargets(words)) { const v = writeRefusal(t, here); if (v) return v; }
   }
   return null;
   }

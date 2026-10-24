@@ -26,7 +26,7 @@ import {
   readdirSync, statSync, lstatSync, realpathSync, rmSync, appendFileSync,
   symlinkSync, unlinkSync, copyFileSync, cpSync, chmodSync, openSync, readSync, closeSync, fstatSync
 } from 'node:fs';
-import { join, dirname, basename, isAbsolute, relative, resolve, posix } from 'node:path';
+import { join, dirname, basename, isAbsolute, relative, resolve, posix, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execFile, spawnSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
@@ -57,14 +57,15 @@ import { cleanServerList } from '../shared/roleBundles';
 import { detectProjectType, memoryInstruction, memoryTemplate, parseMemory, type ProjectType } from '../shared/memorySections';
 import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
-import { bwrapArgs, mountPoints } from '../shared/bwrapSandbox';
-import { within, type GuardPolicy } from '../shared/toolGuard';
+import { bwrapArgs, cliStateMounts, mountPoints, type AppSandboxedCli } from '../shared/bwrapSandbox';
+import { AGENT_CONTROL_FILES, within, type GuardPolicy } from '../shared/toolGuard';
 import { MD_NETGATE, piModelHosts } from './netgate';
 import { MD_SKILLS } from './skillsCli';
 import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
 import { MD_BROWSE } from './browseCli';
 import { BROKER_CLIENT_JS } from './brokerClient';
+import { HOOK_OFFLINE_JS } from '../shared/hookOffline';
 import { MD_LISTS_MCP } from './listsMcp';
 import { liveNamesakes, similarLive, supersededArchived } from './namesakes';
 
@@ -275,9 +276,10 @@ export interface SpawnInjection {
   wrap?: string[];
   /** The program the wrap runs (default bwrap; md-netgate for a custodian). */
   wrapCommand?: string;
-  /** Whether the agent runs in an OS sandbox: its CLI's own, the app's, or
-   *  none (pi on native Windows, or bubblewrap missing). */
-  osSandbox?: 'cli' | 'app' | 'none';
+  /** Whether the agent runs in an OS sandbox: its CLI's own, the app's,
+   *  none (pi on native Windows, or bubblewrap missing), or off (the human's
+   *  "Run without sandbox"). */
+  osSandbox?: 'cli' | 'app' | 'none' | 'off';
 }
 
 /** Longest path a Unix socket can be bound at, with room to spare (sun_path is
@@ -1167,6 +1169,8 @@ export class HiveManager {
       writableRoots?: string[];
       /** The human let this agent write outside its folders (Capabilities). */
       roam?: boolean;
+      /** The human let this agent run without its OS sandbox (unsandboxed.ts). */
+      unsandboxed?: boolean;
       /** The key broker this agent was handed (MD_BROKER_URL): its sandbox may
        *  reach that one loopback port (hookSettings). */
       brokerUrl?: string;
@@ -1273,6 +1277,10 @@ export class HiveManager {
     if (opts.theme) env.COLORFGBG = opts.theme === 'dark' ? '15;0' : '0;15';
 
     const claudeProvider = isClaudeProvider(meta.provider ?? 'claude');
+    // The human's "Run without sandbox" (shared/unsandboxed.ts): no OS sandbox
+    // for Claude Code or pi. The guard and its control files stay. Never a
+    // custodian (main checks too).
+    const unsandboxed = !!opts.unsandboxed && !opts.lockdown;
 
     // Git and its folders, enforced at PreToolUse (hooks.ts -> toolGuard.ts).
     // A WSL floor's agents run in the distro: `~`, the temp dir and Claude's
@@ -1292,8 +1300,19 @@ export class HiveManager {
       contained: opts.lockdown ? true : !opts.roam,
       ...(opts.lockdown ? { fenceHint: `As the custodian of a critical connection you write only in your own folder (${this.forAgent(dir)}) and your confidential vault. Mail goes through your outbox and files for research/ through ${this.forAgent(opts.lockdown.outgoing)}; the human signs both off before anything leaves.` } : {}),
       ...(opts.denyDirs?.length ? { deny: opts.denyDirs } : {}),
+      controls: this.controlPaths(root, meta.cwd),
       ...(wslHome ? { home: wslHome } : {})
     });
+    // What its hook decides alone when the office does not answer
+    // (hookOffline.ts): its folders, the controls, and whether an OS sandbox
+    // holds its shell (Claude Code's where it can run; the app's bubblewrap
+    // for pi and agy).
+    {
+      const g = this.guardPolicies.get(meta.id)!;
+      const osSandbox = await this.sandboxAvailable();
+      const sandboxed = !unsandboxed && (claudeProvider ? (osSandbox || process.platform === 'darwin') : (meta.provider === 'pi' || meta.provider === 'antigravity') && osSandbox);
+      env.HIVE_GUARD = JSON.stringify({ roots: g.roots.map((r) => this.forAgent(r)), controls: (g.controls ?? []).map((c) => this.forAgent(c)), contained: g.contained, sandboxed });
+    }
 
     // Non-hive-aware providers (for example Antigravity, Codex, Grok and Pi) don't
     // understand Claude Code's flags (no `--append-system-prompt`, no telemetry,
@@ -1322,8 +1341,8 @@ export class HiveManager {
       // configuration is never mutated. Both share the HIVE_SOCK wiring below.
       const preArgs: string[] = [];
       let degraded: string | undefined;
-      let piWrap: string[] | null | undefined;
-      let piWrapCommand: string | undefined;
+      let appWrap: string[] | null | undefined;
+      let appWrapCommand: string | undefined;
       // Dispatch on the structured bridge descriptor (the foundation's `bridgeOf`
       // derives {kind:'hooks'} from the legacy `hookBridge` for agy/codex, and
       // returns the explicit {kind:'proxy'} for qwen). Two ways a hookless CLI
@@ -1337,7 +1356,12 @@ export class HiveManager {
         env.HIVE_SOCK = sock;
         try {
           if (desc.kind === 'hooks') {
-            if (desc.shim === 'agy') this.installAgyHooks();
+            if (desc.shim === 'agy') {
+              this.installAgyHooks();
+              // agy's own --sandbox leaves the home folder writable, so where
+              // bubblewrap runs the app builds one like pi's (bwrapSandbox.ts).
+              appWrap = await this.appSandbox('agy', meta, dir, root, opts, sock);
+            }
             else if (desc.shim === 'codex') {
               env.CODEX_HOME = this.installCodexHooks(dir, meta.id);
               // Codex refuses to run hooks from a config dir without persisted
@@ -1367,17 +1391,17 @@ export class HiveManager {
               env.PI_CODING_AGENT_DIR = this.installPiHooks(dir, !!opts.lockdown);
               // Pi has no sandbox of its own: where bubblewrap runs (Linux, a
               // WSL floor's distro), the app builds one like Claude Code's.
-              piWrap = await this.piSandbox(meta, dir, root, opts, sock);
+              appWrap = unsandboxed ? null : await this.appSandbox('pi', meta, dir, root, opts, sock);
               // A custodian: its tool calls wait for the office's answer and
               // are refused when it cannot be reached; only pi's own built-in
               // tools, no MCP; no network but the app and its model (md-netgate).
               if (opts.lockdown) {
                 env.HIVE_GUARD_STRICT = '1';
                 preArgs.push('--tools', 'read,bash,edit,write,grep,find,ls', '--exclude-tools', 'mcp__*');
-                if (piWrap) {
-                  const gate = this.custodianNetgate(dir, env.PI_CODING_AGENT_DIR, piWrap);
-                  piWrap = gate.args;
-                  piWrapCommand = gate.command;
+                if (appWrap) {
+                  const gate = this.custodianNetgate(dir, env.PI_CODING_AGENT_DIR, appWrap);
+                  appWrap = gate.args;
+                  appWrapCommand = gate.command;
                 }
               }
             }
@@ -1455,7 +1479,7 @@ export class HiveManager {
       // seedPrompt; the renderer types it into the TUI after boot (ondev-b).
       const deg = {
         ...(degraded ? { degraded } : {}),
-        ...(piWrap !== undefined ? { osSandbox: piWrap ? 'app' as const : 'none' as const, ...(piWrap ? { wrap: piWrap } : {}), ...(piWrapCommand ? { wrapCommand: piWrapCommand } : {}) } : {})
+        ...(appWrap !== undefined ? { osSandbox: appWrap ? 'app' as const : unsandboxed ? 'off' as const : 'none' as const, ...(appWrap ? { wrap: appWrap } : {}), ...(appWrapCommand ? { wrapCommand: appWrapCommand } : {}) } : {})
       };
       if (preset.seedDelivery === 'type-into-tui') return { args: [...preArgs], env, seedPrompt: prompt, ...deg };
       // Providers with no declared seed strategy intentionally spawn bare. Inbox-capable
@@ -1528,10 +1552,15 @@ export class HiveManager {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
       const requireSandbox = await this.sandboxAvailable();
-      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown)));
+      const settings = this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown,
+        { now: this.controlPathsNow(root, meta.cwd), patterns: this.controlPaths(root, meta.cwd) }) as { sandbox?: unknown };
+      // Run without sandbox: off, said outright (a project's settings cannot
+      // turn it back on for it either). Its permission rules stay.
+      if (unsandboxed) settings.sandbox = { enabled: false };
+      this.writeJson(settingsPath, this.forAgentJson(settings));
       args.push('--settings', settingsPath);
     }
-    return { args, env };
+    return { args, env, ...(unsandboxed ? { osSandbox: 'off' as const } : {}) };
   }
 
   /** Update the durable job string (hire role) without respawning. Refreshes
@@ -1819,6 +1848,32 @@ export class HiveManager {
     return out;
   }
 
+  /** The office's control files inside folders agents may write
+   *  (toolGuard.ts `controls`): every agent's settings and hook configs, the
+   *  hive's bin/ (hook shims, CLIs, the node launcher), the hook socket when
+   *  it sits in the hive, and the Claude settings of this agent's project
+   *  (a settings.local.json there widens the next session's sandbox). A `*`
+   *  is any agent. */
+  private controlPaths(root: string, cwd?: string): string[] {
+    const agents = join(root, 'agents', '*');
+    const sock = this.sockPath();
+    return [
+      ...AGENT_CONTROL_FILES.map((f) => join(agents, ...f.split('/'))),
+      join(root, 'bin'),
+      ...(sock && sock === join(root, 'hooks.sock') ? [sock] : []),
+      ...(cwd ? [join(cwd, '.claude', 'settings.json'), join(cwd, '.claude', 'settings.local.json')] : [])
+    ];
+  }
+
+  /** controlPaths with `*` spelled out for every agent folder there is now:
+   *  the sandbox's denyWrite takes real paths only. */
+  private controlPathsNow(root: string, cwd?: string): string[] {
+    let ids: string[] = [];
+    try { ids = readdirSync(join(root, 'agents'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { /* none yet */ }
+    const star = `${sep}*${sep}`;
+    return this.controlPaths(root, cwd).flatMap((p) => p.includes(star) ? ids.map((id) => p.replace(star, `${sep}${id}${sep}`)) : [p]);
+  }
+
   /** Claude Code settings that route every relevant hook through the shim.
    *  Claude-only — this is invoked solely on the Claude spawn path. (The MCP
    *  bundle is NOT here: see the --mcp-config note in ensureAgent.) */
@@ -1926,7 +1981,13 @@ export class HiveManager {
     return p;
   }
 
-  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = [], onlyBroker = false): unknown {
+  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = [], onlyBroker = false, controls: { now: string[]; patterns: string[] } = { now: [], patterns: [] }): unknown {
+    // The office's controls (controlPaths): read-only for the sandboxed shell
+    // (real paths: denyWrite takes no `*`), and Edit/Write refused by rule
+    // (patterns, so an agent hired later is covered; the rule also follows a
+    // symlink to them). Verified on claude 2.1.310 in bypass mode.
+    const slash = (p: string) => this.forAgent(p).replace(/\\/g, '/');
+    const controlDeny = this.winAgents() ? [] : controls.patterns.map((p) => `Edit(/${slash(p)}${/[\\/](?:bin|\.gemini-hive|extensions|plugins?)$/.test(p) ? '/**' : ''})`);
     // The sandbox gives Bash its own network: the app's loopback broker is
     // reachable only through the sandbox proxy, and only where allowed. The
     // hive's commands (md-api, md-run, md-browse) go through that proxy
@@ -1984,14 +2045,24 @@ export class HiveManager {
             sandbox: {
               enabled: true,
               ...(requireSandbox ? { failIfUnavailable: true } : {}),
-              filesystem: { allowWrite: writableDirs, ...(denyDirs.length ? { denyRead: denyDirs } : {}) },
+              // No way out of it: a command asking to run outside the sandbox
+              // (`dangerouslyDisableSandbox`) used to run unconfined in bypass
+              // mode. Held here, a project's settings cannot reopen it.
+              allowUnsandboxedCommands: false,
+              filesystem: {
+                allowWrite: writableDirs,
+                ...(controls.now.length ? { denyWrite: controls.now } : {}),
+                ...(denyDirs.length ? { denyRead: denyDirs } : {})
+              },
               ...(onlyBroker
                 ? { network: { allowedDomains: broker ? [broker] : [], strictAllowlist: true } }
                 : broker ? { network: { allowedDomains: [broker] } } : {})
             },
             permissions: {
               additionalDirectories: writableDirs,
-              ...(denyDirs.length ? { deny: denyDirs.flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(/${d.replace(/\\/g, '/')}/**)`)) } : {})
+              ...(denyDirs.length || controlDeny.length
+                ? { deny: [...denyDirs.flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(/${d.replace(/\\/g, '/')}/**)`)), ...controlDeny] }
+                : {})
             }
           }
         : {}),
@@ -3327,16 +3398,21 @@ export class HiveManager {
     mkdirSync(join(root, 'bin'), { recursive: true });
     writeFileSync(shim, AGY_HOOK_SHIM, 'utf8');
     // Bundled node, not bare `node` — agy's hooks run with a stripped PATH too.
+    // A WSL floor has no launcher: its hook is the distro's bare `node`, which
+    // a plain agy (no AGENT_ID, no nvm on PATH) may lack; agy then refuses every
+    // tool call. That run is not ours: the hook ends there, before node.
     const command = (event: string) => this.winAgents()
       ? this.windowsHookCommand('md-agy-hook', shim, event)
-      : this.nodeRun(shim, event);
+      : this.wslRoot() ? `[ -n "$AGENT_ID" ] || exit 0; ${this.nodeRun(shim, event)}` : this.nodeRun(shim, event);
     const tool = (event: string) => ({
       matcher: '*',
       hooks: [{ type: 'command', command: command(event), timeout: 0 }]
     });
-    const plain = (event: string) => ({
-      hooks: [{ type: 'command', command: command(event), timeout: 0 }]
-    });
+    // Events without a matcher take their handlers directly (agy's hooks.md:
+    // "Flat (list of handler objects directly)"). Wrapped in { hooks: [...] }
+    // like the tool events, agy 1.4 rejects the whole file ("command hook must
+    // specify 'command'") and no hook fires at all, PreToolUse included.
+    const plain = (event: string) => ({ type: 'command', command: command(event), timeout: 0 });
     const group = {
       PreToolUse: [tool('PreToolUse')],
       PostToolUse: [tool('PostToolUse')],
@@ -3618,15 +3694,16 @@ export class HiveManager {
   }
 
   /**
-   * The bubblewrap argv for a pi agent (shared/bwrapSandbox.ts), or null when
-   * bubblewrap cannot run here (native Windows, or not installed: the Setup row
-   * says so and the agent's card shows it is not sandboxed). Writable: the
-   * same folders Claude Code's sandbox gets (its hive folder, the hive, extra
-   * dirs), the project or worktree it works in, the hook socket's folder and
-   * the pi login it refreshes.
+   * The bubblewrap argv for a pi or agy agent (shared/bwrapSandbox.ts), or
+   * null when bubblewrap cannot run here (native Windows, or not installed: the
+   * Setup row says so and the agent's card shows it is not sandboxed).
+   * Writable: the same folders Claude Code's sandbox gets (its hive folder, the
+   * hive, extra dirs), the project or worktree it works in, the hook socket's
+   * folder and the CLI's own state (cliStateMounts: pi's login, agy's
+   * conversations and login).
    */
-  private async piSandbox(
-    meta: AgentMeta, dir: string, root: string,
+  private async appSandbox(
+    cli: AppSandboxedCli, meta: AgentMeta, dir: string, root: string,
     opts: { extraWritableDirs?: string[]; writableRoots?: string[]; vaults?: string[]; denyDirs?: string[]; lockdown?: { outgoing: string } },
     sock: string | null
   ): Promise<string[] | null> {
@@ -3634,13 +3711,18 @@ export class HiveManager {
     const sockDir = sock && !/^tcp:/.test(sock) && !/^\\\\/.test(sock) ? [dirname(sock)] : [];
     const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
     const userHome = lin(this.userHome());
+    const state = cliStateMounts(cli, userHome);
+    // The office's controls stay read-only (not the hook socket: pi's
+    // extension and agy's hook talk to it from inside), and so do the CLI's
+    // own hook config and programs.
+    const controls = [...this.controlPathsNow(root, meta.cwd).filter((p) => basename(p) !== 'hooks.sock').map(lin), ...state.controls];
     // A custodian: its own folder and its vaults, nothing else; no network
     // (md-netgate gives back the app and its model); the folders it may not
     // read hidden; its pi login is a copy of its own.
     if (opts.lockdown) {
       const profile = {
         writable: [...custodianWriteRoots(dir, opts.vaults ?? []), ...sockDir].map(lin),
-        hide: (opts.denyDirs ?? []).map(lin), home: userHome, network: 'none' as const
+        hide: (opts.denyDirs ?? []).map(lin), home: userHome, network: 'none' as const, controls
       };
       const present = new Set(await this.existingPaths(mountPoints(profile)));
       return bwrapArgs(profile, (p) => present.has(p));
@@ -3652,7 +3734,7 @@ export class HiveManager {
       ...sockDir
     ].filter((d): d is string => typeof d === 'string' && d.length > 0).map(lin);
     // Inside the hive, the other agents' folders stay read-only (its own is reopened).
-    const profile = { writable, readOnly: [lin(join(root, 'agents'))], writableFiles: [`${userHome}/.pi/agent/auth.json`], home: userHome, hide: (opts.denyDirs ?? []).map(lin) };
+    const profile = { writable: [...writable, ...state.writable], readOnly: [lin(join(root, 'agents'))], writableFiles: state.writableFiles, home: userHome, hide: (opts.denyDirs ?? []).map(lin), controls };
     const present = new Set(await this.existingPaths(mountPoints(profile)));
     return bwrapArgs(profile, (p) => present.has(p));
   }
@@ -4725,17 +4807,20 @@ process.stdin.on('end', () => {
     setTimeout(() => process.exit(0), 1500).unref();
     return;
   }
-  if (!sock) { process.exit(0); }
-  let resp = '';
-  const done = (code) => { if (resp) process.stdout.write(resp); process.exit(code); };
-  const c = net.createConnection((String(sock).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(sock).slice(String(sock).lastIndexOf(':') + 1)) } : sock), () => c.write(JSON.stringify(payload) + '\\n'));
-  c.setEncoding('utf8');
-  c.on('data', (d) => { resp += d; });
-  c.on('end', () => done(0));
-  c.on('error', () => process.exit(0));
-  setTimeout(() => process.exit(0), 5000).unref();
+  // A tool call waits for the office's answer (retrying a few seconds while
+  // the app restarts); with none, officeOffline decides (hookOffline.ts).
+  // Every other event goes on at once: a dead app never stops the agent.
+  const pre = payload.hook_event_name === 'PreToolUse';
+  officeAsk(net.createConnection, sock, payload, pre ? 8000 : 5000, pre ? 3 : 1, (resp) => {
+    if (resp) process.stdout.write(resp);
+    else if (pre) {
+      const why = officeOffline(payload.tool_name, payload.tool_input, payload.cwd);
+      if (why) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } }));
+    }
+    process.exit(0);
+  });
 });
-`;
+${HOOK_OFFLINE_JS}`;
 
 // ─── agy-hook shim (written to <hive>/bin/agy-hook.cjs) ──────────────────────
 // Antigravity's `agy` CLI fires lifecycle hooks (PreToolUse/PostToolUse/Stop/
@@ -4760,7 +4845,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => { data += d; });
 process.stdin.on('end', () => {
   const sock = process.env.HIVE_SOCK;
-  if (!agentId || !sock) { process.exit(0); } // not a hive worker → ignore
+  if (!agentId) { process.exit(0); } // not a hive worker → ignore
   let agy = {};
   try { agy = JSON.parse(data || '{}'); } catch (_) {}
   const tc = agy.toolCall || {};
@@ -4790,16 +4875,16 @@ process.stdin.on('end', () => {
     if (out) { try { process.stdout.write(JSON.stringify(out)); } catch (_) {} }
     process.exit(0);
   };
-  try {
-    const c = net.createConnection((String(sock).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(sock).slice(String(sock).lastIndexOf(':') + 1)) } : sock), () => c.write(JSON.stringify(payload) + '\\n'));
-    c.setEncoding('utf8');
-    c.on('data', (d) => { resp += d; });
-    c.on('end', done);
-    c.on('error', () => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  } catch (_) { process.exit(0); }
+  // No answer to a tool call: officeOffline decides (hookOffline.ts).
+  const pre = event === 'PreToolUse';
+  officeAsk(net.createConnection, sock, payload, pre ? 8000 : 5000, pre ? 3 : 1, (r) => {
+    if (r) { resp = r; return done(); }
+    const why = pre ? officeOffline(tc.name, tc.args, payload.cwd) : null;
+    if (why) { try { process.stdout.write(JSON.stringify({ decision: 'deny', reason: why })); } catch (_) {} }
+    process.exit(0);
+  });
 });
-`;
+${HOOK_OFFLINE_JS}`;
 
 // ─── pi bridge extension (written to <agentDir>/.pi-agent/extensions/) ───────
 // A bundled extension for Pi (earendil-works). Pi exposes a pi.on(event,…)
@@ -4832,10 +4917,6 @@ var net = require('node:net');
 var SOCK = process.env.HIVE_SOCK;
 var AGENT = process.env.AGENT_ID || null;
 var AUTO = process.env.HIVE_AUTO_APPROVE === '1';
-// A custodian (HIVE_GUARD_STRICT): a call the office cannot answer is refused.
-var STRICT = process.env.HIVE_GUARD_STRICT === '1';
-var UNREACHABLE = 'Refused: the office could not be asked about this call, and this agent may not act without its answer. Try again in a moment.';
-function unanswered() { return STRICT ? UNREACHABLE : null; }
 // Pi's session id, from session_start: on every payload, so the office can
 // resume this session (--session <id>) and key its cost rows.
 var SID = null;
@@ -4849,30 +4930,20 @@ function post(payload) {
   } catch (e) {}
 }
 // PreToolUse waits for the answer: the office may refuse a call (git off, a
-// write outside the agent's folders). No answer in 3 s: the call goes ahead,
-// except for a custodian (STRICT), whose call is then refused.
+// write outside the agent's folders). No answer after a few tries:
+// officeOffline decides (hookOffline.ts; a custodian's call is refused).
 function ask(payload) {
   return new Promise(function (resolve) {
-    var done = false, resp = '';
-    function finish(v) { if (!done) { done = true; resolve(v); } }
-    try {
-      if (!SOCK) return finish(unanswered());
-      payload.agent_id = payload.agent_id || AGENT;
-      if (SID && !payload.session_id) payload.session_id = SID;
-      var c = net.createConnection((String(SOCK).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(SOCK).slice(String(SOCK).lastIndexOf(':') + 1)) } : SOCK), function () { try { c.write(JSON.stringify(payload) + '\\n'); } catch (e) {} });
-      c.setEncoding('utf8');
-      c.on('data', function (d) { resp += d; });
-      c.on('end', function () {
-        // The office always answers with a JSON body: nothing at all (a relay
-        // whose far end is down) is no answer.
-        if (!resp.trim() && STRICT) return finish(UNREACHABLE);
-        try { var r = JSON.parse(resp || '{}'); var h = r.hookSpecificOutput; finish(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); } catch (e) { finish(unanswered()); }
-      });
-      c.on('error', function () { finish(unanswered()); });
-      setTimeout(function () { try { c.destroy(); } catch (e) {} finish(unanswered()); }, 3000);
-    } catch (e) { finish(unanswered()); }
+    payload.agent_id = payload.agent_id || AGENT;
+    if (SID && !payload.session_id) payload.session_id = SID;
+    officeAsk(net.createConnection, SOCK, payload, 8000, 3, function (resp) {
+      if (!resp) return resolve(officeOffline(payload.tool_name, payload.tool_input));
+      try { var r = JSON.parse(resp); var h = r.hookSpecificOutput; resolve(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); }
+      catch (e) { resolve(officeOffline(payload.tool_name, payload.tool_input)); }
+    });
   });
 }
+${HOOK_OFFLINE_JS}
 function firstDefined(primary, fallback) {
   return primary !== undefined && primary !== null ? primary : fallback;
 }
@@ -4956,27 +5027,20 @@ function post(payload) {
   } catch (e) {}
 }
 // PreToolUse waits for the answer: the office may refuse a call (git off, a
-// write outside the agent's folders). No answer in 3 s: the call goes ahead.
+// write outside the agent's folders). No answer after a few tries:
+// officeOffline decides (hookOffline.ts).
 function ask(payload) {
   return new Promise((resolve) => {
-    let done = false;
-    let resp = '';
-    const finish = (v) => { if (!done) { done = true; resolve(v); } };
-    try {
-      if (!SOCK) return finish(null);
-      payload.agent_id = payload.agent_id || AGENT;
-      if (SID && !payload.session_id) payload.session_id = SID;
-      const c = createConnection((String(SOCK).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(SOCK).slice(String(SOCK).lastIndexOf(':') + 1)) } : SOCK), () => { try { c.write(JSON.stringify(payload) + '\\n'); } catch (e) {} });
-      c.setEncoding('utf8');
-      c.on('data', (d) => { resp += d; });
-      c.on('end', () => {
-        try { const h = JSON.parse(resp || '{}').hookSpecificOutput; finish(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); } catch (e) { finish(null); }
-      });
-      c.on('error', () => finish(null));
-      setTimeout(() => { try { c.destroy(); } catch (e) {} finish(null); }, 3000);
-    } catch (e) { finish(null); }
+    payload.agent_id = payload.agent_id || AGENT;
+    if (SID && !payload.session_id) payload.session_id = SID;
+    officeAsk(createConnection, SOCK, payload, 8000, 3, (resp) => {
+      if (!resp) return resolve(officeOffline(payload.tool_name, payload.tool_input));
+      try { const h = JSON.parse(resp).hookSpecificOutput; resolve(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); }
+      catch (e) { resolve(officeOffline(payload.tool_name, payload.tool_input)); }
+    });
   });
 }
+${HOOK_OFFLINE_JS}
 export const HiveBridge = async () => {
   // The app writes this file to plugin/ and plugins/ (older and newer OpenCode
   // read one or the other); OpenCode 1.18 loads both, which sent every event
@@ -5268,7 +5332,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => { data += d; });
 process.stdin.on('end', () => {
   const sock = process.env.HIVE_SOCK;
-  if (!agentId || !sock) { process.exit(0); }
+  if (!agentId) { process.exit(0); }
   let gemini = {};
   try { gemini = JSON.parse(data || '{}'); } catch (_) {}
   const names = {
@@ -5299,16 +5363,16 @@ process.stdin.on('end', () => {
     if (out) { try { process.stdout.write(JSON.stringify(out)); } catch (_) {} }
     process.exit(0);
   };
-  try {
-    const c = net.createConnection((String(sock).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(sock).slice(String(sock).lastIndexOf(':') + 1)) } : sock), () => c.write(JSON.stringify(payload) + '\\n'));
-    c.setEncoding('utf8');
-    c.on('data', (d) => { resp += d; });
-    c.on('end', done);
-    c.on('error', () => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  } catch (_) { process.exit(0); }
+  // No answer to a tool call: officeOffline decides (hookOffline.ts).
+  const pre = payload.hook_event_name === 'PreToolUse';
+  officeAsk(net.createConnection, sock, payload, pre ? 8000 : 5000, pre ? 3 : 1, (r) => {
+    if (r) { resp = r; return done(); }
+    const why = pre ? officeOffline(payload.tool_name, payload.tool_input, payload.cwd) : null;
+    if (why) { try { process.stdout.write(JSON.stringify({ decision: 'deny', reason: why })); } catch (_) {} }
+    process.exit(0);
+  });
 });
-`;
+${HOOK_OFFLINE_JS}`;
 
 // ─── grok-hook shim (written to <hive>/bin/grok-hook.cjs) ───────────────────
 // Grok's lifecycle events and decisions are Claude-compatible, but the wire
@@ -5325,7 +5389,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => { data += d; });
 process.stdin.on('end', () => {
   const sock = process.env.HIVE_SOCK;
-  if (!agentId || !sock) { process.exit(0); }
+  if (!agentId) { process.exit(0); }
   let grok = {};
   try { grok = JSON.parse(data || '{}'); } catch (_) {}
   const names = {
@@ -5373,13 +5437,13 @@ process.stdin.on('end', () => {
     if (out) { try { process.stdout.write(JSON.stringify(out)); } catch (_) {} }
     process.exit(0);
   };
-  try {
-    const c = net.createConnection((String(sock).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(sock).slice(String(sock).lastIndexOf(':') + 1)) } : sock), () => c.write(JSON.stringify(payload) + '\\n'));
-    c.setEncoding('utf8');
-    c.on('data', (d) => { resp += d; });
-    c.on('end', done);
-    c.on('error', () => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  } catch (_) { process.exit(0); }
+  // No answer to a tool call: officeOffline decides (hookOffline.ts).
+  const pre = payload.hook_event_name === 'PreToolUse';
+  officeAsk(net.createConnection, sock, payload, pre ? 8000 : 5000, pre ? 3 : 1, (r) => {
+    if (r) { resp = r; return done(); }
+    const why = pre ? officeOffline(payload.tool_name, payload.tool_input, payload.cwd) : null;
+    if (why) { try { process.stdout.write(JSON.stringify({ decision: 'deny', reason: why })); } catch (_) {} }
+    process.exit(0);
+  });
 });
-`;
+${HOOK_OFFLINE_JS}`;

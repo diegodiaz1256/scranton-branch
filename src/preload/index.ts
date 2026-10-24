@@ -216,7 +216,7 @@ export interface AgentDirectoryEntry {
   cwdValid: boolean | null;
   /** The OS sandbox it runs in since its last spawn: its CLI's own, the app's
    *  (bubblewrap, for pi), none, or null when not known. */
-  osSandbox: 'cli' | 'app' | 'none' | null;
+  osSandbox: 'cli' | 'app' | 'none' | 'off' | null;
   archived: boolean;
   isGod: boolean;
   isAssistant: boolean;
@@ -448,6 +448,7 @@ export interface HarnessConfig {
   /** Claude Code tool groups taken from an agent (Capabilities): agent id → group ids (shared/nativeTools.ts). */
   agentToolBlocks?: Record<string, string[]>;
   agentRoam?: string[];
+  agentUnsandboxed?: string[];
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'mine' | 'catalog';
@@ -810,6 +811,10 @@ const api = {
    *  grant). Takes effect on the agent's next restart. */
   setAgentMcpGrant: (agentId: string, servers?: string[], access?: Record<string, 'none' | 'read' | 'readwrite'>): Promise<HarnessConfig> =>
     ipcRenderer.invoke('config:setAgentMcpGrant', agentId, servers, access),
+  /** "Run without sandbox" for an agent (shared/unsandboxed.ts): turning it on
+   *  needs the agent's name typed back. From its next start. */
+  setAgentUnsandboxed: (agentId: string, on: boolean, typedName?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('agent:setUnsandboxed', agentId, on, typedName),
   setAgentTokenCap: (agentId: string, tokenCap?: number): Promise<HarnessConfig> =>
     ipcRenderer.invoke('config:setAgentTokenCap', agentId, tokenCap),
   ensureHarnessHome: (path: string): Promise<{ ok: boolean; error?: string }> =>

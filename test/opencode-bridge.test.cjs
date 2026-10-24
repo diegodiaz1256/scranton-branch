@@ -26,7 +26,16 @@ test('tool.execute.before posts the tool name and its arguments to the hive sock
 
   const sock = path.join(hiveHome, 'h.sock');
   const frames = [];
-  const server = net.createServer((c) => { let b = ''; c.on('data', (d) => { b += d; }); c.on('end', () => { frames.push(JSON.parse(b.trim())); }); });
+  // The office answers a tool call (as the hook server does); the plugin
+  // waits for that answer, and refuses the call when none comes.
+  const server = net.createServer((c) => {
+    let b = '';
+    let got = false;
+    const take = () => { if (!got && b.trim()) { got = true; frames.push(JSON.parse(b.trim())); } };
+    c.on('data', (d) => { b += d; if (b.endsWith('\n') && b.includes('"PreToolUse"')) { take(); c.end('{}'); } });
+    c.on('end', take);
+    c.on('error', () => {});
+  });
   await new Promise((r) => server.listen(sock, r));
   t.after(() => server.close());
   process.env.HIVE_SOCK = sock;

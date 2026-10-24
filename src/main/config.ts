@@ -235,6 +235,9 @@ export interface HarnessConfig {
   agentToolBlocks?: Record<string, string[]>;
   /** Agents the human let write outside their own folders (Capabilities). Absent → none. */
   agentRoam?: string[];
+  /** Agents the human let run without their OS sandbox (shared/unsandboxed.ts).
+   *  Set only through agent:setUnsandboxed, never a generic config write. */
+  agentUnsandboxed?: string[];
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'catalog';
