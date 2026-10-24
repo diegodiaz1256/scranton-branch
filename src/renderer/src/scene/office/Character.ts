@@ -12,7 +12,10 @@ import { colors } from '@/design/tokens';
 // cover our status model.
 
 export type CharacterAnimation = 'idle' | 'walk' | 'type' | 'read';
-export type StatusGlyph = 'none' | 'blocked' | 'success' | 'compacting' | 'looping';
+export type StatusGlyph = 'none' | 'blocked' | 'success' | 'compacting' | 'looping'
+  // "No walking" floor (setStill): static icons for the states an avatar can no
+  // longer act out by walking somewhere.
+  | 'typing' | 'waiting' | 'asking' | 'stuck';
 
 function lerp(a: number, b: number, t: number): number {
   const tt = Math.min(Math.max(t, 0), 1);
@@ -158,6 +161,8 @@ export class Character {
   private smokeT = -1;                // -1 = not smoking (the boss's cigar)
   private smokeDur = 0;
   private onSmokeDone: (() => void) | null = null;
+  /** "No walking" floor: always seated at the desk, no roaming, no effects. */
+  private still = false;
 
   constructor(options: CharacterOptions) {
     this.agentId = options.agentId;
@@ -245,6 +250,9 @@ export class Character {
   }
 
   walkToAndThen(tile: { x: number; y: number }, callback: () => void): void {
+    // Nobody walks on the still floor; the scene does not send errands there,
+    // and a stray order must not strand the avatar mid-room.
+    if (this.still) { this.snapToDesk(); return; }
     this.idleLoop = false; // a directed walk-and-do (e.g. a café break) owns the avatar
     this.arrivalCallback = callback;
     this.moveTo(tile);
@@ -262,7 +270,39 @@ export class Character {
    *  stay seated unless blocked. */
   sitAtDesk(working: boolean): void {
     this.idleLoop = false;     // an explicit desk command ends the idle loop
+    if (this.still) { this.glowOn = working; this.snapToDesk(); return; }
     this.walkToDeskAndSit(working);
+  }
+
+  /**
+   * The "no walking" floor: the avatar sits at its desk for good. Every order
+   * that would make it walk (wander, go to the door, an errand) seats it there
+   * instead, and the effects that only make sense on the move are dropped.
+   * Switching back hands control to the scene again (it re-applies the state).
+   */
+  setStill(on: boolean): void {
+    this.still = on;
+    if (!on) return;
+    this.idleLoop = false;
+    this.wandering = false;
+    this.arrivalCallback = null;
+    this.cheerT = -1;
+    this.waterT = -1; this.onWaterDone = null;
+    this.smokeT = -1; this.onSmokeDone = null;
+    this.carryingCup = false;
+    this.snapToDesk();
+  }
+
+  isStill(): boolean { return this.still; }
+
+  /** Teleport onto the desk tile and sit (no path, no walk animation). */
+  private snapToDesk(): void {
+    this.wandering = false;
+    this.arrivalCallback = null;
+    const pos = this.mapRenderer.tileToPixel(this.deskTile.x, this.deskTile.y);
+    this.px = pos.x + this.mapRenderer.tileSize / 2;
+    this.py = pos.y + this.mapRenderer.tileSize;
+    this.applySit();
   }
 
   /** Walk to the home desk (if away) and sit. `working` toggles the focus halo.
@@ -352,6 +392,7 @@ export class Character {
   /** Roam the office between tasks. Picks random walkable tiles and strolls
    *  to them until the agent is given work again. */
   startWandering(): void {
+    if (this.still) { this.glowOn = false; this.snapToDesk(); return; }
     if (this.idleLoop && this.wandering) return; // already in the linger phase
     // (Re)enter the idle loop at its linger phase, then begin roaming.
     this.idleLoop = true;
@@ -381,6 +422,7 @@ export class Character {
 
   /** Walk to an arbitrary tile (e.g. the waiting area when blocked); stands on arrival. */
   walkToTile(tile: { x: number; y: number }): void {
+    if (this.still) { this.glowOn = false; this.snapToDesk(); return; }
     this.idleLoop = false;
     this.pendingWork = null;
     this.pendingSit = false;
@@ -465,7 +507,7 @@ export class Character {
    *  Movement (wander / idle loop) is held for the duration so the jump reads
    *  on the spot; whatever the avatar was told to do resumes right after. */
   cheer(): void {
-    if (this.sitting) return; // seated cheer would fight the sit offset/crop
+    if (this.sitting || this.still) return; // seated cheer would fight the sit offset/crop
     // Stop in place so the hops read on the spot; roaming resumes right after.
     this.path = [];
     if (this.state === 'walk') {
@@ -661,7 +703,12 @@ export class Character {
     this.workGlow.x = this.px;
     this.workGlow.y = this.py - ts / 2;
     this.workGlow.zIndex = this.py - 1;
-    if (this.glowOn) {
+    if (this.glowOn && this.still) {
+      // No pulse on the still floor: it would only advance on the rare frames
+      // drawn there, and freeze at a random phase in between.
+      this.workGlow.alpha = 0.3 * this.sprite.container.alpha;
+      this.workGlow.scale.set(1);
+    } else if (this.glowOn) {
       this.workGlowElapsed += dt;
       const phase = (Math.sin((this.workGlowElapsed * Math.PI) / 0.6) + 1) / 2;
       this.workGlow.alpha = (0.18 + 0.27 * phase) * this.sprite.container.alpha;
@@ -835,6 +882,8 @@ export class Character {
         g.rect(-1, yTop, 2, 5).fill(0xff6b6b);
         g.rect(-1, yTop + 6, 2, 2).fill(0xff6b6b);
       }
+    } else if (this.still) {
+      this.drawStillGlyph(g, yTop);
     } else if (this.statusGlyph === 'success') {
       // brief 4-point sparkle, auto-clears after 0.9s
       const p = (Math.sin(this.glyphElapsed * 18) + 1) / 2;
@@ -855,6 +904,58 @@ export class Character {
         const [x, y] = pts[i];
         g.rect(x - 1, y - 1, 2, 2).fill(i === idx ? 0xff9f43 : 0x6b5878);
       }
+    }
+  }
+
+  /** The still floor's state icons: static (they are drawn once and then sit
+   *  on screen with no frames running), beside the head so the thought cloud
+   *  above it never covers them. A 9×8 ink-outlined tile each. */
+  private drawStillGlyph(g: Graphics, yTop: number): void {
+    const x = 8, y = yTop + 2;
+    const tile = (fill: number): void => {
+      g.rect(x - 1, y - 1, 11, 10).fill(colors.ink[900]);
+      g.rect(x, y, 9, 8).fill(fill);
+    };
+    switch (this.statusGlyph) {
+      case 'typing':   // a speech box with three dots: busy at the keyboard
+        tile(colors.cream[50]);
+        for (let i = 0; i < 3; i++) g.rect(x + 1 + i * 3, y + 3, 1, 2).fill(colors.ink[900]);
+        break;
+      case 'waiting':  // an hourglass: parked on another agent
+        tile(colors.accent.lemon);
+        g.rect(x + 2, y + 1, 5, 1).fill(colors.ink[900]);
+        g.rect(x + 3, y + 2, 3, 1).fill(colors.ink[900]);
+        g.rect(x + 4, y + 3, 1, 2).fill(colors.ink[900]);
+        g.rect(x + 3, y + 5, 3, 1).fill(colors.ink[900]);
+        g.rect(x + 2, y + 6, 5, 1).fill(colors.ink[900]);
+        break;
+      case 'asking':   // a "?": waiting on YOU
+        tile(colors.accent.coral);
+        g.rect(x + 3, y + 1, 3, 1).fill(colors.cream[50]);
+        g.rect(x + 5, y + 2, 1, 2).fill(colors.cream[50]);
+        g.rect(x + 4, y + 4, 1, 1).fill(colors.cream[50]);
+        g.rect(x + 4, y + 6, 1, 1).fill(colors.cream[50]);
+        break;
+      case 'stuck':    // a "!": the circuit breaker holds it
+        tile(colors.accent.peach);
+        g.rect(x + 4, y + 1, 1, 4).fill(colors.ink[900]);
+        g.rect(x + 4, y + 6, 1, 1).fill(colors.ink[900]);
+        break;
+      case 'compacting':
+        tile(colors.accent.lilac);
+        g.rect(x + 2, y + 2, 5, 4).fill(colors.ink[900]);
+        g.rect(x + 3, y + 3, 3, 2).fill(colors.accent.lilac);
+        break;
+      case 'success':  // a check mark
+        tile(colors.accent.mint);
+        g.rect(x + 2, y + 4, 1, 1).fill(colors.ink[900]);
+        g.rect(x + 3, y + 5, 1, 1).fill(colors.ink[900]);
+        g.rect(x + 4, y + 4, 1, 1).fill(colors.ink[900]);
+        g.rect(x + 5, y + 3, 1, 1).fill(colors.ink[900]);
+        g.rect(x + 6, y + 2, 1, 1).fill(colors.ink[900]);
+        break;
+      default:
+        break;
     }
   }
 

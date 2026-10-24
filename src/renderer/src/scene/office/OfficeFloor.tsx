@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { limitSceneFps } from './frameBudget';
+import { stillGlyphFor } from '@shared/officeRenderLevel';
 import { useTranslation } from 'react-i18next';
 import { actionLabel } from './actionLabel';
 import i18n from '@/i18n';
@@ -11,7 +12,7 @@ import { TiledMapRenderer } from './TiledMapRenderer';
 import { Camera } from './Camera';
 import { Character, paintCup } from './Character';
 import { DeskScreen } from './DeskScreen';
-import { MessageEnvelope, type MessageAct } from './MessageEnvelope';
+import { MessageEnvelope, STILL_ENVELOPE_SECONDS, type MessageAct } from './MessageEnvelope';
 import { hexToNumber, DEFAULT_CHARACTER } from './cast';
 import { pickSoloLine, pickExchange, type BreakSpot } from './cafeteriaLines';
 import { colors } from '@/design/tokens';
@@ -168,7 +169,18 @@ function firstWords(prompt: string | undefined, maxWords = 6, maxChars = 42): st
   return out;
 }
 
-export function OfficeFloor() {
+/** How long the still floor keeps drawing after something changed: enough for a
+ *  fade-in, a thought cloud settling and the seat snap, then the ticker stops. */
+const STILL_WAKE_MS = 700;
+
+/**
+ * `still`: the "no walking" level (src/shared/officeRenderLevel.ts). Everyone
+ * sits at their desk, state is an icon over the head, a message is an envelope
+ * and a line between desks, and the ticker only runs for a moment after
+ * something changes — an idle still floor draws no frames at all. Switched in
+ * place, without rebuilding the scene.
+ */
+export function OfficeFloor({ still = false }: { still?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const appRef = useRef<Application | null>(null);
@@ -225,8 +237,17 @@ export function OfficeFloor() {
     pausedRef.current = paused;
     const ticker = appRef.current?.ticker;
     if (!ticker) return; // app.init() hasn't created it yet — init() applies it
+    // On the still floor this draws one frame (whatever changed while hidden)
+    // and the tick stops itself again.
     if (paused) ticker.stop(); else ticker.start();
   }, [paused]);
+
+  // Read by init() and the tick; the effect hands a live switch to the scene.
+  const stillRef = useRef(still);
+  useEffect(() => {
+    stillRef.current = still;
+    (appRef.current as { __setStill?: (on: boolean) => void } | null)?.__setStill?.(still);
+  }, [still]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -283,7 +304,24 @@ export function OfficeFloor() {
       const tilesetTextures = await Promise.all(
         themeTilesetUrls(theme).map(loadTexture),
       );
+      // These are this mount's own (loadTexture makes fresh ones every time), so
+      // teardown frees them: app.destroy({ children }) only destroys the scene
+      // graph, and the images would otherwise stay behind on every rebuild and
+      // every switch to the no-office level and back.
+      (app as any).__textures = tilesetTextures;
       if (mountIdRef.current !== mountId) { safeDestroy(app); return; }
+
+      // ─── Still floor: frames on demand ──────────────────────────────────────
+      // On the "no walking" level the ticker is stopped whenever nothing moves.
+      // Anything that changes the picture calls wake(): the ticker runs for a
+      // moment (fades, the seat snap, a cloud settling) and the tick stops it
+      // again once wakeUntil has passed. On the full floor wake() is a no-op.
+      let wakeUntil = 0;
+      const wake = (ms = STILL_WAKE_MS): void => {
+        if (!stillRef.current) return;
+        wakeUntil = Math.max(wakeUntil, performance.now() + ms);
+        if (!pausedRef.current && !app.ticker.started) app.ticker.start();
+      };
 
       const world = new Container();
       app.stage.addChild(world);
@@ -1334,12 +1372,14 @@ export function OfficeFloor() {
           if (newAsk !== askCount) {
             askCount = newAsk;
             drawAskBoard(askPulse);
+            wake();
           }
           if (firstPoll) {
             // cold start: no theatre, just show the truth
             firstPoll = false;
             visualTasks = new Map(ledger.map((t) => [t.id, { status: t.status, assignee: t.assignee }]));
             redrawVisual();
+            wake();
             lastLedger = ledger;
             return;
           }
@@ -1364,7 +1404,8 @@ export function OfficeFloor() {
               const actor = actorFor(old?.assignee ?? t.assignee, false);
               if (actor) mv = { kind: 'pin', taskId: t.id, actorId: actor, after, carryColor: NOTE_COLORS.blocked, stand: PIN_STAND, thought: 'this one is stuck 😤' };
             }
-            if (mv && !busyActors.has(mv.actorId) && !moveQueue.some((q) => q.actorId === mv!.actorId)) {
+            // The still floor acts nothing out: every change is an instant redraw.
+            if (mv && !stillRef.current && !busyActors.has(mv.actorId) && !moveQueue.some((q) => q.actorId === mv!.actorId)) {
               if (!visualTasks.has(t.id) && mv.kind !== 'pin') visualTasks.set(t.id, { status: oldS ?? 'todo', assignee: old?.assignee });
               moveQueue.push(mv);
             } else {
@@ -1376,7 +1417,7 @@ export function OfficeFloor() {
           for (const id of [...visualTasks.keys()]) {
             if (!ledger.some((t) => t.id === id)) { visualTasks.delete(id); instant = true; }
           }
-          if (instant) redrawVisual();
+          if (instant) { redrawVisual(); wake(); }
           lastLedger = ledger;
         } catch { /* keep the last drawing */ }
       };
@@ -1406,11 +1447,14 @@ export function OfficeFloor() {
           frames,
           seatTile,
           seatDirection: facingForSeat(seatTile),
-          spawnTile: entrance, // walk in from the office door
+          // walk in from the office door (the still floor fades in at the desk)
+          spawnTile: stillRef.current ? seatTile : entrance,
           glowColor: hexNum(colors.accent[agent.accent]) ?? hexToNumber(member.shirt),
           onClick: (id) => useStore.getState().select(id),
         });
+        if (stillRef.current) character.setStill(true);
         character.show(charLayer);
+        wake();
         const rt: Runtime = { character, seatIndex, waitTile, charName };
         // Standard desks paint the 2×2 PC monitor two rows above the seat —
         // give those a DeskScreen (lights up while seated) and a cup spot
@@ -1447,6 +1491,7 @@ export function OfficeFloor() {
         if (rt.seatIndex != null) seatClaims.delete(rt.seatIndex);
         rt.screen?.destroy();
         rt.character.hide(0);
+        wake(800);
         // give the fade-out a moment, then destroy
         setTimeout(() => rt.character.destroy(), 700);
         runtimes.delete(id);
@@ -1577,6 +1622,13 @@ export function OfficeFloor() {
             else { c.startWandering(); c.showThought(liveActivity(agent, t('office.activity.idle'))); }
             break;
         }
+        // Nobody walks on the still floor (the Character seats every order
+        // above), so the state the walk used to tell — off to the door, pacing
+        // — is an icon over the head instead.
+        if (stillRef.current) {
+          c.setStatusGlyph(stillGlyphFor(agent.status));
+          wake();
+        }
       };
 
       const syncAgents = () => {
@@ -1606,6 +1658,7 @@ export function OfficeFloor() {
           if (rt) {
             const p = rt.character.getPixelPosition();
             camera.nudgeToward(p.x, p.y);
+            wake(1200);
           }
         }
       });
@@ -1628,9 +1681,10 @@ export function OfficeFloor() {
         const from = posFor(fromId);
         const to = posFor(toId);
         if (!from || !to) return; // sender or recipient not on the floor
-        const env = new MessageEnvelope(from, to, act, needsHuman);
+        const env = new MessageEnvelope(from, to, act, needsHuman, { still: stillRef.current });
         charLayer.addChild(env.container);
         envelopes.push(env);
+        wake(STILL_ENVELOPE_SECONDS * 1000 + 100);
       };
 
       // Real path: the main-process router emits one event per routed message.
@@ -1697,12 +1751,16 @@ export function OfficeFloor() {
           rt.character.setBubbleZoom(zoom);
           rt.character.update(dt);
         }
-        updateCafeteria(dt);
-        updateCoffeeRuns(dt);
-        updateErrands(dt);
-        updateBossAura(dt);
+        const isStill = stillRef.current;
+        if (!isStill) {
+          // The office life: none of it runs on the still floor.
+          updateCafeteria(dt);
+          updateCoffeeRuns(dt);
+          updateErrands(dt);
+          updateBossAura(dt);
+        }
         updateDeskLife(dt);
-        updateBoardMoves(dt);
+        if (!isStill) updateBoardMoves(dt);
         resolveBubbleOverlaps();
         for (let i = envelopes.length - 1; i >= 0; i--) {
           if (envelopes[i].update(dt)) {
@@ -1710,8 +1768,54 @@ export function OfficeFloor() {
             envelopes.splice(i, 1);
           }
         }
+        // Still floor: this frame is drawn (the render runs after this tick at
+        // a lower priority); once nothing asked for more, stop until wake().
+        if (isStill && performance.now() >= wakeUntil) app.ticker.stop();
+      };
+
+      // Switch levels in place (OfficeFloor's `still` prop). Into still: end
+      // every walk-dependent act (breaks, errands, coffee, board moves), seat
+      // everyone and re-apply their state so the icons appear. Out of it: the
+      // characters take orders again and the state re-applied sends them off.
+      (app as any).__setStill = (on: boolean): void => {
+        for (const rt of runtimes.values()) {
+          if (on) {
+            releaseBreak(rt);
+            releaseErrand(rt);
+            releaseRun(rt);
+            rt.cupCarryHome = false;
+            // A mug in hand lands on the desk (or back on the rack, for a desk
+            // without a cup spot), so the finite stock stays whole.
+            if (rt.character.isCarryingCup()) {
+              rt.character.setCarryingCup(false);
+              rt.character.setCupOnDesk(true);
+              if (!rt.character.hasCupOnDesk()) { cleanCups = Math.min(MAX_CUPS, cleanCups + 1); drawTray(); }
+            }
+          }
+          rt.character.setStill(on);
+          if (!on) rt.character.setStatusGlyph('none');
+        }
+        if (on) {
+          moveQueue.length = 0;
+          for (const id of [...busyActors]) {
+            busyActors.delete(id);
+            const g = carriedNotes.get(id);
+            if (g) { g.parent?.removeChild(g); g.destroy(); carriedNotes.delete(id); }
+          }
+          visualTasks = new Map(lastLedger.map((t) => [t.id, { status: t.status, assignee: t.assignee }]));
+          redrawVisual();
+          sinkBusy = 0; machineBusy = 0; drawSink(0); drawMachine(0);
+          for (const g of errandFx.values()) g.clear();
+        }
+        for (const agent of useStore.getState().agents) {
+          const rt = runtimes.get(agent.id);
+          if (rt) applyState(agent, rt, true);
+        }
+        if (on) wake();
+        else if (!pausedRef.current) app.ticker.start();
       };
       app.ticker.add(onTick);
+      wake();
       (app as any).__fps = limitSceneFps(app.ticker, () => useStore.getState().agents.some((a) => a.status !== 'idle'));
       // init() is async: the floor may already be behind a fullscreen terminal by
       // the time we get here, and app.init() starts the ticker itself.
@@ -1723,6 +1827,7 @@ export function OfficeFloor() {
           if (width === 0 || height === 0) continue;
           app.renderer?.resize(width, height);
           camera.setViewSize(width, height);
+          wake(300);
         }
       });
       resize.observe(host);
@@ -1811,4 +1916,11 @@ function hex(n: number): string { return '#' + n.toString(16).padStart(6, '0'); 
 function safeDestroy(app: Application) {
   try { app.ticker?.stop(); } catch { /* noop */ }
   try { app.destroy(true, { children: true }); } catch { /* noop */ }
+  // After the renderer (which drops their GPU copies with its context): the
+  // tileset images themselves. Not `texture: true` on destroy — that would also
+  // free the cast's cached sprite frames, which the next mount reuses.
+  for (const tex of ((app as any).__textures as Texture[] | undefined) ?? []) {
+    try { tex.destroy(true); } catch { /* noop */ }
+  }
+  (app as any).__textures = undefined;
 }
