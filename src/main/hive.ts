@@ -4827,6 +4827,9 @@ function ask(payload) {
       c.setEncoding('utf8');
       c.on('data', function (d) { resp += d; });
       c.on('end', function () {
+        // The office always answers with a JSON body: nothing at all (a relay
+        // whose far end is down) is no answer.
+        if (!resp.trim() && STRICT) return finish(UNREACHABLE);
         try { var r = JSON.parse(resp || '{}'); var h = r.hookSpecificOutput; finish(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); } catch (e) { finish(unanswered()); }
       });
       c.on('error', function () { finish(unanswered()); });

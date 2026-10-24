@@ -135,6 +135,9 @@ test('extension: no answer from the office blocks a custodian\'s call, not an or
   const noSock = await toolCall(t, { AGENT_ID: 'pam-1', HIVE_GUARD_STRICT: '1', HIVE_SOCK: '' });
   assert.equal(noSock.block, true, 'no office at all: refused');
   assert.equal(await toolCall(t, { AGENT_ID: 'pam-1', HIVE_GUARD_STRICT: '1' }, '{}'), null, 'the office allows it');
+  const empty = await toolCall(t, { AGENT_ID: 'pam-1', HIVE_GUARD_STRICT: '1' }, '');
+  assert.equal(empty.block, true, 'a relay whose far end is down answers nothing: refused');
+  assert.equal(await toolCall(t, { AGENT_ID: 'jim-1' }, ''), null);
 });
 
 // ─── md-netgate's proxy: the model host only ────────────────────────────────
