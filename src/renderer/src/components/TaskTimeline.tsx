@@ -29,6 +29,7 @@ export function describeTaskEvent(e: TaskEvent, name: (id?: string) => string, t
     case 'dismissed': return t('taskHistory.dismissed');
     case 'result': return t('taskHistory.result');
     case 'removed': return t('taskHistory.removed');
+    case 'edited': return t('taskHistory.edited', { fields: e.fields.map((f) => t(`taskHistory.field_${f}`, { defaultValue: f })).join(', ') });
   }
 }
 

@@ -24,7 +24,7 @@ function ago(iso: string | undefined, now: number): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
-type Filter = 'all' | 'asks' | 'unassigned';
+type Filter = 'all' | 'asks' | 'unassigned' | 'cancelled';
 
 /** Board columns; their names are `pro.tasks.col_<status>`. */
 const COLUMNS: { status: KeyedTask['status']; color: string }[] = [
@@ -64,7 +64,7 @@ export function TasksView({ tasks: ledger, roster }: { tasks: KeyedTask[]; roste
     setDragId(null); setOverCol(null);
     const card = id ? tasks.find((x) => x.id === id) : undefined;
     if (!card || card.status === status) return;
-    const kids = descendantsOf(tasks, card.id).filter((k) => k.status !== status);
+    const kids = descendantsOf(tasks, card.id).filter((k) => k.status !== status && k.status !== 'cancelled');
     if (kids.length) setAsk({ id: card.id, status, kids });
     else void moveCards([card.id], status);
   };
@@ -115,9 +115,11 @@ export function TasksView({ tasks: ledger, roster }: { tasks: KeyedTask[]; roste
   /** One task card (the board and the request tree share it). */
   const renderCard = (t: KeyedTask, nested = false) => {
     const owner = t.assignee ? byId.get(t.assignee) : undefined;
+    // Cancelled: greyed in Done, kept as history; reopened from its detail, not dragged.
+    const cancelled = t.status === 'cancelled';
     return (
-      <button key={t.id} className="pro-card pro-task-card" style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6, ...(nested ? { width: '100%' } : {}), ...(dragId === t.id ? { opacity: 0.5 } : {}) }}
-        draggable={layout === 'board'} title={layout === 'board' ? tr('pro.tasks.dragHint') : undefined}
+      <button key={t.id} className={`pro-card pro-task-card${cancelled ? ' pro-task-cancelled' : ''}`} style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6, ...(nested ? { width: '100%' } : {}), ...(dragId === t.id ? { opacity: 0.5 } : {}) }}
+        draggable={layout === 'board' && !cancelled} title={layout === 'board' && !cancelled ? tr('pro.tasks.dragHint') : undefined}
         onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', t.id); setDragId(t.id); }}
         onDragEnd={() => { setDragId(null); setOverCol(null); }}
         onClick={() => useStore.getState().openTaskDetail(t.id)}>
@@ -144,7 +146,7 @@ export function TasksView({ tasks: ledger, roster }: { tasks: KeyedTask[]; roste
         </span>
       );
     })()}
-        {t.description && t.status !== 'done' && (
+        {t.description && t.status !== 'done' && !cancelled && (
           <span className="pro-sub" style={{ fontSize: 12, lineHeight: '16px', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{t.description}</span>
         )}
         {waitsOnHuman(t) && openQuestion(t) && (
@@ -178,7 +180,8 @@ export function TasksView({ tasks: ledger, roster }: { tasks: KeyedTask[]; roste
         <span className="pro-row" style={{ justifyContent: 'space-between' }}>
           {waitsOnHuman(t)
             ? <span className="pro-badge" style={{ background: 'var(--cth-peach-light)' }}>{tr('pro.tasks.asksYou')}</span>
-            : t.status === 'done' ? <span className="pro-badge" style={{ background: 'var(--cth-mint-light)' }}>{tr('pro.state.done')}</span> : <span />}
+            : t.status === 'done' ? <span className="pro-badge" style={{ background: 'var(--cth-mint-light)' }}>{tr('pro.state.done')}</span>
+            : cancelled ? <span className="pro-badge" style={{ background: 'var(--cth-cream-200)' }}>{tr('pro.tasks.col_cancelled')}</span> : <span />}
           {/* Parked: nobody is on it, so no face on the card (the owner stays in the ledger). */}
           {t.status === 'backlog' ? <span className="pro-sub" style={{ fontSize: 11 }} title={owner?.name ?? t.assignee}>{tr('pro.tasks.parked')}</span>
             : owner ? <span className="pro-row" style={{ gap: 4, fontSize: 11, minWidth: 0 }} title={owner.name}><Avatar agent={owner} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{owner.name}</span></span>
@@ -203,7 +206,7 @@ export function TasksView({ tasks: ledger, roster }: { tasks: KeyedTask[]; roste
 
   const needle = q.trim().toLowerCase();
   const shown = tasks.filter((t) =>
-    (filter === 'all' || (filter === 'asks' ? waitsOnHuman(t) : !t.assignee))
+    (filter === 'all' || (filter === 'cancelled' ? t.status === 'cancelled' : filter === 'asks' ? waitsOnHuman(t) : !t.assignee))
     && (!needle || `${t.key ?? ''} ${t.title} ${t.description ?? ''}`.toLowerCase().includes(needle))
   );
   const doing = tasks.filter((t) => t.status === 'doing').length;
@@ -223,7 +226,7 @@ export function TasksView({ tasks: ledger, roster }: { tasks: KeyedTask[]; roste
         <span className="pro-sub">{tr('pro.tasks.summary', { doing, blocked })}</span>
         <div className="pro-head-end">
           <div className="pro-tabs" role="tablist">
-            {(['all', 'asks', 'unassigned'] as Filter[]).map((f) => (
+            {(['all', 'asks', 'unassigned', 'cancelled'] as Filter[]).map((f) => (
               <button key={f} role="tab" aria-selected={filter === f} onClick={() => setFilter(f)}>
                 {tr(`pro.tasks.filter_${f}`)}
               </button>
@@ -295,8 +298,9 @@ export function TasksView({ tasks: ledger, roster }: { tasks: KeyedTask[]; roste
       ) : (
       <div className="pro-board">
         {COLUMNS.map((col) => {
-          const all = shown.filter((t) => t.status === col.status)
-            .sort((a, b) => a.priority - b.priority || b.createdAt.localeCompare(a.createdAt));
+          // Cancelled cards close the Done column, after the done ones.
+          const all = shown.filter((t) => t.status === col.status || (col.status === 'done' && t.status === 'cancelled'))
+            .sort((a, b) => Number(a.status === 'cancelled') - Number(b.status === 'cancelled') || a.priority - b.priority || b.createdAt.localeCompare(a.createdAt));
           const roots = columnRoots(all);
           // Done piles up and buries the board: the latest few, the rest on demand.
           const cards = col.status === 'done' && !showDone ? roots.slice(0, 8) : roots;

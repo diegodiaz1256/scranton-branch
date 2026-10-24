@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '@/store/store';
 import { TaskDetail, loadKeyedTasks, type HiveTask } from './TasksKanban';
+import type { TaskEdit } from '@shared/taskEdit';
 
 /**
  * App-wide host for the task detail: whoever calls store.openTaskDetail(id) —
@@ -55,6 +56,16 @@ export function TaskDetailOverlay() {
     } catch { void refresh(); }
   };
 
+  // Edit / cancel / reopen: main writes the ledger once and tells whoever was
+  // on the cards, and the orchestrator, through their inboxes.
+  const edit = async (edits: Array<{ id: string; edit: TaskEdit }>): Promise<string | null> => {
+    try {
+      const result = await window.cth.hiveEditTasks(edits);
+      void refresh();
+      return result.ok ? null : (result.error ?? 'failed');
+    } catch { void refresh(); return 'failed'; }
+  };
+
   const assign = () => {
     // Route through the Command Center's dispatch box (which mails the god —
     // the human never writes into a worker's inbox directly).
@@ -74,6 +85,7 @@ export function TaskDetailOverlay() {
       assigneeName={nameFor(task.assignee)}
       onMove={(s) => void move(s)}
       onAssign={assign}
+      onEdit={edit}
       onClose={closeTaskDetail}
     />
   );

@@ -46,10 +46,11 @@ import { connectionsPromptLine, envPromptLine, type PromptConnection } from '../
 import type { Access } from '../shared/connectionAccess';
 import { selectBroadcastTargets } from '../shared/broadcast';
 import { preferredAgentRole } from '../shared/agentRole';
-import { mergeTaskLedger } from '../shared/taskLedger';
+import { mergeTaskLedger, patchTaskInLedger } from '../shared/taskLedger';
+import { mergeTaskNotices, taskEditNotices, taskEditPatch, type TaskEdit, type TaskEditError, type TaskStatus } from '../shared/taskEdit';
 import { expandTilde } from './fs';
 import { resolveGodName } from '../shared/godIdentity';
-import { assignTaskKeys, normalizeTaskKeyLedger, taskKeyPrefix } from '../shared/taskKeys';
+import { assignTaskKeys, formatTaskKey, normalizeTaskKeyLedger, taskKeyPrefix } from '../shared/taskKeys';
 import { cleanServerList } from '../shared/roleBundles';
 import { detectProjectType, memoryInstruction, memoryTemplate, parseMemory, type ProjectType } from '../shared/memorySections';
 import { listsInstruction, parseList } from '../shared/lists';
@@ -139,10 +140,16 @@ export interface HiveTask {
   title: string;
   description?: string;
   assignee?: string;
-  status: 'backlog' | 'todo' | 'doing' | 'blocked' | 'done';
+  /** `cancelled`: the human stopped it (shared/taskEdit.ts). */
+  status: TaskStatus;
   dependsOn: string[];
   priority: number;
   createdAt: string;
+  /** The ticket key the human gave the card (e.g. a Jira key), shown instead
+   *  of the generated one. */
+  ticket?: string;
+  /** When the human cancelled it. */
+  cancelledAt?: string;
   /** First-class human feedback: the god appends {q} when a card can only
    *  proceed with the human's input (status goes blocked); the harness UI
    *  fills in {a}. The full history stays on the card forever. */
@@ -2283,7 +2290,7 @@ export class HiveManager {
       : meta.isAssistant
       ? `You are ${godNameForPrompt}'s PREP ASSISTANT. You will be handed short, possibly vague instructions (each begins with "ENRICH TASK:"). For each one: (1) figure out which project it concerns and cd into the most relevant repo — you start in ${godNameForPrompt}'s home directory; (2) gather concrete context READ-ONLY (exact file paths, current state, relevant code, conventions, active branch, gotchas) — NEVER modify, create, or delete files; (3) rewrite the instruction into ONE clear, self-contained prompt that ${godNameForPrompt} can execute autonomously, preserving the user's original intent without inventing scope. Then deliver it: write ONE message JSON into your outbox with "to":"god", "act":"request", a short subject, and the finished prompt as the body. Do NOT perform the task yourself — your only output is the improved prompt sent to ${godNameForPrompt}.`
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
-    const guardrailsLine = 'Guardrails: a circuit breaker watches the floor — a "Circuit breaker: steer/constrain" message means you are looping or overspending, so STOP repeating, summarize what you tried, and follow it. Be token-frugal (a floor-wide or per-agent token budget can pause you). The shared plan has two parts: board.md (freeform; god is the sole scribe) and tasks.json (structured kanban — backlog/todo/doing/blocked/done; backlog = parked, nobody is working on it).';
+    const guardrailsLine = 'Guardrails: a circuit breaker watches the floor — a "Circuit breaker: steer/constrain" message means you are looping or overspending, so STOP repeating, summarize what you tried, and follow it. Be token-frugal (a floor-wide or per-agent token budget can pause you). The shared plan has two parts: board.md (freeform; god is the sole scribe) and tasks.json (structured kanban — backlog/todo/doing/blocked/done/cancelled; backlog = parked, nobody is working on it; cancelled = the human stopped it: nobody works on it and nobody moves it out of cancelled).';
     // REST integrations through the loopback key broker. The agent never holds a
     // key: md-api reads MD_BROKER_URL/MD_BROKER_TOKEN from its env, and the
     // broker adds the credential upstream. Absolute paths, not `$VAR` (cmd.exe).
@@ -2802,6 +2809,38 @@ export class HiveManager {
     next[index] = { ...tasks[index], ...patch, id };
     this.writeTasks(next);
     return true;
+  }
+
+  /** The human edits or cancels cards from the app (shared/taskEdit.ts): all
+   *  edits are checked first and written in ONE ledger write, then whoever was
+   *  on each card, and god, are told through their inboxes (one message per
+   *  recipient), so an agent stops work the human cancelled or gave away. */
+  editTasks(edits: Array<{ id: string; edit: TaskEdit }>, from = 'human'): { ok: true; notified: string[] } | { ok: false; error: TaskEditError; id: string } {
+    const ledger = this.tasks() as { tasks?: unknown };
+    let next: unknown[] = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
+    const { prefix, keys } = this.taskKeys();
+    const ticketOf = (id: string): string | undefined => {
+      const card = next.find((t) => (t as { id?: unknown })?.id === id) as { ticket?: unknown } | undefined;
+      return (typeof card?.ticket === 'string' && card.ticket.trim()) ? card.ticket.trim() : formatTaskKey(prefix, keys[id]);
+    };
+    const changes: Array<{ before: Record<string, unknown>; id: string }> = [];
+    for (const { id, edit } of edits) {
+      const res = taskEditPatch(next, id, edit ?? {}, (x) => formatTaskKey(prefix, keys[x]));
+      if (!res.ok) return { ok: false, error: res.error, id };
+      if (!Object.keys(res.patch).length) continue;
+      changes.push({ before: next.find((t) => (t as { id?: unknown })?.id === id) as Record<string, unknown>, id });
+      next = patchTaskInLedger(next, id, res.patch);
+    }
+    if (!changes.length) return { ok: true, notified: [] };
+    this.writeTasks(next as HiveTask[]);
+    const reg = this.registry();
+    const godId = reg.godId ?? 'god';
+    const name = (id: string) => reg.agents[id]?.name ?? id;
+    const notices = mergeTaskNotices(changes.flatMap(({ before, id }) => taskEditNotices(
+      before, next.find((t) => (t as { id?: unknown })?.id === id) as Record<string, unknown>,
+      { godId, ticket: ticketOf(id), name })));
+    for (const n of notices) this.send({ to: n.to, act: 'inform', requires_reply: false, subject: n.subject, body: n.body }, from);
+    return { ok: true, notified: notices.map((n) => n.to) };
   }
 
   /** Delete only the named card from the latest on-disk ledger. */

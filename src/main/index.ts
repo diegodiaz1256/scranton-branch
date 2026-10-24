@@ -108,6 +108,7 @@ import type { PromptConnection } from '../shared/agentConnections';
 import { PROVIDER_BACKENDS, backendForModel, providerKeyEnv } from '../shared/providerBackends';
 import { LIST_MODELS, SIGN_IN, authProviders, piOwnModels, cleanCustomProviders, effectiveModel, keyScope, piSettingsWithModel, customKeyEnv, modelsFromListing, opencodeProviders, parseModelList, piModelsJson, type ManagedEngine } from '../shared/engineModels';
 import { diffTasks, snapshotOf, type TaskEvent, type TaskSnapshot } from '../shared/taskHistory';
+import type { TaskEdit } from '../shared/taskEdit';
 import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, isInside, linkFor, writtenFiles, type DeliverableLink } from '../shared/deliverables';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, hasPlaceholderHost, probeSpecFor } from '../shared/integrations';
 import { RosterStore } from './roster';
@@ -5495,6 +5496,15 @@ ipcMain.handle('hive:deleteTask', (_evt, id: unknown) => {
   if (typeof id !== 'string' || !id) return { ok: false, error: 'invalid task id' };
   if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
   return { ok: hive.deleteTask(id) };
+});
+// The human edits / cancels cards; the agents on them are told by inbox.
+ipcMain.handle('hive:editTasks', (_evt, edits: unknown) => {
+  if (!Array.isArray(edits) || !edits.length || edits.some((e) => !e || typeof e !== 'object'
+    || typeof (e as { id?: unknown }).id !== 'string' || !(e as { edit?: unknown }).edit || typeof (e as { edit?: unknown }).edit !== 'object')) {
+    return { ok: false, error: 'invalid task edit' };
+  }
+  if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
+  return hive.editTasks(edits as Array<{ id: string; edit: TaskEdit }>);
 });
 ipcMain.handle('hive:setArchived', (_evt, id: unknown, archived: unknown) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };

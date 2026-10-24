@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import type { AgentProvider } from '../shared/agentProvider';
 import type { HireManifest } from '../shared/hire';
 import type { TaskEvent } from '../shared/taskHistory';
+import type { TaskEdit, TaskEditError, TaskStatus } from '../shared/taskEdit';
 import type { FortressStatus } from '../main/fortress';
 import type { FreezeEntry } from '../main/freezeLog';
 export type { FreezeEntry } from '../main/freezeLog';
@@ -250,7 +251,11 @@ export interface HiveTask {
   title: string;
   description?: string;
   assignee?: string;
-  status: 'backlog' | 'todo' | 'doing' | 'blocked' | 'done';
+  status: TaskStatus;
+  /** The human's own ticket key for the card (shown instead of the generated one). */
+  ticket?: string;
+  /** When the human cancelled it. */
+  cancelledAt?: string;
   dependsOn: string[];
   priority: number;
   createdAt: string;
@@ -1323,6 +1328,10 @@ const api = {
   /** Atomically remove one named card from the latest main-process ledger. */
   hiveDeleteTask: (id: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('hive:deleteTask', id),
+  /** Edit / cancel cards as the human (one ledger write); whoever was on them,
+   *  and god, are told through their inboxes. `error` names the first bad edit. */
+  hiveEditTasks: (edits: Array<{ id: string; edit: TaskEdit }>): Promise<{ ok: boolean; error?: TaskEditError | string; id?: string; notified?: string[] }> =>
+    ipcRenderer.invoke('hive:editTasks', edits),
 
   // ─── Scheduled missions (recurring auto-dispatch) ──────────────────────────
   listMissions: (): Promise<ScheduledMission[]> => ipcRenderer.invoke('missions:list'),
