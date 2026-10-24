@@ -44,6 +44,37 @@ export function workLogLine(e: WorkLogEntry): string {
   }
 }
 
+// eslint-disable-next-line no-control-regex
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[=>()][0-9A-Za-z]?/g;
+
+/** The last lines a terminal printed, readable: no escape codes, no blank or
+ *  one-character lines, at most `max` characters (the end kept). */
+export function terminalTail(tail: string | undefined, lines = 6, max = 600): string {
+  if (!tail) return '';
+  // The capture is a ring buffer: it can start in the middle of a sequence.
+  const kept = tail.replace(/^\[[0-9;?]*[ -/]*[@-~]/, '').replace(ANSI, '').split(/\r?\n|\r/).map((l) => l.trimEnd()).filter((l) => l.trim().length > 1);
+  const out = kept.slice(-lines).join('\n');
+  return out.length > max ? `…${out.slice(out.length - max + 1)}` : out;
+}
+
+/**
+ * The orchestrator's notice when a temp's process ended before it reported
+ * done (it crashed, its CLI refused to start, it quit). Without it the
+ * orchestrator told the human "all three started without errors" about a
+ * worker that had died in its first second, and waited for its done.
+ */
+export function workerExitNotice(workerId: string, exitCode: number | null | undefined, tail?: string): { subject: string; body: string } {
+  const code = typeof exitCode === 'number' ? ` (exit ${exitCode})` : '';
+  const last = terminalTail(tail);
+  return {
+    subject: `[worker exited] ${workerId}`,
+    body: `Worker ${workerId} stopped${code} before it reported done: nobody is doing its job now.\n`
+      + (last ? `Its terminal ended with:\n${last}\n` : 'Its terminal printed nothing.\n')
+      + (typeof exitCode === 'number' && exitCode !== 0 ? 'The full tail is in crashes/ in the hive.\n' : '')
+      + 'A worker that fails while starting fails the same way again: fix the cause, or give the job to another agent or engine, rather than sending the same request again.'
+  };
+}
+
 /** Append one line to <agentDir>/worklog.md, creating it with a heading first. */
 export function appendWorkLog(agentDir: string, owner: string, line: string): void {
   const p = join(agentDir, 'worklog.md');

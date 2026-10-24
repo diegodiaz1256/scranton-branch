@@ -163,7 +163,7 @@ import {
 import { makeSpawnGate } from './spawnGate';
 import { clearWorkerScratch } from './workerScratch';
 import { speak as speakAloud, stopSpeaking } from './speak';
-import { appendWorkLog, workLogLine, type WorkLogEntry } from './workLog';
+import { appendWorkLog, workerExitNotice, workLogLine, type WorkLogEntry } from './workLog';
 import { latestDone, archiveRequestProblem, legacyTemps } from './tempWorkers';
 import { FreezeMonitor, instrumentEvents, instrumentIpc, instrumentTimers, type FreezeEntry } from './freezeLog';
 
@@ -1376,7 +1376,15 @@ ptyManager.setExitHandler((id, exitCode, info) => {
   { const owner = ptyToAgent.get(id); if (owner && hookServer.subagents.endFor(owner)) hookServer.onSubagentsChanged?.(); }
   // A temp whose process ended before it reported done (crash, refused start).
   const exitingWorker = workerByPty(id);
-  if (exitingWorker && !exitingWorker.releasing) logWork(exitingWorker, 'exited', { exitCode });
+  if (exitingWorker && !exitingWorker.releasing) {
+    logWork(exitingWorker, 'exited', { exitCode });
+    // Its job is nobody's now: the orchestrator hears it (unless the temp sent
+    // its done first and simply quit).
+    if (workerDoneAt(exitingWorker.workerId, exitingWorker.spawnedAt) === null) {
+      const notice = workerExitNotice(exitingWorker.workerId, exitCode, info?.tail);
+      informGod(notice.subject, notice.body, exitingWorker.slack);
+    }
+  }
   try {
     const dyingAgent = ptyToAgent.get(id);
     if (dyingAgent) {
