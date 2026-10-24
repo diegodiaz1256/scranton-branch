@@ -483,7 +483,7 @@ function DiffView({ text, label, onClose }: { text: string; label: string; onClo
   );
 }
 
-function TextPreview({ kind, text, dir, name }: { kind: ReturnType<typeof previewKind>; text: string; dir: string; name: string }) {
+export function TextPreview({ kind, text, dir, name }: { kind: ReturnType<typeof previewKind>; text: string; dir: string; name: string }) {
   const { t } = useTranslation();
   if (kind === 'markdown') return <MarkdownPreview source={text} root={dir} baseRel={name} />;
   if (kind === 'wiki') return <MarkdownPreview source={confluenceToMarkdown(text)} root={dir} baseRel={name} />;

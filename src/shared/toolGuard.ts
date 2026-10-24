@@ -33,6 +33,10 @@ export interface GuardPolicy {
   /** Where `~` points for this agent (on a WSL floor, the distro user's home,
    *  not the Windows one the app runs as). Absent: the caller's home. */
   home?: string;
+  /** Folders the agent may neither read nor write, whatever else allows it:
+   *  another agent's confidential vault (criticalConnections.ts). Any tool
+   *  call or command that names a path in one is refused. */
+  deny?: string[];
 }
 
 export interface GuardVerdict { deny: true; reason: string }
@@ -303,6 +307,11 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
     const abs = resolve(raw, base);
     return abs !== null && !policy.roots.some((r) => within(abs, r));
   };
+  // A denied folder (another agent's confidential vault): reading counts too.
+  if (policy.deny?.length) {
+    const hit = deniedPath(tool, inp, policy, home);
+    if (hit) return { deny: true, reason: `Refused: ${hit} is confidential material only its custodian agent and the human may open. Ask the custodian through the hive (your outbox) for what you need.` };
+  }
   const fenceReason = (p: string) =>
     `Refused: ${p} is outside your folders. You work in ${policy.cwd} (and your hive folder); if the job needs another place, say so to the orchestrator or the human.`;
 
@@ -376,4 +385,43 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
   }
   return null;
   }
+}
+
+/** Keys that name a file or folder a tool reads or writes, across CLIs. */
+const PATH_INPUT_KEYS = ['file_path', 'filePath', 'path', 'notebook_path', 'absolute_path', 'dir_path', 'directory', 'target_file', 'target_directory', 'cwd', 'pattern', 'glob'];
+
+/** The first path in a denied folder that this call names, or null. Reads the
+ *  tool's path arguments, what it writes, and every word of a shell command
+ *  (plus the command text itself, so `cat "$V"/x` with V spelled out, or a
+ *  path glued to other text, is caught). A fence for the honest mistake and
+ *  the obvious attempt; the OS sandbox's denyRead is the wall. */
+export function deniedPath(tool: string, input: Record<string, unknown>, policy: GuardPolicy, home = ''): string | null {
+  const deny = (policy.deny ?? []).filter(Boolean);
+  if (!deny.length) return null;
+  const hits = (p: string): boolean => {
+    const raw = p.trim().replace(/^["']|["']$/g, '');
+    if (!raw || /^\$|%[A-Za-z_]+%/.test(raw)) return false;
+    const abs = resolveFor(raw, policy.cwd, home || policy.home || '');
+    return deny.some((d) => within(abs, d));
+  };
+  const named: string[] = [];
+  for (const k of PATH_INPUT_KEYS) {
+    const v = input[k];
+    if (typeof v === 'string') named.push(v);
+    else if (Array.isArray(v)) for (const x of v) if (typeof x === 'string') named.push(x);
+  }
+  if (Array.isArray(input.paths)) for (const x of input.paths) if (typeof x === 'string') named.push(x);
+  named.push(...writtenPathsOf(tool, input));
+  for (const p of named) if (hits(p)) return p;
+  const cmd = typeof input.command === 'string' ? input.command : Array.isArray(input.command) ? (input.command as unknown[]).join(' ') : typeof input.cmd === 'string' ? input.cmd : '';
+  if (!cmd) return null;
+  for (const words of splitCommands(cmd)) for (const w of words) for (const part of w.split(/[=,;]/)) if (hits(part)) return part;
+  // The folder spelled inside the text (quotes, globs, another shell's syntax).
+  const flat = cmd.replace(/\\/g, '/').toLowerCase();
+  for (const d of deny) {
+    const n = normPath(d).toLowerCase();
+    const tail = n.split('/').slice(-2).join('/');
+    if (flat.includes(n) || (tail.includes('/') && flat.includes(tail))) return d;
+  }
+  return null;
 }
