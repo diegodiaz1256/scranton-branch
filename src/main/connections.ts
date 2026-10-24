@@ -10,7 +10,7 @@
  * an agent the server is granted to (consent in `mcpDefaults`, optional
  * per-server agent list in `connectionScopes`) gets a capability token.
  */
-import { MCP_CATALOG, mcpCatalogEntry, type McpCatalogEntry } from '../shared/mcpCatalog';
+import { MCP_CATALOG, mcpCatalogEntry, cleanSecretValue, type McpCatalogEntry } from '../shared/mcpCatalog';
 import { readConfig, writeConfig } from './config';
 import { getSecret, setSecret, deleteSecret, hasSecret } from './integrations';
 import { effectiveAccess, isAccess, DEFAULT_CEILING, type Access } from '../shared/connectionAccess';
@@ -97,7 +97,10 @@ function field(id: string, env: string): NonNullable<McpCatalogEntry['secrets']>
 /** The value for one server credential. MAIN-ONLY: read by the MCP gateway
  *  when it starts that server, never handed to an agent. */
 export function connectionSecret(serverId: string, env: string): string | undefined {
-  return field(serverId, env) ? getSecret(refFor(serverId, env)) : undefined;
+  const f = field(serverId, env);
+  const v = f ? getSecret(refFor(serverId, env)) : undefined;
+  // Cleaned on the way out, so a value stored before this check is fixed too.
+  return v === undefined ? undefined : cleanSecretValue(f, v);
 }
 
 /** Whether a credential is stored, without decrypting it (the hive's check). */
