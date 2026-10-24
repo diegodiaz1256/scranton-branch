@@ -9,6 +9,7 @@ import { buildPtyEnv } from './ptyEnv';
 import { homedir } from 'node:os';
 import { linuxizeText, parseWslPath, toLinuxPath, wslCommand } from './wsl';
 import { spawnSize, type PtySize } from '../shared/ptySize';
+import { isRepaintEcho, repaintEchoUntil } from '../shared/ptyRepaint';
 import {
   captureFromLoginShell,
   isSafeCommandName,
@@ -82,6 +83,9 @@ interface PtySession {
    *  file) and the idle handshake that gates god's PTY nudge (never type into a
    *  PTY that produced output in the last few seconds = mid-stream). */
   lastOutputAt: number;
+  /** Until when output is the repaint of a resize/redraw the app asked for,
+   *  which does not bump lastOutputAt (see shared/ptyRepaint). */
+  repaintUntil?: number;
   /** A bounded ring of the most recent output bytes, kept ONLY so an abnormal
    *  exit can say what was on screen when the process died. A provider that
    *  crashes on startup (Bun SIGILL, a missing shared library, an auth failure)
@@ -800,7 +804,8 @@ export class PtyManager {
         // a respawn (or killed) — it would corrupt the new session's screen.
         if (this.sessions.get(opts.id) !== session) return;
         session.hasOutput = true;
-        session.lastOutputAt = Date.now();
+        // The repaint of a resize the app made is not the agent doing anything.
+        if (!isRepaintEcho(session.repaintUntil, Date.now())) session.lastOutputAt = Date.now();
         if (session.wslVisibleAt === 0 && hasVisibleText(data)) session.wslVisibleAt = Date.now();
         // Keep only the trailing window; slice AFTER appending so a single
         // oversized write still leaves us its end (the part that explains a death).
@@ -865,6 +870,7 @@ export class PtyManager {
     const s = this.sessions.get(id);
     if (!s) return { ok: false, error: `no pty: ${id}` };
     try {
+      s.repaintUntil = repaintEchoUntil(Date.now());
       s.proc.resize(cols, rows);
       return { ok: true };
     } catch (e) {
@@ -879,6 +885,7 @@ export class PtyManager {
     const s = this.sessions.get(id);
     if (!s) return { ok: false, error: `no pty: ${id}` };
     try {
+      s.repaintUntil = repaintEchoUntil(Date.now());
       s.proc.resize(s.proc.cols, s.proc.rows);
       return { ok: true };
     } catch (e) {
