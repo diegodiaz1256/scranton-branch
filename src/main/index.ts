@@ -118,6 +118,7 @@ import { tokenizeCommand } from '../shared/commandLine';
 import { ControlRegistry } from './control';
 import { WorkerWakeWatchdog, WORKER_WAKE_REPORT_MS, activityEvidenceAt, type WorkerWakeFacts } from './workerWake';
 import { inboxNudgeText } from '../shared/hiveNudge';
+import { pastePayload, preEnterDelayMs } from '../shared/ptySubmit';
 import { resolveGodName } from '../shared/godIdentity';
 import { collectHireManifests, fetchHireManifest, readHireManifestFiles, restoreOfferedHire } from './hire';
 import { parseHireDeepLink, type HireManifest } from '../shared/hire';
@@ -7765,21 +7766,24 @@ let workerWakeTimer: ReturnType<typeof setInterval> | null = null;
 let hookHealthTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Type the renderer's guarded nudge into one worker's PTY — text first, Enter a
- *  tick later (the exact submitToPty pattern: a single-chunk write would land the
- *  "\r" inside the input box and never submit). Best-effort + never throws. */
-function nudgeWorker(ptyId: string, ids: string[] = []): void {
+ *  moment later, the text in bracketed paste for CLIs that take it (the same
+ *  bytes and timing as the renderer's submitToPty, shared/ptySubmit.ts: an Enter
+ *  that reaches the CLI in the same read as raw text lands inside the input box
+ *  and never submits). Best-effort + never throws. */
+function nudgeWorker(ptyId: string, provider: AgentProvider, ids: string[] = []): void {
   // Same text the renderer queues (#187's inboxNudgeText), so the two wake paths
   // produce byte-identical nudges: the queue's one-pending rule recognises either
   // via isInboxNudge, and a watchdog nudge names its ids so the agent can still
   // tell "I filed this last turn" from "woken for nothing".
-  const wrote = ptyManager.write(ptyId, inboxNudgeText(ids));
+  const text = inboxNudgeText(ids);
+  const wrote = ptyManager.write(ptyId, pastePayload(text, provider));
   if (!wrote.ok) { console.warn(`[worker-wake] write failed for ${ptyId}: ${wrote.error}`); return; }
   setTimeout(() => {
     try {
       const submitted = ptyManager.write(ptyId, '\r');
       if (!submitted.ok) console.warn(`[worker-wake] submit failed for ${ptyId}: ${submitted.error}`);
     } catch (e) { console.error('[worker-wake] submit threw:', e); }
-  }, 140);
+  }, preEnterDelayMs(text));
 }
 
 /** Main-process inbox-wake beat (issue #151, fix A): the renderer's idle nudge
@@ -7842,7 +7846,7 @@ function runWorkerWakeBeat(): void {
     const ids = hive.inbox(agentId).map((m) => m.id).filter(Boolean);
     if (!ids.length) { console.log(`[worker-wake] ${agentId} drained before delivery, skipping`); continue; }
     console.log(`[worker-wake] nudging ${agentId} on ${ptyId} (${ids.length} pending)`);
-    nudgeWorker(ptyId, ids);
+    nudgeWorker(ptyId, reg.agents[agentId]?.provider ?? 'claude', ids);
   }
   // A worker sitting on old mail without a nudge is the failure this watchdog
   // exists for — say WHY it is being held, once per cooldown, so the log can

@@ -37,3 +37,19 @@ export function inboxNudgeText(ids: string[]): string {
 export function isInboxNudge(text: string): boolean {
   return text.trim().startsWith(NUDGE_HEAD);
 }
+
+/**
+ * Where a new message goes in an agent's queue: at the end, except that a
+ * person's message goes ahead of a pending inbox nudge. The nudge only says
+ * "read your inbox", which is as true after the person's turn as before it,
+ * while the person is waiting on theirs. A nudge released with "send now"
+ * keeps its place.
+ */
+export function queueInsertIndex(
+  queued: ReadonlyArray<{ text: string; manual?: boolean }>,
+  automatic: boolean
+): number {
+  if (automatic) return queued.length;
+  const nudgeAt = queued.findIndex((m) => isInboxNudge(m.text) && !m.manual);
+  return nudgeAt < 0 ? queued.length : nudgeAt;
+}

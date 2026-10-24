@@ -11,16 +11,28 @@ import {
 import {
   clearCommandForProvider,
   compactionCommandForProvider,
+  isCompactionCommand,
   remoteControlCommandForProvider,
   terminalReadyToReceive
 } from '../../../shared/providerAutomation';
+import { submitAndVerify, submitProbe, type SubmitVerdict } from '../../../shared/ptySubmit';
 import { DEFAULT_CONTEXT_TRIGGER, type ContextRule } from '../../../shared/triggers';
 import type { AgentProvider } from '../../../shared/agentProvider';
 import { bridgeOf, providerPreset } from '../../../shared/agentProvider';
 import { isDurableRole, preferredAgentRole, roleForHiveSpawn } from '../../../shared/agentRole';
-import { inboxNudgeText } from '../../../shared/hiveNudge';
+import { inboxNudgeText, isInboxNudge } from '../../../shared/hiveNudge';
 import { resolveGodName } from '../../../shared/godIdentity';
-import { acquireTerminal, resetTerminal, isTerminalAutomationSafe, takeHumanInput } from '@/components/terminalPool';
+import {
+  acquireTerminal,
+  resetTerminal,
+  isTerminalAutomationSafe,
+  takeHumanInput,
+  terminalInputHas,
+  markSubmitStuck,
+  terminalShowsUsageLimit,
+  terminalSubmitStuck,
+  noteHumanMessage
+} from '@/components/terminalPool';
 import { canDeliverToAgent, deliverWithAcknowledgement, checkPrecondition } from './queueDelivery';
 import { OFFICE_CAST, DEFAULT_CHARACTER } from '@/scene/office/cast';
 import { reconnectedAction } from '@/scene/office/actionLabel';
@@ -151,10 +163,10 @@ export async function enableRemoteControl(provider: AgentProvider, sessionName: 
   return true;
 }
 
-/** How long to wait between typing `text` into a TUI and pressing Enter. */
-export function preEnterDelayMs(text: string): number {
-  if (text.startsWith('/')) return 450;
-  return Math.min(1100, 140 + Math.floor(text.length / 3));
+/** A message the app queued on its own (inbox nudge, /compact), as opposed to
+ *  one a person wrote. */
+function isAutomaticMessage(m: QueuedMessage): boolean {
+  return isInboxNudge(m.text) || isCompactionCommand(m.text) || !!m.precondition;
 }
 
 function submitToPty(
@@ -162,32 +174,42 @@ function submitToPty(
   text: string,
   provider: AgentProvider,
   settleMs = 250
-): Promise<void> {
+): Promise<SubmitVerdict> {
   const prev = writeChains.get(ptyId) ?? Promise.resolve();
   const next = prev.catch(() => { /* a failed prior write must not stall the chain */ }).then(async () => {
     await waitForTerminalReady(ptyId, provider);
-    // Bracketed paste (ESC[200~ … ESC[201~) only matters for MULTI-LINE text, so a
-    // stray "\n" doesn't submit early (#24). Single-line text (nudges, slash
-    // commands) is sent raw — some TUIs (Antigravity's agy) treat the paste
-    // markers as literal input and never submit, so skipping them is more robust.
-    const payload = text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text;
-    // writePty NEVER rejects for a dead pty — it resolves { ok:false, error:
-    // 'no pty: …' } — so an unchecked await here made every failed delivery look
-    // successful (the queue-drain then destroyed the message it had already
-    // popped, #36). Surface the failure as a rejection; the chain itself is
-    // immune (the prev.catch above absorbs it for the next writer).
-    const wrote = await window.cth.writePty(ptyId, payload);
-    if (!wrote?.ok) throw new Error(wrote?.error ?? `pty write failed: ${ptyId}`);
-    // Give the TUI time to take the text in before Enter. A long paste (the
-    // boot prompt) or a slash command (its autocomplete opens) takes longer,
-    // most of all on Windows, and an Enter that arrives early is lost: the
-    // text sat in the input until someone pressed Enter by hand.
-    await new Promise((r) => setTimeout(r, preEnterDelayMs(text)));
-    const submitted = await window.cth.writePty(ptyId, '\r');
-    if (!submitted?.ok) throw new Error(submitted?.error ?? `pty write failed: ${ptyId}`);
+    // A delivery that passed the drain's gate while the one ahead of it in this
+    // chain was still being checked must not type onto what that one left
+    // stuck. Rejecting keeps the message queued for later.
+    if (terminalSubmitStuck(ptyId)) throw new Error(`prompt holds unsent text: ${ptyId}`);
+    // Text, a pause (preEnterDelayMs), Enter on its own, then a look at the
+    // prompt (shared/ptySubmit.ts). The text goes in bracketed paste for CLIs
+    // that take it, so an Enter that reaches the CLI in the same read as the
+    // text (a stalled main process, wsl.exe) is still an Enter and not a
+    // character in the input. If the text is still on the prompt after a second
+    // Enter the verdict is 'stuck', and the terminal is latched so nothing more
+    // is typed onto that line until the human deals with it.
+    const verdict = await submitAndVerify({
+      // writePty NEVER rejects for a dead pty — it resolves { ok:false, error:
+      // 'no pty: …' } — so an unchecked await here made every failed delivery
+      // look successful (the queue-drain then destroyed the message it had
+      // already popped, #36). Surface the failure as a rejection; the chain
+      // itself is immune (the prev.catch above absorbs it for the next writer).
+      write: async (data) => {
+        const wrote = await window.cth.writePty(ptyId, data);
+        if (!wrote?.ok) throw new Error(wrote?.error ?? `pty write failed: ${ptyId}`);
+      },
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      inputHas: (probe) => terminalInputHas(ptyId, probe)
+    }, text, provider);
+    if (verdict === 'stuck') {
+      markSubmitStuck(ptyId, submitProbe(text));
+      console.warn(`[submit] ${ptyId}: text still on the prompt after two Enters — holding automation until the human acts`);
+    }
     await new Promise((r) => setTimeout(r, settleMs));
+    return verdict;
   });
-  writeChains.set(ptyId, next);
+  writeChains.set(ptyId, next.then(() => undefined));
   return next;
 }
 
@@ -868,6 +890,11 @@ export function useHive(config: HarnessConfig | null): void {
       // one does we simply type after whatever is there — automation never
       // erases the user's text and never closes the user's menu.
       if (!isTerminalAutomationSafe(target.ptyId, now)) return { sent: false };
+      // A CLI stopped on a usage limit does not run what is typed at it: an
+      // inbox nudge or a /compact would only sit on its prompt and collect the
+      // next ones. Hold the app's own messages until the human has acted in
+      // that terminal (or the notice is gone); the human's messages still go.
+      if (isAutomaticMessage(next) && terminalShowsUsageLimit(target.ptyId)) return { sent: false };
       if (now - (lastFlush.current[target.id] ?? 0) < FLUSH_COOLDOWN_MS) return { sent: false };
       // Last gate before we type: re-check the message's delivery-time
       // precondition. A queue item is decided at enqueue time and delivered an
@@ -897,6 +924,7 @@ export function useHive(config: HarnessConfig | null): void {
           ),
           () => {
             removeQueuedMessage(srcId, next.id);
+            if (!isAutomaticMessage(next)) noteHumanMessage(target.ptyId!);
             // Zero the gauge on a DELIVERED /clear — the new session's context
             // isn't known until statusLine fires after the first post-clear
             // response, so leaving it at the old value shows a stale-full bar.

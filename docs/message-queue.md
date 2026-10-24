@@ -55,6 +55,17 @@ The front of an agent's MD queue is delivered only when **all** of these hold:
 | past the boot grace window | the CLI is still painting its banner |
 | `isTerminalAutomationSafe(ptyId)` | the user owns the prompt — see below |
 | 4.5 s since the last delivery to this agent | back-to-back sends jam the TUI |
+| no usage-limit stop on screen (automatic messages only) | see below |
+
+**Usage limits.** When the bottom of the terminal shows a Claude Code limit stop
+("You've hit your session limit", "Usage limit reached · continuing automatically at …",
+"Automatic continue cancelled · /rate-limit-options to re-arm"), the CLI does not run
+what is typed at it. Inbox nudges, `/compact` and other app-made messages wait until
+the notice leaves the screen or you act on that agent (a keystroke in its terminal or
+a message from the composer). Messages you write are still delivered.
+
+**Order.** A message you write is queued ahead of a pending inbox nudge, and each
+message is typed and submitted on its own.
 
 **Manual release (v0.3.5).** While floor-wide auto-delivery is paused, every queued row
 shows a **send now** link. Clicking it sets `manual: true` on that message and moves it
@@ -66,6 +77,17 @@ The pause gate holds everything else untouched.
 Delivery is acknowledged only after both PTY writes (the text, then the submit) have
 succeeded. A failure leaves the message visible in the queue and it retries.
 
+**Typing and submitting** (`shared/ptySubmit.ts`). The text is written, then Enter on
+its own after a pause. The pause is not enough by itself: a stalled main process runs
+the two writes back to back and wsl.exe can hand both to the CLI in one read, and
+Claude Code then keeps the `\r` as an invisible character in its input instead of
+submitting. So the text goes in bracketed paste (`ESC[200~ … ESC[201~`) for CLIs that
+take it, which makes the following Enter an Enter however the bytes are chunked. Then
+the input area on screen is read: if the text is still there, Enter is pressed once
+more; if it is still there after that, the message is not typed again. It leaves the
+queue (it is on the prompt), the terminal gets the `stuck` block below, and the
+composer says to press Enter in the terminal.
+
 ## 3. The user owns the prompt
 
 `isTerminalAutomationSafe` is the gate that protects your typing. It refuses
@@ -75,6 +97,7 @@ delivery while any of these is true (`terminalAutomation.ts`):
 |---|---|---|
 | `exited` | the PTY died | respawn |
 | `picker` | you submitted a bare `/model`-style command that opens a menu | an Enter / Escape / Ctrl-C typed into that terminal, or expiry |
+| `stuck` | text the app typed was still on the prompt after two Enters | any keystroke you type into that terminal, or the screen showing the text gone (no expiry: typing more would append to it) |
 | `draft` | you have unsubmitted text on the prompt | submitting or clearing it, or expiry |
 | `settling` | a short repaint window after the line was freed | time |
 

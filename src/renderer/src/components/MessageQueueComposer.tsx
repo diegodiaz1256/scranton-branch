@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { PixelButton } from './PixelButton';
 import { Icon } from './Icon';
 import { useStore, type Agent, type QueuedMessage } from '@/store/store';
-import { clearTerminalDraft, dismissTerminalPicker, terminalAutomationBlockFor } from './terminalPool';
+import { clearTerminalDraft, dismissTerminalPicker, terminalAutomationBlockFor, terminalShowsUsageLimit } from './terminalPool';
+import { isInboxNudge } from '@shared/hiveNudge';
 import type { TerminalAutomationBlock } from './terminalAutomation';
 import { freeflowRecorder, useFreeflow } from '@/freeflow/recorder';
 import { useTerminalFontSize } from './terminalFontSize';
@@ -168,15 +169,22 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
   // Poll whenever something is queued, busy or not: a busy agent is exactly when
   // a user might have half-typed in the terminal above, and it is when the queue
   // is in use — so the hold must be reported then, not only once the agent idles.
-  const block = useTerminalBlock(agent.ptyId, queue.length > 0);
+  // Polled even with nothing queued: a message the app typed that did not go
+  // through ('stuck') has already left the queue and sits on the prompt, and
+  // the human has to be told to press Enter there.
+  const { block, limited } = useTerminalBlock(agent.ptyId, true);
 
   // Floor-wide auto-delivery pause (Command Center switch) also holds the queue.
   // Without saying so — and without the per-row "send now" override — messages
   // look permanently stuck with no explanation and no escape hatch.
   const deliveryPaused = useDeliveryPaused(agent.id, queue.length > 0);
 
-  const statusHint = queue.length === 0
+  const statusHint = block === 'stuck'
+    ? t('queueComposer.heldStuck', { name: agent.name })
+    : queue.length === 0
     ? null
+    : limited && isInboxNudge(queue[0]?.text ?? '')
+    ? t('queueComposer.heldLimit', { name: agent.name })
     : block === 'draft'
     ? t('queueComposer.heldDraft', { name: agent.name })
     : block === 'picker'
@@ -406,17 +414,24 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
 /** Poll the pty's automation block while there is something waiting on it. The
  * flag lives in the terminal pool (a plain module map, not the store), so there
  * is nothing to subscribe to — a 1s tick while the queue is pending is enough. */
-function useTerminalBlock(ptyId: string | undefined, active: boolean): TerminalAutomationBlock {
+function useTerminalBlock(
+  ptyId: string | undefined,
+  active: boolean
+): { block: TerminalAutomationBlock; limited: boolean } {
   const [block, setBlock] = useState<TerminalAutomationBlock>(null);
+  const [limited, setLimited] = useState(false);
   useEffect(() => {
-    if (!ptyId || !active) { setBlock(null); return; }
-    const read = () => setBlock(terminalAutomationBlockFor(ptyId));
+    if (!ptyId || !active) { setBlock(null); setLimited(false); return; }
+    const read = () => {
+      setBlock(terminalAutomationBlockFor(ptyId));
+      setLimited(terminalShowsUsageLimit(ptyId));
+    };
     read();
     const iv = setInterval(read, 1000);
     return () => clearInterval(iv);
   }, [ptyId, active]);
   // 'settling' is a sub-second gap between writes — not worth telling anyone.
-  return block === 'settling' ? null : block;
+  return { block: block === 'settling' ? null : block, limited };
 }
 
 /** Poll the floor-wide auto-delivery pause (main-process control state) while

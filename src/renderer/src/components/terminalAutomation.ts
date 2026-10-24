@@ -78,6 +78,11 @@ export interface TerminalAutomationState {
   settleUntil: number;
   inputDirtyAt?: number; // last keystroke that left a draft; absent ⇒ never expires
   pickerOpenedAt?: number; // when the picker latched; absent ⇒ never expires
+  /** Text the app typed is still on the prompt after Enter, twice. Unlike a
+   *  draft it does not expire: typing more would append to it, which is the
+   *  pile-up this exists to stop. Cleared by the human's next keystroke in that
+   *  terminal, or by the screen showing the text gone. */
+  submitStuck?: boolean;
 }
 
 /** A picker nobody has interacted with for STALE_PICKER_MS is treated as gone. */
@@ -91,7 +96,7 @@ export function isStaleTerminalPicker(
 }
 
 /** Why automation may not own the prompt right now, or null when it may. */
-export type TerminalAutomationBlock = 'exited' | 'picker' | 'draft' | 'settling' | null;
+export type TerminalAutomationBlock = 'exited' | 'picker' | 'stuck' | 'draft' | 'settling' | null;
 
 /** A draft nobody has touched for STALE_INPUT_MS is treated as abandoned. */
 export function isStaleTerminalDraft(
@@ -109,6 +114,7 @@ export function terminalAutomationBlock(
 ): TerminalAutomationBlock {
   if (state.exited) return 'exited';
   if (state.pickerOpen && !isStaleTerminalPicker(state, now)) return 'picker';
+  if (state.submitStuck) return 'stuck';
   if (state.inputDirty && !isStaleTerminalDraft(state, now)) return 'draft';
   if (now < state.settleUntil) return 'settling';
   return null;
