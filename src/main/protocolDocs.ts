@@ -111,8 +111,9 @@ The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps.
   (403, "enable JavaScript", an empty shell): \`bin/md-browse.cjs <url>\` (\`--links\` for its links),
   \`md-browse --search "<query>"\`; Claude Code agents also have it as the \`munder-browser\` tools. It is
   off when Web is switched off for you. It does not solve captchas or bot challenges: report those.
-- **Deliverables** for the human go in \`research/\` (a subfolder per task is fine); say the path
-  when you report.`
+- **Deliverables** for the human go in a folder of their own: \`research/<ticket>/\` for a task with
+  a ticket, else \`research/<yyyy-mm-dd>-<topic>/\`. One main document per folder, its images and
+  tables beside it; say the path when you report.`
   },
   {
     file: 'guardrails.md',
@@ -411,7 +412,7 @@ export function renderProtocolIndex(): string {
     '- `agents/<your-id>/` — your folder (`protocol/workspace.md`).',
     '- `board.md`, `tasks.json` — the plan and the task cards.',
     '- `registry.json`, `fleet.json`, `log.jsonl` — the roster, live state, the event feed.',
-    '- `research/` — deliverables for the human; `research/hires/` — hire proposals.',
+    '- `research/` — deliverables for the human, a folder each (`research/<ticket>/` or `research/<yyyy-mm-dd>-<topic>/`); `research/hires/` — hire proposals.',
     '- `lists/` — the human\'s personal lists.',
     '- `spawn-requests/`, `archive-requests/`, `missions.json` — temps started and archived, and scheduled missions.',
     '- `bin/md-api.cjs` (REST APIs), `bin/md-run.cjs` (runners) — no arguments lists what you may use.',
