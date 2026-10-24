@@ -98,7 +98,8 @@ The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps.
   whose CLI takes the office's MCP servers (Claude Code). Your system prompt lists the ones you
   have and whether they are read-only for you; none listed means none.
 - **REST APIs** (Jira, Linear, Stripe, your own…) go through \`bin/md-api.cjs\`: run it with no
-  arguments to list the ones you may use right now, then \`md-api <api> GET /path\`. An API the
+  arguments to list the ones you may use right now, then \`md-api <api> GET /path\`. A body goes last:
+  JSON, or \`a=1&b=2\` for an API that takes a form (Stripe). An API the
   human connects later works at once. A refusal says why (switched off, no key, not for you, read-only).
 - **Runners** run commands that need secrets: \`bin/md-run.cjs\` with no arguments lists the ones that
   exist now (also ones added after you started) and the names of the stored secrets, \`md-run <runner>\`

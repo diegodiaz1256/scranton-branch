@@ -4241,7 +4241,7 @@ function renderCommandsMd(): string {
 const COMMANDS_MD = renderCommandsMd();
 
 // ─── md-api (written to <hive>/bin/md-api.cjs) ───────────────────────────────
-// `md-api <integration> <METHOD> <path> [json-body]` → the loopback key broker.
+// `md-api <integration> <METHOD> <path> [body]` → the loopback key broker.
 // The agent's env carries the broker URL and its per-agent capability token (a
 // handle, never the key); the broker checks the grant and adds the real
 // credential upstream. Prints the status line, then the body.
@@ -4264,19 +4264,21 @@ if (!id) {
       const apis = (j && j.apis) || [];
       if (!apis.length) console.log('No REST APIs are available to you right now (the human connects them in Connections; they work at once).');
       for (const a of apis) console.log(a.id + '  ' + a.label + (a.access === 'read' ? '  (read-only: GET and searches)' : ''));
-      console.log('usage: md-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [json-body]');
+      console.log('usage: md-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [body: JSON, or a=1&b=2 as a form]');
       process.exit(0);
     })
     .catch((e) => { console.error(brokerError('md-api', e, base)); process.exit(1); });
 } else {
   if (!methodArg) {
-    console.error('usage: md-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [json-body]   (md-api alone lists your APIs)');
+    console.error('usage: md-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [body: JSON, or a=1&b=2 as a form]   (md-api alone lists your APIs)');
     process.exit(2);
   }
   const method = methodArg.toUpperCase();
   const path = (pathArg || '/').replace(/^\\/*/, '');
   const url = base.replace(/\\/+$/, '') + '/i/' + encodeURIComponent(id) + '/' + path;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  // JSON when it looks like JSON; otherwise a form body (Stripe takes only
+  // application/x-www-form-urlencoded: key=value&key2=value2).
+  if (body !== undefined) headers['Content-Type'] = /^\\s*[\\[{]/.test(body) ? 'application/json' : 'application/x-www-form-urlencoded';
   brokerRequest(url, { method, headers, body })
     .then(async (res) => {
       console.log('HTTP ' + res.status);
