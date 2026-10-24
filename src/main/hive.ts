@@ -1307,8 +1307,9 @@ export class HiveManager {
               // HIVE_SOCK on tool_call/agent_end and auto-approves tools when the floor
               // is in auto mode. HIVE_AUTO_APPROVE (set in spawnAgentCore from
               // config.autoMode) gates the auto-allow — Pam guardrail #5.
-              // LIVE-UNVERIFIED: the exact extension API surface needs BYOK keys to
-              // prove; the renderer idle inbox-wake nudge is the guaranteed drain.
+              // Verified live on Pi 1.0.4 (WSL, local model): the extension loads from
+              // PI_CODING_AGENT_DIR and posts the session id, tool calls, per-response
+              // usage and agent_end. The renderer idle inbox-wake nudge stays the backstop.
               env.PI_CODING_AGENT_DIR = this.installPiHooks(dir);
             }
             else if (desc.shim === 'opencode') {
@@ -3378,9 +3379,9 @@ export class HiveManager {
    *  lets the renderer idle inbox-wake nudge deliver mail. Returns the per-agent dir
    *  for PI_CODING_AGENT_DIR.
    *
-   *  LIVE-UNVERIFIED: Pi's exact extension-discovery path + event API need BYOK keys
-   *  to confirm; this is written best-effort and wrapped so a wrong guess can never
-   *  break the spawn. The renderer nudge is the guaranteed drain regardless. */
+   *  Discovery from `<PI_CODING_AGENT_DIR>/extensions/` and the events used were
+   *  verified live on Pi 1.0.4. Still wrapped so a future API change can never
+   *  break the spawn; the renderer nudge is the drain backstop regardless. */
   private installPiHooks(dir: string): string {
     const home = join(dir, '.pi-agent');
     try {
@@ -3611,7 +3612,7 @@ export class HiveManager {
         ts?: number;
         agents?: Array<{
           id: string; name?: string; role?: string; isGod?: boolean;
-          breaker?: string; tokens?: number; usd?: number;
+          breaker?: string; tokens?: number | null; usd?: number | null;
           lastTool?: string | null; lastActiveSecAgo?: number | null; inboxBacklog?: number;
           onHold?: boolean;
         }>;
@@ -3640,6 +3641,8 @@ export class HiveManager {
           typeof a.lastActiveSecAgo === 'number' ? `active ${ago(a.lastActiveSecAgo)}` : 'no activity yet'];
         if (a.tokens) bits.push(`${Math.round(a.tokens / 1000)}k tok`);
         if (a.usd) bits.push(`$${a.usd.toFixed(2)}`);
+        // null = its engine has reported no usage (yet), which is not "spent nothing".
+        if (a.tokens === null && a.usd === null) bits.push('usage not reported');
         if (a.inboxBacklog) bits.push(`inbox ${a.inboxBacklog}`);
         if (a.breaker && a.breaker !== 'ok' && a.breaker !== 'none') bits.push(`breaker ${a.breaker}`);
         if (a.isGod) bits.push('you');
@@ -4479,7 +4482,8 @@ process.stdin.on('end', () => {
 // mode (HIVE_AUTO_APPROVE, gated by config.autoMode — Pam guardrail #5). The
 // agent_end→Stop keeps the harness status in step (→ idle) so the renderer idle
 // inbox-wake nudge can deliver mail. Fully wrapped so a wrong API guess can never
-// break the spawn. LIVE-UNVERIFIED (Pi's exact extension surface needs BYOK keys).
+// break the spawn. Verified live on Pi 1.0.4: session_start gives the id through
+// ctx.sessionManager.getSessionId(), message_end carries per-response usage.
 /** Git follows the Git capability (Capabilities -> Who has what): the same
  *  rule that decides whether the agent gets the Git server. */
 export function gitAllowed(cfg?: { [id: string]: { enabled: boolean } }, grant?: string[]): boolean {

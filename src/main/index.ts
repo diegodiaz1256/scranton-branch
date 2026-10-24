@@ -79,6 +79,7 @@ import { initCompletionWatcher } from './realtimeCompletionWatcher';
 import type { TaskCard, InboxMessage } from './realtimeCompletionWatcher';
 import { TelemetryCollector } from './telemetry';
 import { CostLedgerTotals } from './costLifetime';
+import { fleetUsage } from '../shared/hookUsage';
 import { analytics, isRendererMessageSurface } from './analytics';
 import type { SpawnFailReason } from './analytics';
 import { IntegrationBroker } from './integrationBroker';
@@ -2091,13 +2092,19 @@ async function buildAndWriteFleetSnapshot(): Promise<void> {
     const backlogs = await Promise.all(live.map(([id]) => hive.inboxBacklogAsync(id)));
     const agents = live
       .map(([id, a], i) => {
-        const u = usageById.get(id);
         const spans = snap.spans[id] ?? [];
-        const tokens = u ? u.input + u.output + u.cacheRead + u.cacheCreation : 0;
-        // `usd` is LIFETIME (reset-corrected). Until the first fold completes we
-        // fall back to the session figure rather than publishing a cold $0.
-        const lifetime = costTotals.usdFor(id);
-        const sessionUsd = u ? Number(u.usd.toFixed(4)) : 0;
+        // Claude's live OTel first; every other engine reports through its hook
+        // bridge (CostSample, tool events). `usd` is LIFETIME (reset-corrected)
+        // once the ledger holds this agent; until then the session figure rather
+        // than a cold $0. Nothing reported at all stays null, not 0.
+        const fu = fleetUsage({
+          live: usageById.get(id),
+          hook: hookServer.usage.usageFor(id),
+          spanTool: spans.length ? spans[spans.length - 1].tool : null,
+          activity: hookServer.usage.activityFor(id),
+          lifetimeUsd: costTotals.has(id) ? costTotals.usdFor(id) : null,
+          now
+        });
         return {
           id,
           name: a.name,
@@ -2105,11 +2112,7 @@ async function buildAndWriteFleetSnapshot(): Promise<void> {
           cwd: a.cwd,
           isGod: !!a.isGod,
           breaker: breaker.levelFor(id),
-          tokens,
-          usd: lifetime === null ? sessionUsd : Number(lifetime.toFixed(4)),
-          sessionUsd,
-          lastTool: spans.length ? spans[spans.length - 1].tool : null,
-          lastActiveSecAgo: u ? Math.round((now - u.ts) / 1000) : null,
+          ...fu,
           inboxBacklog: backlogs[i],
           onHold: !!a.onHold
         };
