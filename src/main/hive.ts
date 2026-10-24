@@ -59,6 +59,7 @@ import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
 import { bwrapArgs, mountPoints } from '../shared/bwrapSandbox';
 import { within, type GuardPolicy } from '../shared/toolGuard';
+import { MD_NETGATE, piModelHosts } from './netgate';
 import { MD_SKILLS } from './skillsCli';
 import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
@@ -267,6 +268,8 @@ export interface SpawnInjection {
    *  WSL floors): run `bwrap <wrap…> -- <command> <args…>` instead of the
    *  command. Absent: the CLI runs as is. */
   wrap?: string[];
+  /** The program the wrap runs (default bwrap; md-netgate for a custodian). */
+  wrapCommand?: string;
   /** Whether the agent runs in an OS sandbox: its CLI's own, the app's, or
    *  none (pi on native Windows, or bubblewrap missing). */
   osSandbox?: 'cli' | 'app' | 'none';
@@ -1314,6 +1317,7 @@ export class HiveManager {
       const preArgs: string[] = [];
       let degraded: string | undefined;
       let piWrap: string[] | null | undefined;
+      let piWrapCommand: string | undefined;
       // Dispatch on the structured bridge descriptor (the foundation's `bridgeOf`
       // derives {kind:'hooks'} from the legacy `hookBridge` for agy/codex, and
       // returns the explicit {kind:'proxy'} for qwen). Two ways a hookless CLI
@@ -1354,10 +1358,22 @@ export class HiveManager {
               // Verified live on Pi 1.0.4 (WSL, local model): the extension loads from
               // PI_CODING_AGENT_DIR and posts the session id, tool calls, per-response
               // usage and agent_end. The renderer idle inbox-wake nudge stays the backstop.
-              env.PI_CODING_AGENT_DIR = this.installPiHooks(dir);
+              env.PI_CODING_AGENT_DIR = this.installPiHooks(dir, !!opts.lockdown);
               // Pi has no sandbox of its own: where bubblewrap runs (Linux, a
               // WSL floor's distro), the app builds one like Claude Code's.
               piWrap = await this.piSandbox(meta, dir, root, opts, sock);
+              // A custodian: its tool calls wait for the office's answer and
+              // are refused when it cannot be reached; only pi's own built-in
+              // tools, no MCP; no network but the app and its model (md-netgate).
+              if (opts.lockdown) {
+                env.HIVE_GUARD_STRICT = '1';
+                preArgs.push('--tools', 'read,bash,edit,write,grep,find,ls', '--exclude-tools', 'mcp__*');
+                if (piWrap) {
+                  const gate = this.custodianNetgate(dir, env.PI_CODING_AGENT_DIR, piWrap);
+                  piWrap = gate.args;
+                  piWrapCommand = gate.command;
+                }
+              }
             }
             else if (desc.shim === 'opencode') {
               // OpenCode (anomalyco/opencode) has no Claude-shaped Stop hook, but its
@@ -1433,7 +1449,7 @@ export class HiveManager {
       // seedPrompt; the renderer types it into the TUI after boot (ondev-b).
       const deg = {
         ...(degraded ? { degraded } : {}),
-        ...(piWrap !== undefined ? { osSandbox: piWrap ? 'app' as const : 'none' as const, ...(piWrap ? { wrap: piWrap } : {}) } : {})
+        ...(piWrap !== undefined ? { osSandbox: piWrap ? 'app' as const : 'none' as const, ...(piWrap ? { wrap: piWrap } : {}), ...(piWrapCommand ? { wrapCommand: piWrapCommand } : {}) } : {})
       };
       if (preset.seedDelivery === 'type-into-tui') return { args: [...preArgs], env, seedPrompt: prompt, ...deg };
       // Providers with no declared seed strategy intentionally spawn bare. Inbox-capable
@@ -3575,22 +3591,52 @@ export class HiveManager {
    */
   private async piSandbox(
     meta: AgentMeta, dir: string, root: string,
-    opts: { extraWritableDirs?: string[]; writableRoots?: string[] },
+    opts: { extraWritableDirs?: string[]; writableRoots?: string[]; vaults?: string[]; denyDirs?: string[]; lockdown?: { outgoing: string } },
     sock: string | null
   ): Promise<string[] | null> {
     if (!(await this.sandboxAvailable())) return null;
+    const sockDir = sock && !/^tcp:/.test(sock) && !/^\\\\/.test(sock) ? [dirname(sock)] : [];
     const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
     const userHome = lin(this.userHome());
+    // A custodian: its own folder and its vaults, nothing else; no network
+    // (md-netgate gives back the app and its model); the folders it may not
+    // read hidden; its pi login is a copy of its own.
+    if (opts.lockdown) {
+      const profile = {
+        writable: [...custodianWriteRoots(dir, opts.vaults ?? []), ...sockDir].map(lin),
+        hide: (opts.denyDirs ?? []).map(lin), home: userHome, network: 'none' as const
+      };
+      const present = new Set(await this.existingPaths(mountPoints(profile)));
+      return bwrapArgs(profile, (p) => present.has(p));
+    }
     const writable = [
       ...this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs),
       meta.cwd, ...(opts.writableRoots ?? []),
       // The hook socket (native Linux: a Unix socket, maybe under /tmp).
-      ...(sock && !/^tcp:/.test(sock) && !/^\\\\/.test(sock) ? [dirname(sock)] : [])
+      ...sockDir
     ].filter((d): d is string => typeof d === 'string' && d.length > 0).map(lin);
     // Inside the hive, the other agents' folders stay read-only (its own is reopened).
-    const profile = { writable, readOnly: [lin(join(root, 'agents'))], writableFiles: [`${userHome}/.pi/agent/auth.json`], home: userHome };
+    const profile = { writable, readOnly: [lin(join(root, 'agents'))], writableFiles: [`${userHome}/.pi/agent/auth.json`], home: userHome, hide: (opts.denyDirs ?? []).map(lin) };
     const present = new Set(await this.existingPaths(mountPoints(profile)));
     return bwrapArgs(profile, (p) => present.has(p));
+  }
+
+  /** A pi custodian's launch: md-netgate (written fresh into its own folder)
+   *  runs bubblewrap with no network, relaying only the app's loopback ports
+   *  and HTTPS to its model provider's hosts (netgate.ts). */
+  private custodianNetgate(dir: string, piDir: string, bwrap: string[]): { command: string; args: string[] } {
+    const gateDir = join(dir, '.netgate');
+    mkdirSync(gateDir, { recursive: true });
+    const script = join(gateDir, 'md-netgate.cjs');
+    writeFileSync(script, MD_NETGATE, 'utf8');
+    const read = (f: string): string | null => { try { return readFileSync(join(piDir, f), 'utf8'); } catch { return null; } };
+    const hosts = piModelHosts(read('settings.json'), read('models.json'));
+    const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
+    const node = this.nodeCommand();
+    return {
+      command: node,
+      args: [lin(script), lin(gateDir), hosts.join(','), '--', 'bwrap', ...bwrap, '--', node, lin(script), '--inner', lin(gateDir)]
+    };
   }
 
   /** Which of these (agent-side) paths exist where the agent runs. */
@@ -3614,7 +3660,7 @@ export class HiveManager {
    *  Discovery from `<PI_CODING_AGENT_DIR>/extensions/` and the events used were
    *  verified live on Pi 1.0.4. Still wrapped so a future API change can never
    *  break the spawn; the renderer nudge is the drain backstop regardless. */
-  private installPiHooks(dir: string): string {
+  private installPiHooks(dir: string, custodian = false): string {
     const home = join(dir, '.pi-agent');
     try {
       // Pi discovers extensions under its agent dir; we write to the documented
@@ -3637,7 +3683,11 @@ export class HiveManager {
       if (existsSync(authSrc)) {
         let linked = false;
         try { linked = lstatSync(authDest).isSymbolicLink(); } catch { /* not there yet */ }
-        if (!linked) {
+        if (custodian) {
+          // A custodian's login is a copy: a link would let it write into the
+          // user's own file, which every other pi agent reads.
+          try { rmSync(authDest, { force: true }); copyFileSync(authSrc, authDest); } catch (e) { console.error('[hive] installPiHooks auth.json:', e); }
+        } else if (!linked) {
           // A copy (or nothing yet): try the link again, else refresh the copy so a
           // token Pi renewed since last time is the one the agent gets.
           try { rmSync(authDest, { force: true }); this.linkPath(authSrc, authDest, false); }
@@ -3647,7 +3697,13 @@ export class HiveManager {
       // Your default provider and model (settings.json) and custom models.
       for (const fileName of ['models.json', 'models-store.json', 'settings.json'] as const) {
         try {
-          const data = readFileSync(join(userPiDir, fileName), 'utf8');
+          let data = readFileSync(join(userPiDir, fileName), 'utf8');
+          // A custodian loads no packages or extensions of the user's: only
+          // which model it uses.
+          if (custodian && fileName === 'settings.json') {
+            const s = JSON.parse(data) as Record<string, unknown>;
+            data = JSON.stringify(Object.fromEntries(Object.entries(s).filter(([k]) => ['defaultProvider', 'defaultModel', 'defaultThinkingLevel'].includes(k))), null, 2);
+          }
           writeFileSync(join(home, fileName), data, 'utf8');
         } catch (e) {
           if ((e as NodeJS.ErrnoException).code !== 'ENOENT') console.error(`[hive] installPiHooks copy ${fileName} failed:`, e);
@@ -4740,6 +4796,10 @@ var net = require('node:net');
 var SOCK = process.env.HIVE_SOCK;
 var AGENT = process.env.AGENT_ID || null;
 var AUTO = process.env.HIVE_AUTO_APPROVE === '1';
+// A custodian (HIVE_GUARD_STRICT): a call the office cannot answer is refused.
+var STRICT = process.env.HIVE_GUARD_STRICT === '1';
+var UNREACHABLE = 'Refused: the office could not be asked about this call, and this agent may not act without its answer. Try again in a moment.';
+function unanswered() { return STRICT ? UNREACHABLE : null; }
 // Pi's session id, from session_start: on every payload, so the office can
 // resume this session (--session <id>) and key its cost rows.
 var SID = null;
@@ -4753,24 +4813,25 @@ function post(payload) {
   } catch (e) {}
 }
 // PreToolUse waits for the answer: the office may refuse a call (git off, a
-// write outside the agent's folders). No answer in 3 s: the call goes ahead.
+// write outside the agent's folders). No answer in 3 s: the call goes ahead,
+// except for a custodian (STRICT), whose call is then refused.
 function ask(payload) {
   return new Promise(function (resolve) {
     var done = false, resp = '';
     function finish(v) { if (!done) { done = true; resolve(v); } }
     try {
-      if (!SOCK) return finish(null);
+      if (!SOCK) return finish(unanswered());
       payload.agent_id = payload.agent_id || AGENT;
       if (SID && !payload.session_id) payload.session_id = SID;
       var c = net.createConnection((String(SOCK).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(SOCK).slice(String(SOCK).lastIndexOf(':') + 1)) } : SOCK), function () { try { c.write(JSON.stringify(payload) + '\\n'); } catch (e) {} });
       c.setEncoding('utf8');
       c.on('data', function (d) { resp += d; });
       c.on('end', function () {
-        try { var r = JSON.parse(resp || '{}'); var h = r.hookSpecificOutput; finish(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); } catch (e) { finish(null); }
+        try { var r = JSON.parse(resp || '{}'); var h = r.hookSpecificOutput; finish(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); } catch (e) { finish(unanswered()); }
       });
-      c.on('error', function () { finish(null); });
-      setTimeout(function () { try { c.destroy(); } catch (e) {} finish(null); }, 3000);
-    } catch (e) { finish(null); }
+      c.on('error', function () { finish(unanswered()); });
+      setTimeout(function () { try { c.destroy(); } catch (e) {} finish(unanswered()); }, 3000);
+    } catch (e) { finish(unanswered()); }
   });
 }
 function firstDefined(primary, fallback) {

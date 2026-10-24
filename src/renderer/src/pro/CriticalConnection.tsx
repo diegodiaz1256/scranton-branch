@@ -74,11 +74,12 @@ export function CriticalSection({ kind, id, name, roster, config }: {
             {live.length === 0 && <span className="pro-sub">{t('pro.conn.noAgents')}</span>}
             {live.map((a) => {
               const on = custodian === a.id;
-              const why = a.isGod ? t('pro.conn.custodianNotGod') : !canBeCustodian(a.provider) ? t('pro.conn.custodianOnlyClaude') : undefined;
+              // A pi agent qualifies only where the app can sandbox it (main checks the floor).
+              const why = a.isGod ? t('pro.conn.custodianNotGod') : !canBeCustodian(a.provider, { osSandbox: true }) ? t('pro.conn.custodianOnlyClaude') : undefined;
               return (
                 <button key={a.id} role="radio" aria-checked={on} className={`pro-chip ${on ? 'pro-chip-on' : 'pro-chip-off'}`}
                   style={{ cursor: why ? 'not-allowed' : 'pointer', fontFamily: 'var(--cth-font-ui)', opacity: why ? 0.5 : 1 }}
-                  title={why} disabled={busy || !!why} onClick={() => { if (!on) void set(true, a.id); }}>
+                  title={why ?? (a.provider === 'pi' ? t('pro.conn.custodianPiNote') : undefined)} disabled={busy || !!why} onClick={() => { if (!on) void set(true, a.id); }}>
                   <Avatar agent={a} /> {a.name}
                 </button>
               );

@@ -24,15 +24,23 @@ export type CriticalMap = Record<string, string>;
 
 export const criticalKey = (kind: CriticalKind, id: string): string => `${kind}:${id}`;
 
-/** Only Claude Code agents can be custodians: they are the ones whose tools the
- *  app can take away (--disallowedTools), whose MCP list is only what the app
- *  hands them (--strict-mcp-config), and whose every tool call goes through the
- *  app's hooks and path guard. Other engines would hold the data with nothing
- *  but the prompt between it and the outside. */
-export const CUSTODIAN_PROVIDERS: readonly string[] = ['claude'];
+/** The engines a custodian can run on: those the app can lock down so that the
+ *  prompt is not all that stands between the data and the outside.
+ *  - Claude Code: its tools can be taken away (--disallowedTools), its MCP list
+ *    is only what the app hands it (--strict-mcp-config), every tool call goes
+ *    through the app's hooks and path guard, and it has its own OS sandbox.
+ *  - pi: its extension waits for the app's answer on every tool call and is
+ *    refused when the app cannot answer, its tools are pi's built-ins only, and
+ *    the app runs it in bubblewrap with no network but the app's services and
+ *    its model provider (md-netgate). That OS sandbox exists only on Linux and
+ *    WSL floors, so a pi custodian needs one (`osSandbox`).
+ *  Any other engine would hold the data with nothing but the prompt. */
+export const CUSTODIAN_PROVIDERS: readonly string[] = ['claude', 'pi'];
 
-export function canBeCustodian(provider: string | undefined): boolean {
-  return CUSTODIAN_PROVIDERS.includes(provider ?? 'claude');
+export function canBeCustodian(provider: string | undefined, where: { osSandbox?: boolean } = {}): boolean {
+  const p = provider ?? 'claude';
+  if (p === 'pi') return where.osSandbox === true;
+  return CUSTODIAN_PROVIDERS.includes(p);
 }
 
 /** Keep well-formed entries only. */
