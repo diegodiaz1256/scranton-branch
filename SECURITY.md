@@ -21,9 +21,9 @@ This is an early prototype. Security fixes target the `main` branch only.
 Please **do not** open a public issue for security problems.
 
 - Use GitHub's **private vulnerability reporting**: the *Security → Report a
-  vulnerability* tab on https://github.com/chaitanyagiri/munder-difflin, **or**
-- Email **girichaitanya11@gmail.com** with a description, reproduction steps, and
-  impact.
+  vulnerability* tab on https://github.com/diegodiaz1256/scranton-branch, **or**
+- Email **fernandezdiego3758@gmail.com** with a description, reproduction steps,
+  and impact.
 
 You can expect an acknowledgement within a few days. Once a fix is available we'll
 credit you (unless you prefer to stay anonymous).
