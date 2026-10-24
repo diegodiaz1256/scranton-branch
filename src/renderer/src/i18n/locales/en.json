@@ -1767,6 +1767,24 @@
       "usage": "{{percent}}% of {{window}} limit",
       "usageTip": "The engine says this account has used {{percent}}% of its {{window}} limit."
     },
+    "unsandboxed": {
+      "badge": "UNSANDBOXED",
+      "badgeTip": "Runs without its OS sandbox (Capabilities): its shell can read and change anything you can, and reach any host. Only its folder fence and the office's control files still hold.",
+      "chip": "Run without sandbox",
+      "chipTip": "Off (default): its shell runs in an OS sandbox. On: no sandbox, from its next start. Claude Code and pi agents only; never a custodian.",
+      "chipCustodian": "A custodian of a critical connection always runs in its sandbox.",
+      "title": "Run {{name}} without its sandbox?",
+      "intro": "From its next start its shell runs with no OS sandbox, as you. It will be able to:",
+      "risk1": "read and change any file you can, anywhere on the disk",
+      "risk2": "reach any host on the network, not only the ones the sandbox lets through",
+      "risk3": "read your secrets: SSH keys, cloud and git credentials, tokens in your home folder",
+      "risk4": "change other agents' work and the app's own files",
+      "still": "Still in place: its folder fence for file tools (unless it may also write outside its folders) and the office's control files. A mistake, or instructions hidden in something it reads, can do real damage. Use it only for a task that needs it, and turn it off afterwards.",
+      "typeLabel": "Type {{name}} to confirm",
+      "confirm": "Run without sandbox",
+      "turnedOn": "{{name}} will run without its sandbox from its next start. Restart it to apply.",
+      "turnedOff": "{{name}} runs in its sandbox again from its next start. Restart it to apply."
+    },
     "agent": {
       "goal": "Goal",
       "engine": "Engine",

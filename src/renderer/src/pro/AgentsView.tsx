@@ -13,6 +13,8 @@ import { waitsOnHuman } from '@/components/TasksKanban';
 import { respawnAgent } from '@/hooks/useRestoreTeam';
 import { useProStore } from './proStore';
 import { CustodianBadge } from './CriticalConnection';
+import { UnsandboxedBadge } from './Unsandboxed';
+import { unsandboxedAgents } from '@shared/unsandboxed';
 import {
   Avatar, Bar, GodBadge, StateBadge, agentState, fmtTokens, stripAnsi, usePoll, useTerminalTail,
   type AgentDirectoryEntry, type KeyedTask
@@ -195,6 +197,8 @@ function AgentTile({ agent, ticket, dir, asksYou, config, onOpen }: {
   // Its terminal ended ("— process exited (code 1) —"): say it stopped, not "idle".
   const stoppedCode = exitedCode(tail);
   const badge = stoppedCode ? { label: 'Stopped', tone: 'red' as const } : st;
+  // The human's "Run without sandbox" (its red badge replaces "Not sandboxed").
+  const unsandboxed = unsandboxedAgents(config.agentUnsandboxed).includes(agent.id);
   // What it is doing right now (its latest step, if recent).
   const now = currentStep(useOfficeActivity(), agent.id, Date.now());
   const sentence = useActivityText();
@@ -210,7 +214,8 @@ function AgentTile({ agent, ticket, dir, asksYou, config, onOpen }: {
         <StateBadge {...badge} />
       </div>
       {/* Its own line, as the usage badge: beside the state it squeezed the name. */}
-      {dir?.osSandbox === 'none' && (
+      {unsandboxed && <span style={{ alignSelf: 'flex-start' }}><UnsandboxedBadge agentId={agent.id} config={config} /></span>}
+      {dir?.osSandbox === 'none' && !unsandboxed && (
         <span className="pro-badge" style={{ alignSelf: 'flex-start', background: 'var(--cth-peach-light)', fontSize: 11 }} title={t('pro.agents.notSandboxedTip')}>{t('pro.agents.notSandboxed')}</span>
       )}
       {usage && usage.percent >= 50 && (

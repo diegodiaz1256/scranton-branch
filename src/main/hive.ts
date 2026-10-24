@@ -271,9 +271,10 @@ export interface SpawnInjection {
   wrap?: string[];
   /** The program the wrap runs (default bwrap; md-netgate for a custodian). */
   wrapCommand?: string;
-  /** Whether the agent runs in an OS sandbox: its CLI's own, the app's, or
-   *  none (pi on native Windows, or bubblewrap missing). */
-  osSandbox?: 'cli' | 'app' | 'none';
+  /** Whether the agent runs in an OS sandbox: its CLI's own, the app's,
+   *  none (pi on native Windows, or bubblewrap missing), or off (the human's
+   *  "Run without sandbox"). */
+  osSandbox?: 'cli' | 'app' | 'none' | 'off';
 }
 
 /** Longest path a Unix socket can be bound at, with room to spare (sun_path is
@@ -1163,6 +1164,8 @@ export class HiveManager {
       writableRoots?: string[];
       /** The human let this agent write outside its folders (Capabilities). */
       roam?: boolean;
+      /** The human let this agent run without its OS sandbox (unsandboxed.ts). */
+      unsandboxed?: boolean;
       /** The key broker this agent was handed (MD_BROKER_URL): its sandbox may
        *  reach that one loopback port (hookSettings). */
       brokerUrl?: string;
@@ -1269,6 +1272,10 @@ export class HiveManager {
     if (opts.theme) env.COLORFGBG = opts.theme === 'dark' ? '15;0' : '0;15';
 
     const claudeProvider = isClaudeProvider(meta.provider ?? 'claude');
+    // The human's "Run without sandbox" (shared/unsandboxed.ts): no OS sandbox
+    // for Claude Code or pi. The guard and its control files stay. Never a
+    // custodian (main checks too).
+    const unsandboxed = !!opts.unsandboxed && !opts.lockdown;
 
     // Git and its folders, enforced at PreToolUse (hooks.ts -> toolGuard.ts).
     // A WSL floor's agents run in the distro: `~`, the temp dir and Claude's
@@ -1298,7 +1305,7 @@ export class HiveManager {
     {
       const g = this.guardPolicies.get(meta.id)!;
       const osSandbox = await this.sandboxAvailable();
-      const sandboxed = claudeProvider ? (osSandbox || process.platform === 'darwin') : (meta.provider === 'pi' || meta.provider === 'antigravity') && osSandbox;
+      const sandboxed = !unsandboxed && (claudeProvider ? (osSandbox || process.platform === 'darwin') : (meta.provider === 'pi' || meta.provider === 'antigravity') && osSandbox);
       env.HIVE_GUARD = JSON.stringify({ roots: g.roots.map((r) => this.forAgent(r)), controls: (g.controls ?? []).map((c) => this.forAgent(c)), contained: g.contained, sandboxed });
     }
 
@@ -1379,7 +1386,7 @@ export class HiveManager {
               env.PI_CODING_AGENT_DIR = this.installPiHooks(dir, !!opts.lockdown);
               // Pi has no sandbox of its own: where bubblewrap runs (Linux, a
               // WSL floor's distro), the app builds one like Claude Code's.
-              appWrap = await this.appSandbox('pi', meta, dir, root, opts, sock);
+              appWrap = unsandboxed ? null : await this.appSandbox('pi', meta, dir, root, opts, sock);
               // A custodian: its tool calls wait for the office's answer and
               // are refused when it cannot be reached; only pi's own built-in
               // tools, no MCP; no network but the app and its model (md-netgate).
@@ -1467,7 +1474,7 @@ export class HiveManager {
       // seedPrompt; the renderer types it into the TUI after boot (ondev-b).
       const deg = {
         ...(degraded ? { degraded } : {}),
-        ...(appWrap !== undefined ? { osSandbox: appWrap ? 'app' as const : 'none' as const, ...(appWrap ? { wrap: appWrap } : {}), ...(appWrapCommand ? { wrapCommand: appWrapCommand } : {}) } : {})
+        ...(appWrap !== undefined ? { osSandbox: appWrap ? 'app' as const : unsandboxed ? 'off' as const : 'none' as const, ...(appWrap ? { wrap: appWrap } : {}), ...(appWrapCommand ? { wrapCommand: appWrapCommand } : {}) } : {})
       };
       if (preset.seedDelivery === 'type-into-tui') return { args: [...preArgs], env, seedPrompt: prompt, ...deg };
       // Providers with no declared seed strategy intentionally spawn bare. Inbox-capable
@@ -1540,11 +1547,15 @@ export class HiveManager {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
       const requireSandbox = await this.sandboxAvailable();
-      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown,
-        { now: this.controlPathsNow(root, meta.cwd), patterns: this.controlPaths(root, meta.cwd) })));
+      const settings = this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown,
+        { now: this.controlPathsNow(root, meta.cwd), patterns: this.controlPaths(root, meta.cwd) }) as { sandbox?: unknown };
+      // Run without sandbox: off, said outright (a project's settings cannot
+      // turn it back on for it either). Its permission rules stay.
+      if (unsandboxed) settings.sandbox = { enabled: false };
+      this.writeJson(settingsPath, this.forAgentJson(settings));
       args.push('--settings', settingsPath);
     }
-    return { args, env };
+    return { args, env, ...(unsandboxed ? { osSandbox: 'off' as const } : {}) };
   }
 
   /** Update the durable job string (hire role) without respawning. Refreshes
