@@ -426,6 +426,18 @@
       "unknown": "cause not caught (not a handler or timer)",
       "hint": "The app writes down every stall over 200 ms and what was running. Nothing is sent anywhere; attach the log file when you report a freeze."
     },
+    "officeRender": {
+      "title": "Office floor",
+      "full": "Full",
+      "still": "No walking",
+      "cards": "No office",
+      "auto": "Auto",
+      "fullDesc": "The whole office: characters walk to the door when they need you, take coffee breaks and carry notes to the board.",
+      "stillDesc": "The office is still drawn, but everyone stays at their desk. An icon over each head shows their state, and messages appear as an envelope with a line between desks. It only redraws when something changes.",
+      "cardsDesc": "No office at all: one card per agent with its state, tool, context, cost and last message. The lightest option: the GPU canvas is never started.",
+      "autoDesc": "Picks the level for you: no walking on battery, when the app has frozen recently, or with more than {{max}} agents; no office when it keeps freezing. It goes back once things have been calm for a minute.",
+      "autoNow": "Right now: {{level}}."
+    },
     "navDesc": {
       "general": "Version and updates, freezes, the office folder, language, keep awake, reset.",
       "prerequisites": "What is installed: agent CLIs, git, Node, uv, the office browser.",
@@ -436,7 +448,7 @@
       "memoryKnowledge": "Semantic memory and its model, and the knowledge graph."
     },
     "find": {
-      "general": "update version freeze log folder home language idioma keep awake sleep reset erase theme",
+      "general": "update version freeze log folder home language idioma keep awake sleep reset erase theme office floor performance walking cards battery cpu gpu",
       "prerequisites": "install claude codex gemini cli git node npm uv python fortress browser chrome prerequisites",
       "agentsModels": "model opus sonnet haiku effort api key anthropic openai openrouter groq certificate tls ca proxy",
       "autonomyBudgets": "auto mode approve permission budget tokens breaker loop hire spawn",
@@ -797,6 +809,21 @@
     "errPickHome": "Pick a harness home folder first.",
     "errCreateHome": "could not create harness home",
     "errEngineNotInstalled": "{{label}} is not installed. Install it and press \"check again\", or pick another engine."
+  },
+  "officeCards": {
+    "god": "Orchestrator",
+    "open": "Open {{name}}'s terminal",
+    "tool": "Tool",
+    "context": "Context",
+    "cost": "Cost",
+    "noMessage": "No messages yet."
+  },
+  "officeHint": {
+    "title": "{{count}} agents on the floor",
+    "body": "With more than {{max}} agents, the walking office costs noticeable CPU and GPU. Keep everyone at their desk, or let Auto decide.",
+    "never": "Don't ask again",
+    "auto": "Auto",
+    "still": "No walking"
   },
   "office": {
     "gpuError": "The office floor lost its GPU context.\n\nToo many terminals are using the GPU at once.\nClose a few agent terminals, or restart the app, to bring it back.",

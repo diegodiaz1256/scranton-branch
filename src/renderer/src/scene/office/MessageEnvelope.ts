@@ -35,6 +35,12 @@ const MAX_DURATION = 2.0;
 const FADE_IN = 0.14;
 const FADE_OUT = 0.22;
 const BURST_DURATION = 0.34; // arrival sparkle ring
+// The "no walking" floor's version: nothing flies. The envelope appears at the
+// recipient's desk with a thin line back to the sender, holds, then fades.
+const STILL_HOLD = 1.6;
+const STILL_FADE = 0.3;
+/** How long a still envelope is on screen (the scene keeps frames running that long). */
+export const STILL_ENVELOPE_SECONDS = STILL_HOLD + STILL_FADE;
 
 function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
@@ -52,14 +58,17 @@ export class MessageEnvelope {
   private bursting = false;
   private burstElapsed = 0;
   private finished = false;
+  private still: boolean;
 
   /** start/end are world-pixel feet anchors of sender & recipient. */
   constructor(
     start: { x: number; y: number },
     end: { x: number; y: number },
     act: MessageAct,
-    needsHuman: boolean
+    needsHuman: boolean,
+    opts: { still?: boolean } = {}
   ) {
+    this.still = !!opts.still;
     this.sx = start.x; this.sy = start.y - FLY_HEIGHT;
     this.ex = end.x;   this.ey = end.y - FLY_HEIGHT;
     const dist = Math.hypot(this.ex - this.sx, this.ey - this.sy);
@@ -86,6 +95,19 @@ export class MessageEnvelope {
     this.burst.visible = false;
     this.container.addChild(this.burst);
 
+    if (this.still) {
+      // A 1px line from the sender's desk to the recipient's, under the
+      // envelope parked at the recipient. The container stays at the world
+      // origin; the line and the body carry world coordinates.
+      const link = new Graphics();
+      link.moveTo(Math.round(this.sx), Math.round(this.sy))
+        .lineTo(Math.round(this.ex), Math.round(this.ey))
+        .stroke({ color: fill, width: 1, alpha: 0.9 });
+      this.container.addChildAt(link, 0);
+      this.body.position.set(Math.round(this.ex), Math.round(this.ey));
+      this.container.alpha = 1;
+      return;
+    }
     this.setPos(this.sx, this.sy);
   }
 
@@ -97,6 +119,13 @@ export class MessageEnvelope {
   /** Advance the animation. Returns true once it has fully played out. */
   update(dt: number): boolean {
     if (this.finished) return true;
+
+    if (this.still) {
+      this.elapsed += dt;
+      if (this.elapsed >= STILL_ENVELOPE_SECONDS) { this.finished = true; return true; }
+      this.container.alpha = this.elapsed <= STILL_HOLD ? 1 : 1 - (this.elapsed - STILL_HOLD) / STILL_FADE;
+      return false;
+    }
 
     if (!this.bursting) {
       this.elapsed += dt;

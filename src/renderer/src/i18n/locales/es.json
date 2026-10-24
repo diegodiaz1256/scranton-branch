@@ -426,6 +426,18 @@
       "unknown": "causa no capturada (no era un handler ni un temporizador)",
       "hint": "La app apunta cada parón de más de 200 ms y qué se estaba ejecutando. No se envía a ningún sitio; adjunta el fichero cuando avises de una congelación."
     },
+    "officeRender": {
+      "title": "Planta de la oficina",
+      "full": "Completa",
+      "still": "Sin caminar",
+      "cards": "Sin oficina",
+      "auto": "Automático",
+      "fullDesc": "La oficina entera: los personajes van a la puerta cuando te necesitan, se toman un café y llevan notas al tablón.",
+      "stillDesc": "La oficina se sigue dibujando, pero todos se quedan en su mesa. Un icono sobre cada cabeza muestra su estado, y los mensajes aparecen como un sobre con una línea entre mesas. Solo se redibuja cuando algo cambia.",
+      "cardsDesc": "Sin oficina: una tarjeta por agente con su estado, herramienta, contexto, coste y último mensaje. La opción más ligera: el lienzo de GPU no llega a arrancar.",
+      "autoDesc": "Elige el nivel por ti: sin caminar con batería, si la app se ha congelado hace poco o con más de {{max}} agentes; sin oficina si se sigue congelando. Vuelve cuando todo lleva un minuto en calma.",
+      "autoNow": "Ahora mismo: {{level}}."
+    },
     "navDesc": {
       "general": "Versión y actualizaciones, congelones, carpeta de la oficina, idioma, mantener despierto, reiniciar.",
       "prerequisites": "Qué hay instalado: CLIs de agentes, git, Node, uv, el navegador de la oficina.",
@@ -436,7 +448,7 @@
       "memoryKnowledge": "Memoria semántica y su modelo, y el grafo de conocimiento."
     },
     "find": {
-      "general": "actualizar version congelon registro carpeta idioma despierto dormir reiniciar borrar tema",
+      "general": "actualizar version congelon registro carpeta idioma despierto dormir reiniciar borrar tema planta oficina rendimiento caminar tarjetas bateria cpu gpu",
       "prerequisites": "instalar claude codex gemini cli git node npm uv python fortress navegador requisitos",
       "agentsModels": "modelo opus sonnet haiku esfuerzo clave api anthropic openai openrouter groq certificado tls ca proxy",
       "autonomyBudgets": "modo auto aprobar permiso presupuesto tokens cortacircuitos bucle contratar",
@@ -797,6 +809,21 @@
     "errPickHome": "Elige primero la carpeta de la oficina.",
     "errCreateHome": "no se pudo crear la carpeta de la oficina",
     "errEngineNotInstalled": "{{label}} no está instalado. Instálalo y pulsa «comprobar de nuevo», o elige otro motor."
+  },
+  "officeCards": {
+    "god": "Orquestador",
+    "open": "Abrir la terminal de {{name}}",
+    "tool": "Herramienta",
+    "context": "Contexto",
+    "cost": "Coste",
+    "noMessage": "Todavía sin mensajes."
+  },
+  "officeHint": {
+    "title": "{{count}} agentes en la planta",
+    "body": "Con más de {{max}} agentes, la oficina en movimiento gasta bastante CPU y GPU. Deja a todos en su mesa, o deja que Automático decida.",
+    "never": "No volver a preguntar",
+    "auto": "Automático",
+    "still": "Sin caminar"
   },
   "office": {
     "gpuError": "La planta de la oficina ha perdido su contexto de GPU.\n\nDemasiadas terminales están usando la GPU a la vez.\nCierra algunas terminales de agentes, o reinicia la app, para recuperarla.",

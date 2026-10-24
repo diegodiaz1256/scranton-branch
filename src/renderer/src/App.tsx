@@ -6,6 +6,9 @@ import { startMockLoop, stopMockLoop } from '@/store/mockEvents';
 import type { HarnessConfig } from '@/store/config';
 import { DEFAULT_ORG_TRIGGER } from '@shared/triggers';
 import { OfficeFloor } from '@/scene/office/OfficeFloor';
+import { OfficeCards } from '@/components/OfficeCards';
+import { OfficeLevelHint } from '@/components/OfficeLevelHint';
+import { useAutoOfficeLevel, useOfficeLevel } from '@/store/officeRender';
 import { useHive } from '@/hooks/useHive';
 import { useResolvedGodName } from '@/hooks/useResolvedGodName';
 import { useGodNameSync } from '@/i18n/useGodNameSync';
@@ -66,6 +69,8 @@ export function App() {
   const ideOpen = useStore(s => s.ideOpen);
   const setIdeOpen = useStore(s => s.setIdeOpen);
   const layout = useProStore(s => s.layout);
+  const officeLevel = useOfficeLevel();
+  useAutoOfficeLevel();
 
   const [config, setConfig] = useState<HarnessConfig | null>(null);
   // Whether the user has passed the launch-time hive picker this session. Starts
@@ -424,7 +429,10 @@ export function App() {
         gap: 0
       }}>
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
-          <OfficeFloor />
+          {/* Settings → General → Office floor: the Pixi scene (walking or
+              still), or plain cards with no scene at all. */}
+          {officeLevel === 'cards' ? <OfficeCards /> : <OfficeFloor still={officeLevel === 'still'} />}
+          <OfficeLevelHint />
           <MemoryPanel />
           {agentCount === 0 && godStatus === 'booting' && <MichaelBooting />}
           {/* The orchestrator failed to start: say so, whoever else is on the
