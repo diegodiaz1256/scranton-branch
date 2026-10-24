@@ -57,7 +57,7 @@ import { cleanServerList } from '../shared/roleBundles';
 import { detectProjectType, memoryInstruction, memoryTemplate, parseMemory, type ProjectType } from '../shared/memorySections';
 import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
-import { bwrapArgs, mountPoints } from '../shared/bwrapSandbox';
+import { bwrapArgs, cliStateMounts, mountPoints, type AppSandboxedCli } from '../shared/bwrapSandbox';
 import { AGENT_CONTROL_FILES, within, type GuardPolicy } from '../shared/toolGuard';
 import { MD_NETGATE, piModelHosts } from './netgate';
 import { MD_SKILLS } from './skillsCli';
@@ -1293,11 +1293,12 @@ export class HiveManager {
     });
     // What its hook decides alone when the office does not answer
     // (hookOffline.ts): its folders, the controls, and whether an OS sandbox
-    // holds its shell (Claude Code's where it can run; pi's bubblewrap).
+    // holds its shell (Claude Code's where it can run; the app's bubblewrap
+    // for pi and agy).
     {
       const g = this.guardPolicies.get(meta.id)!;
       const osSandbox = await this.sandboxAvailable();
-      const sandboxed = claudeProvider ? (osSandbox || process.platform === 'darwin') : meta.provider === 'pi' && osSandbox;
+      const sandboxed = claudeProvider ? (osSandbox || process.platform === 'darwin') : (meta.provider === 'pi' || meta.provider === 'antigravity') && osSandbox;
       env.HIVE_GUARD = JSON.stringify({ roots: g.roots.map((r) => this.forAgent(r)), controls: (g.controls ?? []).map((c) => this.forAgent(c)), contained: g.contained, sandboxed });
     }
 
@@ -1328,8 +1329,8 @@ export class HiveManager {
       // configuration is never mutated. Both share the HIVE_SOCK wiring below.
       const preArgs: string[] = [];
       let degraded: string | undefined;
-      let piWrap: string[] | null | undefined;
-      let piWrapCommand: string | undefined;
+      let appWrap: string[] | null | undefined;
+      let appWrapCommand: string | undefined;
       // Dispatch on the structured bridge descriptor (the foundation's `bridgeOf`
       // derives {kind:'hooks'} from the legacy `hookBridge` for agy/codex, and
       // returns the explicit {kind:'proxy'} for qwen). Two ways a hookless CLI
@@ -1343,7 +1344,12 @@ export class HiveManager {
         env.HIVE_SOCK = sock;
         try {
           if (desc.kind === 'hooks') {
-            if (desc.shim === 'agy') this.installAgyHooks();
+            if (desc.shim === 'agy') {
+              this.installAgyHooks();
+              // agy's own --sandbox leaves the home folder writable, so where
+              // bubblewrap runs the app builds one like pi's (bwrapSandbox.ts).
+              appWrap = await this.appSandbox('agy', meta, dir, root, opts, sock);
+            }
             else if (desc.shim === 'codex') {
               env.CODEX_HOME = this.installCodexHooks(dir, meta.id);
               // Codex refuses to run hooks from a config dir without persisted
@@ -1373,17 +1379,17 @@ export class HiveManager {
               env.PI_CODING_AGENT_DIR = this.installPiHooks(dir, !!opts.lockdown);
               // Pi has no sandbox of its own: where bubblewrap runs (Linux, a
               // WSL floor's distro), the app builds one like Claude Code's.
-              piWrap = await this.piSandbox(meta, dir, root, opts, sock);
+              appWrap = await this.appSandbox('pi', meta, dir, root, opts, sock);
               // A custodian: its tool calls wait for the office's answer and
               // are refused when it cannot be reached; only pi's own built-in
               // tools, no MCP; no network but the app and its model (md-netgate).
               if (opts.lockdown) {
                 env.HIVE_GUARD_STRICT = '1';
                 preArgs.push('--tools', 'read,bash,edit,write,grep,find,ls', '--exclude-tools', 'mcp__*');
-                if (piWrap) {
-                  const gate = this.custodianNetgate(dir, env.PI_CODING_AGENT_DIR, piWrap);
-                  piWrap = gate.args;
-                  piWrapCommand = gate.command;
+                if (appWrap) {
+                  const gate = this.custodianNetgate(dir, env.PI_CODING_AGENT_DIR, appWrap);
+                  appWrap = gate.args;
+                  appWrapCommand = gate.command;
                 }
               }
             }
@@ -1461,7 +1467,7 @@ export class HiveManager {
       // seedPrompt; the renderer types it into the TUI after boot (ondev-b).
       const deg = {
         ...(degraded ? { degraded } : {}),
-        ...(piWrap !== undefined ? { osSandbox: piWrap ? 'app' as const : 'none' as const, ...(piWrap ? { wrap: piWrap } : {}), ...(piWrapCommand ? { wrapCommand: piWrapCommand } : {}) } : {})
+        ...(appWrap !== undefined ? { osSandbox: appWrap ? 'app' as const : 'none' as const, ...(appWrap ? { wrap: appWrap } : {}), ...(appWrapCommand ? { wrapCommand: appWrapCommand } : {}) } : {})
       };
       if (preset.seedDelivery === 'type-into-tui') return { args: [...preArgs], env, seedPrompt: prompt, ...deg };
       // Providers with no declared seed strategy intentionally spawn bare. Inbox-capable
@@ -3642,15 +3648,16 @@ export class HiveManager {
   }
 
   /**
-   * The bubblewrap argv for a pi agent (shared/bwrapSandbox.ts), or null when
-   * bubblewrap cannot run here (native Windows, or not installed: the Setup row
-   * says so and the agent's card shows it is not sandboxed). Writable: the
-   * same folders Claude Code's sandbox gets (its hive folder, the hive, extra
-   * dirs), the project or worktree it works in, the hook socket's folder and
-   * the pi login it refreshes.
+   * The bubblewrap argv for a pi or agy agent (shared/bwrapSandbox.ts), or
+   * null when bubblewrap cannot run here (native Windows, or not installed: the
+   * Setup row says so and the agent's card shows it is not sandboxed).
+   * Writable: the same folders Claude Code's sandbox gets (its hive folder, the
+   * hive, extra dirs), the project or worktree it works in, the hook socket's
+   * folder and the CLI's own state (cliStateMounts: pi's login, agy's
+   * conversations and login).
    */
-  private async piSandbox(
-    meta: AgentMeta, dir: string, root: string,
+  private async appSandbox(
+    cli: AppSandboxedCli, meta: AgentMeta, dir: string, root: string,
     opts: { extraWritableDirs?: string[]; writableRoots?: string[]; vaults?: string[]; denyDirs?: string[]; lockdown?: { outgoing: string } },
     sock: string | null
   ): Promise<string[] | null> {
@@ -3658,9 +3665,11 @@ export class HiveManager {
     const sockDir = sock && !/^tcp:/.test(sock) && !/^\\\\/.test(sock) ? [dirname(sock)] : [];
     const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
     const userHome = lin(this.userHome());
+    const state = cliStateMounts(cli, userHome);
     // The office's controls stay read-only (not the hook socket: pi's
-    // extension talks to it from inside).
-    const controls = this.controlPathsNow(root, meta.cwd).filter((p) => basename(p) !== 'hooks.sock').map(lin);
+    // extension and agy's hook talk to it from inside), and so do the CLI's
+    // own hook config and programs.
+    const controls = [...this.controlPathsNow(root, meta.cwd).filter((p) => basename(p) !== 'hooks.sock').map(lin), ...state.controls];
     // A custodian: its own folder and its vaults, nothing else; no network
     // (md-netgate gives back the app and its model); the folders it may not
     // read hidden; its pi login is a copy of its own.
@@ -3679,7 +3688,7 @@ export class HiveManager {
       ...sockDir
     ].filter((d): d is string => typeof d === 'string' && d.length > 0).map(lin);
     // Inside the hive, the other agents' folders stay read-only (its own is reopened).
-    const profile = { writable, readOnly: [lin(join(root, 'agents'))], writableFiles: [`${userHome}/.pi/agent/auth.json`], home: userHome, hide: (opts.denyDirs ?? []).map(lin), controls };
+    const profile = { writable: [...writable, ...state.writable], readOnly: [lin(join(root, 'agents'))], writableFiles: state.writableFiles, home: userHome, hide: (opts.denyDirs ?? []).map(lin), controls };
     const present = new Set(await this.existingPaths(mountPoints(profile)));
     return bwrapArgs(profile, (p) => present.has(p));
   }

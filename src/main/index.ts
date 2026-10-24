@@ -4059,7 +4059,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
-      // The app's OS sandbox for a CLI without one (pi): the CLI runs inside
+      // The app's OS sandbox for a CLI without one that holds (pi, agy): the CLI runs inside
       // bubblewrap. If bubblewrap then fails to start, so does the agent: it
       // never falls back to running unconfined.
       if (inj.wrap) {
