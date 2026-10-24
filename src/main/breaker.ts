@@ -83,7 +83,7 @@ const tokensOf = (s: AgentUsageSample | null): number =>
  *  what the agent does (#189: 98.6% and 99.2% of the counted figure at the rows
  *  where two agents crossed a 4M cap, 4–6 minutes into a session). A per-agent
  *  BUDGET is tested against this; tokensOf() stays the display/cost figure. */
-const workTokensOf = (s: AgentUsageSample | null): number =>
+export const workTokensOf = (s: AgentUsageSample | null): number =>
   s ? s.input + s.output + s.cacheCreation : 0;
 
 const DEFAULTS = {

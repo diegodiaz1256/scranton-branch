@@ -49,7 +49,8 @@ import { agentKind, effortArgs } from '../shared/roleModels';
 import { formatList, parseList, type PersonalList } from '../shared/lists';
 import { HiveManager, type AgentMeta, type HiveMessage, type HiveTask, type TempHiring } from './hive';
 import { HookServer } from './hooks';
-import { CircuitBreaker, type BreakerInput } from './breaker';
+import { CircuitBreaker, workTokensOf, type BreakerInput } from './breaker';
+import { capStage, capDispatchNote, capWarningBody, lastOutboxMessage, lastWords } from './workerCap';
 import { CumulativeSampleGate, type UsageProvider } from './usage';
 import { MemoryManager } from './memory';
 import { KnowledgeManager } from './knowledge';
@@ -494,9 +495,11 @@ interface WorkerRec {
   baseBranch: string;     // the branch its worktree was cut from (for ahead-of-base)
   spawnedAt: number;      // epoch ms
   releasing?: boolean;    // kill issued; awaiting teardownPty (skip re-processing)
-  /** Per-worker TOTAL-token cap from the spawn-request (overrides the config
+  /** Per-worker WORK-token cap from the spawn-request (overrides the config
    *  default). 0/undefined = no per-request cap. P4 plumbing — unlimited today. */
   tokenCap?: number;
+  /** Sent its one wrap-up request on nearing the cap (workerCap.capStage). */
+  capWarned?: boolean;
   /** The floor card broadcast at spawn (hive:agentSpawned). Kept so a renderer
    *  that was not listening yet (a request processed while the app boots) can
    *  card the worker later through workers:cards. */
@@ -7271,7 +7274,10 @@ async function processSpawnRequest(filePath: string): Promise<void> {
       ? buildAutonomousRequestProtocol(slack.channel, slack.thread_ts, slackReplyScriptPath())
       : '[AUTONOMOUS WORKER TASK — no interactive human is watching. Work autonomously; do not ask interactive questions.] The task starts now: ';
     const suffix = `\n\n[CAPABILITIES] Before you start, consult your capability catalog — run the \`/capabilities\` skill (or read \`$AGENT_DIR/.claude/skills/capabilities/SKILL.md\`). It lists your temporal date-range skills (\`/today\`, \`/last30Days\`, \`/lastQuarter\`, …) and the integrations available to you (reached via the loopback broker) and how to call each. For any time-scoped work, resolve the dates with those skills instead of computing them by hand.\n\n[WORKER COMPLETION] When finished, signal done by sending ONE outbox message to god with "act":"done" and a short result summary — that releases this ephemeral worker (terminal closed; your branch is handed to god). Do NOT push to any remote; god is the sole integrator.`;
-    hive.send({ to: workerId, conversation: `worker-${reqId}`, act: 'request', subject: meta.name, body: `${prefix}${objective}${suffix}` }, 'god');
+    // The cap the tick will hold it to (per-request, else the config default).
+    const effectiveCap = tokenCap ?? (typeof cfgSpawn.defaultWorkerTokenCap === 'number' && cfgSpawn.defaultWorkerTokenCap > 0 ? cfgSpawn.defaultWorkerTokenCap : 0);
+    const capNote = effectiveCap > 0 ? `\n\n${capDispatchNote(effectiveCap)}` : '';
+    hive.send({ to: workerId, conversation: `worker-${reqId}`, act: 'request', subject: meta.name, body: `${prefix}${objective}${suffix}${capNote}` }, 'god');
   } catch (e) {
     console.error('[worker] dispatch send failed:', e);
   }
@@ -7280,12 +7286,11 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   archiveRequest(filePath, '.done');
 }
 
-/** Total tokens (input+output+cache) a worker has burned so far, from the usage
- *  provider — 0 when unknown. Mirrors the breaker's `tokensOf`. Used only by the
- *  (default-off) per-worker token cap. */
+/** WORK tokens (input+output+cache writes, no cached reads) a worker has burned
+ *  so far, from the usage provider — 0 when unknown. The breaker's per-agent
+ *  budget figure (`workTokensOf`). Used by the (default-off) per-worker token cap. */
 function workerTokensUsed(workerId: string): number {
-  const s = usageProvider.getAgentUsage(workerId);
-  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;
+  return workTokensOf(usageProvider.getAgentUsage(workerId));
 }
 
 /** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */
@@ -7406,24 +7411,32 @@ async function ephemeralWorkerTick(): Promise<void> {
         teardownPty(workerPty(rec));
         continue;
       }
-      // Token-cap reap (default-off plumbing). An effective cap > 0 → reap when the
-      // worker's cumulative token use exceeds it; its committed work is preserved.
+      // Token cap (default-off plumbing). An effective cap > 0 → at 80% the worker
+      // is asked once to wrap up; above the cap it is reaped, and god hears its
+      // last outbox message. Its committed work is preserved.
       const tokenCap = (rec.tokenCap && rec.tokenCap > 0) ? rec.tokenCap : defaultTokenCap;
-      if (tokenCap > 0) {
-        const used = workerTokensUsed(workerId);
-        if (used > tokenCap) {
-          rec.releasing = true;
-          console.warn(`[worker] reaping ${workerId} — token cap (${used.toLocaleString()} > ${tokenCap.toLocaleString()})`);
-          logWork(rec, 'tokens');
-          informGod(
-            `[worker reaped — token cap] ${workerId}`,
-            `Worker ${workerId} used ${used.toLocaleString()} tokens (> its cap of ${tokenCap.toLocaleString()}) and was reaped. Any committed work on its branch is preserved for you.`,
-            rec.slack
-          );
-          ptyManager.kill(workerPty(rec));
-          teardownPty(workerPty(rec));
-          continue;
-        }
+      const used = tokenCap > 0 ? workerTokensUsed(workerId) : 0;
+      const stage = capStage(used, tokenCap, !!rec.capWarned);
+      if (stage === 'warn') {
+        rec.capWarned = true;
+        console.warn(`[worker] ${workerId} near its token cap (${used.toLocaleString()} of ${tokenCap.toLocaleString()}) — asking it to wrap up`);
+        try {
+          hive.send({ to: workerId, conversation: `worker-${rec.reqId}`, act: 'request', subject: 'Token budget almost spent: wrap up', body: capWarningBody(used, tokenCap) }, 'god');
+        } catch (e) { console.error('[worker] cap warning send failed:', e); }
+      } else if (stage === 'reap') {
+        rec.releasing = true;
+        console.warn(`[worker] reaping ${workerId} — token cap (${used.toLocaleString()} > ${tokenCap.toLocaleString()})`);
+        logWork(rec, 'tokens');
+        const root = hive.root();
+        const last = root ? lastWords(lastOutboxMessage(join(root, 'agents', workerId), rec.spawnedAt)) : lastWords(null);
+        informGod(
+          `[worker reaped — token cap] ${workerId}`,
+          `Worker ${workerId} used ${used.toLocaleString()} tokens (> its cap of ${tokenCap.toLocaleString()}) and was reaped. Any committed work on its branch is preserved for you.\n${last}`,
+          rec.slack
+        );
+        ptyManager.kill(workerPty(rec));
+        teardownPty(workerPty(rec));
+        continue;
       }
       const idleMs = ptyManager.idleFor(workerPty(rec));
       if (idleMs === undefined) continue; // PTY already gone; teardownPty cleans up
