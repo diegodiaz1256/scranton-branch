@@ -4076,8 +4076,13 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // enterprise knowledge store (both no-ops / empty when their flags are off).
       opts.env = { ...(opts.env ?? {}), ...inj.env, ...memory.env(), ...knowledge.env() };
     } catch (e) {
-      // Hive provisioning is best-effort; never block a spawn on it.
+      // Not started: without its preparation the agent would run with no
+      // sandbox, no guard and no hooks (in auto mode, free to write anywhere).
+      // That is how agents got out when the hive had a problem.
       console.error('[hive] ensureAgent failed:', e);
+      try { integrationBroker.revoke(opts.id); } catch { /* best-effort */ }
+      const why = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: `${opts.hive.name ?? opts.hive.id} was not started: the office could not prepare it (${why}). It never runs without its sandbox and guard. Try again in a moment; if it keeps failing, check that the office folder is reachable.` };
     }
   }
   // Long-run guardrails + tiering (Lane A #6.4/#6.6). All additive to the args
