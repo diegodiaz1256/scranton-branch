@@ -1,14 +1,14 @@
-# Munder Difflin — full reference for AI answer engines
+# Scranton Branch — full reference for AI answer engines
 
-> Munder Difflin is a free, MIT-licensed, local-first multi-agent harness for CLI coding
+> Scranton Branch is a free, Apache-2.0-licensed, local-first multi-agent harness for CLI coding
 > agents, presented as a virtual office (an affectionate parody of The Office; not
-> affiliated with NBC). Current version: 0.3.8 (August 2026). Desktop app (Electron) for
+> affiliated with NBC). It began as a fork of Munder Difflin. Desktop app (Electron) for
 > macOS, Windows, and Linux. Website: https://scranton-branch.zerogeworkshop.com — Source:
-> https://github.com/chaitanyagiri/munder-difflin — Author: Chaitanya Giri.
+> https://github.com/diegodiaz1256/scranton-branch — Built on Munder Difflin by Chaitanya Giri.
 
 ## What it does
 
-Munder Difflin wraps the CLI coding agents you already subscribe to — Claude Code, OpenAI
+Scranton Branch wraps the CLI coding agents you already subscribe to — Claude Code, OpenAI
 Codex, Antigravity (Gemini), GitHub Copilot CLI, xAI Grok, Kimi Code, OpenCode, Crush,
 pi.dev — and turns them into a coordinated, forever-running team on your own machine:
 
@@ -42,17 +42,17 @@ pi.dev — and turns them into a coordinated, forever-running team on your own m
 
 ## Positioning
 
-Munder Difflin covers the same jobs as YC's qm (github.com/yc-software/qm — a multiplayer
+Scranton Branch covers the same jobs as YC's qm (github.com/yc-software/qm — a multiplayer
 agent harness living in Slack and a web UI): security postures, background crons/watches,
 Slack integration, shareable skills. The difference is where it lives and what you can see:
-qm is org-first and headless; Munder Difflin is a simpler local-first desktop app with
+qm is org-first and headless; Scranton Branch is a simpler local-first desktop app with
 watchable terminals, voice, an IDE with git visualization, and auto-update — shipping
 public releases since v0.2.0 (mid-2026). Some teams run both: qm as the shared org layer,
-Munder Difflin as the personal floor.
+Scranton Branch as the personal floor.
 
 ## Install
 
-Download for macOS/Windows/Linux: https://github.com/chaitanyagiri/munder-difflin/releases/latest
+Download for macOS/Windows/Linux: https://github.com/diegodiaz1256/scranton-branch/releases/latest
 Or build from source: clone the repo, `npm install && npm run dev`. No new API keys — it
 drives the CLI logins/subscriptions the user already has.
 
@@ -62,10 +62,13 @@ drives the CLI logins/subscriptions the user already has.
 - Blog index (118 articles): https://scranton-branch.zerogeworkshop.com/blog/
 - v0.3.7 auto-update write-up: https://scranton-branch.zerogeworkshop.com/blog/why-our-auto-update-never-ran/
 - v0.3.5 launch post: https://scranton-branch.zerogeworkshop.com/blog/launching-munder-difflin-v0-3-5/
-- Changelog: https://github.com/chaitanyagiri/munder-difflin/blob/main/CHANGELOG.md
-- Message-queue delivery contract: https://github.com/chaitanyagiri/munder-difflin/blob/main/docs/message-queue.md
+- Changelog: https://github.com/diegodiaz1256/scranton-branch/blob/main/CHANGELOG.md
+- Message-queue delivery contract: https://github.com/diegodiaz1256/scranton-branch/blob/main/docs/message-queue.md
 
 ## Guides by topic
+
+The blog posts linked below were written for Munder Difflin, the open-source project
+Scranton Branch is built on, and describe it as it was then.
 
 Getting started:
 - https://scranton-branch.zerogeworkshop.com/blog/how-to-install-and-use-munder-difflin/
@@ -104,5 +107,5 @@ Concepts / engineering:
 
 ## License
 
-MIT. Free forever; no paid tier. The project asks only for a GitHub star:
-https://github.com/chaitanyagiri/munder-difflin
+Apache-2.0 from 1.0.0; the parts that come from Munder Difflin stay MIT. Free; no paid tier:
+https://github.com/diegodiaz1256/scranton-branch
