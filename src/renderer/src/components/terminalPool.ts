@@ -39,6 +39,7 @@ import { sanitizeTerminalSelection } from './terminalSelection';
 import { detectRemoteControl, isRemoteControlConfirm, isRemoteControlMenu } from '@shared/remoteControl';
 import { isChromeLine, usageNotice } from '@shared/terminalChrome';
 import { detectMenu } from '@shared/terminalMenu';
+import { inputAreaHas, inputAreaText, showsUsageLimit } from '@shared/ptySubmit';
 import { useStore } from '@/store/store';
 import { terminalKeySequence } from './terminalKeys';
 import '@xterm/xterm/css/xterm.css';
@@ -82,6 +83,14 @@ export interface TerminalEntry {
   lineBuf: string;
   /** When the human last typed into this terminal (not the app). */
   humanAt?: number;
+  /** Like humanAt, but never consumed: the usage-limit hold reads it. */
+  humanActedAt: number;
+  /** Set when text the app typed was still on the prompt after two Enters:
+   *  a piece of that text, to tell when it has left the prompt. */
+  stuckProbe?: string;
+  /** When the bottom of the screen started showing a usage-limit stop, 0 when
+   *  it does not. */
+  limitSeenAt: number;
   /** Bumped every time this pty is respawned under the same id. Late events from
    * the OLD process carry the generation they were registered under, so they can
    * be recognised and dropped instead of corrupting the replacement. */
@@ -198,6 +207,8 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
     inputDirtyAt: 0,
     automationSettleUntil: 0,
     lineBuf: '',
+    humanActedAt: 0,
+    limitSeenAt: 0,
     generation: 0
   };
 
@@ -213,7 +224,12 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
     const buf = term.buffer.active;
     const lines: string[] = [];
     for (let i = Math.max(0, buf.length - 24); i < buf.length; i++) lines.push(buf.getLine(i)?.translateToString(true) ?? '');
-    useStore.getState().setTerminalMenu(ptyId, detectMenu(lines.join('\n')));
+    const bottom = lines.join('\n');
+    useStore.getState().setTerminalMenu(ptyId, detectMenu(bottom));
+    // A usage-limit stop on screen (see terminalShowsUsageLimit). Stamped when
+    // it first shows, so a human act after that moment releases the hold.
+    if (!showsUsageLimit(bottom)) entry.limitSeenAt = 0;
+    else if (!entry.limitSeenAt) entry.limitSeenAt = Date.now();
   };
   entry.unsub.push(() => { if (menuTimer) clearTimeout(menuTimer); useStore.getState().setTerminalMenu(ptyId, null); });
   entry.unsub.push(window.cth.onPtyData(ptyId, (rawChunk) => {
@@ -414,7 +430,13 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
     if (entry.exited) return;
     window.cth.writePty(ptyId, data);
     // Keystrokes here are the human's own: the next prompt is theirs (Inbox).
-    if (/[^\x00-\x1f\x7f]|\r/.test(data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ''))) entry.humanAt = Date.now();
+    if (/[^\x00-\x1f\x7f]|\r/.test(data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ''))) {
+      entry.humanAt = Date.now();
+      entry.humanActedAt = entry.humanAt;
+      // The human is at this prompt now: whatever the app left stuck on it is
+      // theirs to send, edit or delete, and their own draft rules take over.
+      entry.stuckProbe = undefined;
+    }
     // A lone Escape or Ctrl-C closes interactive pickers. Arrow-key escape
     // sequences must NOT clear the block while the user navigates a picker.
     if (data === '\x1b' || data === '\x03') {
@@ -534,6 +556,65 @@ export function isTerminalAutomationSafe(ptyId: string, now = Date.now()): boole
   return canAutomateTerminal(automationStateOf(entry, now), now);
 }
 
+/** Is `probe` in the TUI's input area right now (the cursor row and the rows
+ *  above it inside the input box)? null when the screen cannot tell: no pooled
+ *  terminal, or the process has exited. Read from the pooled xterm, which keeps
+ *  buffering while no view shows it. */
+export function terminalInputHas(ptyId: string, probe: string): boolean | null {
+  const entry = pool.get(ptyId);
+  if (!entry || entry.exited) return null;
+  try {
+    const buf = entry.term.buffer.active;
+    const cursor = buf.baseY + buf.cursorY;
+    const from = Math.max(0, cursor - 20);
+    const rows: string[] = [];
+    for (let y = from; y <= cursor; y++) rows.push(buf.getLine(y)?.translateToString(true) ?? '');
+    return inputAreaHas(inputAreaText(rows, cursor - from), probe);
+  } catch {
+    return null;
+  }
+}
+
+/** Text the app typed did not go through: latch the terminal so nothing more
+ *  is typed onto that line (see TerminalAutomationState.submitStuck). */
+export function markSubmitStuck(ptyId: string, probe: string): void {
+  const entry = pool.get(ptyId);
+  if (entry && probe) entry.stuckProbe = probe;
+}
+
+/** Is the app's stuck text still on this terminal's prompt? Clears the latch
+ *  once the screen shows it gone (sent or deleted some way we did not see). */
+function submitStillStuck(entry: TerminalEntry): boolean {
+  if (!entry.stuckProbe) return false;
+  if (terminalInputHas(entry.ptyId, entry.stuckProbe) === false) entry.stuckProbe = undefined;
+  return !!entry.stuckProbe;
+}
+
+/** submitStillStuck by pty id, for the submit chain's last check before typing. */
+export function terminalSubmitStuck(ptyId: string): boolean {
+  const entry = pool.get(ptyId);
+  return !!entry && submitStillStuck(entry);
+}
+
+/** Is this terminal stopped on a usage limit the human has not acted on since?
+ *  Claude Code prints "You've hit your session limit", "Usage limit reached ·
+ *  continuing automatically at …" or "Automatic continue cancelled ·
+ *  /rate-limit-options to re-arm"; what is typed at it then just sits on the
+ *  prompt. The hold lifts when the notice leaves the bottom of the screen (the
+ *  CLI carried on) or the human types in that terminal or sends it a message. */
+export function terminalShowsUsageLimit(ptyId: string | undefined): boolean {
+  const entry = ptyId ? pool.get(ptyId) : undefined;
+  if (!entry || !entry.limitSeenAt) return false;
+  return entry.humanActedAt < entry.limitSeenAt;
+}
+
+/** The human sent this terminal a message (the composer): that is acting on it,
+ *  as much as typing in it is. */
+export function noteHumanMessage(ptyId: string): void {
+  const entry = pool.get(ptyId);
+  if (entry) entry.humanActedAt = Date.now();
+}
+
 /** Characters a TUI paints around its input line that are not the user's text:
  *  the box the prompt sits in and the prompt marker itself. */
 const PROMPT_CHROME = /[─-╿\s>❯$#|]/g;
@@ -591,6 +672,7 @@ export function hasTerminalDraft(ptyId: string | undefined, now = Date.now()): b
   if (!ptyId) return false;
   const entry = pool.get(ptyId);
   if (!entry) return false;
+  if (submitStillStuck(entry)) return true; // unsent text on the prompt, ours or not
   return entry.inputDirty && promptLineHasText(entry, now) !== false;
 }
 
@@ -620,7 +702,8 @@ function automationStateOf(entry: TerminalEntry, now = Date.now()) {
     pickerOpenedAt: entry.automationBlocked ? entry.automationBlockedAt : undefined,
     inputDirty,
     inputDirtyAt: inputDirty ? entry.inputDirtyAt : undefined,
-    settleUntil: entry.automationSettleUntil
+    settleUntil: entry.automationSettleUntil,
+    submitStuck: submitStillStuck(entry)
   };
 }
 
@@ -901,6 +984,8 @@ export function resetTerminal(
   entry.lineBuf = '';
   entry.automationBlocked = false;
   entry.automationBlockedAt = 0;
+  entry.stuckProbe = undefined;
+  entry.limitSeenAt = 0;
   try {
     if (opts.preserveScrollback) {
       entry.term.writeln('\r\n\x1b[2m─ resuming existing session ─\x1b[0m');

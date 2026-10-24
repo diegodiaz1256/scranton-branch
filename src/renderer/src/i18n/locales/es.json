@@ -1495,6 +1495,8 @@
     "heldDraft": "retenido: la terminal de {{name}} tiene texto sin enviar en su prompt",
     "heldPicker": "retenido: hay un selector de comandos abierto en la terminal de {{name}}",
     "heldExited": "retenido: la terminal de {{name}} se ha cerrado",
+    "heldStuck": "atascado: un mensaje en el prompt de {{name}} no se envió; pulsa Intro en la terminal",
+    "heldLimit": "retenido: {{name}} está parado por un límite de uso; los avisos de bandeja esperan a que actúes en su terminal",
     "sendingOneByOne": "enviando a {{name}} uno a uno…",
     "pausedTitle": "La entrega automática está en pausa en toda la planta. Reanúdala en el Centro de mando, o usa «enviar ya» en un mensaje de abajo.",
     "dropToAttach": "SUELTA PARA ADJUNTAR",

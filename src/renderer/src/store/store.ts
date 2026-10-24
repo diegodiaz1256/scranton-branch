@@ -18,7 +18,7 @@ import {
 import { DEFAULT_ORG_TRIGGER, type OrgTriggerConfig, type WebhookTrigger } from '@shared/triggers';
 import { isCompactionCommand } from '@shared/providerAutomation';
 import { preferredAgentRole } from '@shared/agentRole';
-import { isInboxNudge } from '@shared/hiveNudge';
+import { isInboxNudge, queueInsertIndex } from '@shared/hiveNudge';
 import { refocusAfterRemoval, focusOnLoad, restoreFocus } from './focusMode';
 import { chooseRosterSource } from './rosterSource';
 
@@ -972,7 +972,11 @@ export const useStore = create<State>((set, get) => ({
         ...(meta?.precondition ? { precondition: meta.precondition } : {}),
         ...(meta?.compactUsed !== undefined ? { compactUsed: meta.compactUsed } : {})
       };
-      const messageQueues = { ...s.messageQueues, [agentId]: [...(s.messageQueues[agentId] ?? []), msg] };
+      // A person's message goes ahead of a pending inbox nudge (queueInsertIndex).
+      const automatic = isInboxNudge(trimmed) || isCompactionCommand(trimmed) || !!meta?.precondition;
+      const at = queueInsertIndex(queued, automatic);
+      const nextQueue = [...queued.slice(0, at), msg, ...queued.slice(at)];
+      const messageQueues = { ...s.messageQueues, [agentId]: nextQueue };
       persistQueues(messageQueues);
       return { messageQueues };
     }),
