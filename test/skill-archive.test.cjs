@@ -19,7 +19,7 @@ const loadTs = require('./load-ts.cjs');
 
 const {
   safeRelPath, indexArchive, listArchiveDir, planArchiveSkill, extractArchiveSkill,
-  overLimitMessage, restoreExecBits, stagingDir, commitStaging
+  overLimitMessage, restoreExecBits, stagingDir, commitStaging, copySkillTreeSync
 } = loadTs('src/main/skillArchive.ts');
 const { resolveRepoRootSkillDir, installSkillFromFolder, SKILL_LIMITS } = loadTs('src/main/skills.ts');
 
@@ -215,6 +215,27 @@ test('on a WSL floor the executable bits are set inside the distro', { skip: pro
   await restoreExecBits('C:\\Users\\me\\.claude\\skills\\demo', ['run.sh'], run);
   await restoreExecBits('\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude\\skills\\demo', [], run);
   assert.equal(calls.length, 0, 'a Windows folder has no bit to set, and nothing to mark means no wsl.exe call');
+});
+
+test('an agent\'s skill copy (bundled and office skills) names the scripts to mark executable', (t) => {
+  const tmp = tmpdir(t);
+  const src = path.join(tmp, 'store', 'my skill');
+  fs.mkdirSync(path.join(src, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'empty'));
+  fs.writeFileSync(path.join(src, 'SKILL.md'), SKILL_MD);
+  fs.writeFileSync(path.join(src, 'scripts', 'run.sh'), '#!/bin/sh\necho hi\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(src, 'scripts', 'data.txt'), 'plain');
+  const dest = path.join(tmp, 'agent', '.claude', 'skills', 'my skill');
+  const scripts = copySkillTreeSync(src, dest);
+  assert.equal(fs.readFileSync(path.join(dest, 'scripts', 'run.sh'), 'utf8'), '#!/bin/sh\necho hi\n');
+  assert.ok(fs.existsSync(path.join(dest, 'scripts', 'data.txt')));
+  assert.ok(!fs.existsSync(path.join(dest, 'empty')), 'an empty folder is left out, as before');
+  if (process.platform === 'win32') {
+    assert.deepEqual(scripts, ['scripts/run.sh'], 'NTFS has no mode: a #! line is the sign');
+  } else {
+    assert.deepEqual(scripts, [], 'the mode was copied with the file');
+    assert.ok(fs.statSync(path.join(dest, 'scripts', 'run.sh')).mode & 0o111);
+  }
 });
 
 test('a local folder installs under its SKILL.md name, links skipped', async (t) => {

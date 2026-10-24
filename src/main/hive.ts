@@ -57,6 +57,7 @@ import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
 import type { GuardPolicy } from '../shared/toolGuard';
 import { MD_SKILLS } from './skillsCli';
+import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
 import { MD_BROWSE } from './browseCli';
 import { BROKER_CLIENT_JS } from './brokerClient';
@@ -2136,18 +2137,10 @@ export class HiveManager {
   private copyBundledSkills(srcDir: string, destDir: string): void {
     try {
       if (!existsSync(srcDir)) return;
-      const copyTree = (from: string, to: string): void => {
-        const entries = readdirSync(from, { withFileTypes: true });
-        if (!entries.length) return;
-        mkdirSync(to, { recursive: true });
-        for (const ent of entries) {
-          const s = join(from, ent.name);
-          const d = join(to, ent.name);
-          if (ent.isDirectory()) copyTree(s, d);
-          else if (ent.isFile()) copyFileSync(s, d);
-        }
-      };
-      copyTree(srcDir, destDir);
+      const scripts = copySkillTreeSync(srcDir, destDir);
+      // On a WSL floor the copy through \\wsl.localhost lands 0644: mark the
+      // scripts executable inside the distro (a no-op anywhere else).
+      void restoreExecBits(destDir, scripts).catch((e) => console.error('[hive] could not mark skill scripts executable:', e));
     } catch (e) { console.error('[hive] copyBundledSkills failed:', e); }
   }
 
