@@ -174,7 +174,9 @@ when it arrives.`
     when: 'who is doing what, live state, costs',
     body: `- \`fleet.json\` — refreshed continuously: each agent's tokens, cost, status, breaker level, last tool,
   last-active time and inbox backlog. Your source of truth for the floor.
-- \`registry.json\` — the roster; \`log.jsonl\` — the event feed.
+- \`registry.json\` — the roster; \`log.jsonl\` — the event feed. An archived entry with
+  \`supersededBy\` is an old copy of a live agent with the same name: use that id. Mail to an archived
+  id goes to its one live namesake (you are told the live id), or is filed and you are told who is around.
 - One agent in depth: its \`agents/<id>/memory.md\` and \`inbox/\`, or send it a \`query\`.
 
 \`claude agents\` does NOT list the office's agents: they are started by the app, not by you.
