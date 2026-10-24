@@ -1663,6 +1663,17 @@ const api = {
   /** Ask the custodian for a full, unredacted report: filed in the vault, written back into it. */
   criticalRequestReport: (kind: 'mcp' | 'api', id: string, text: string): Promise<{ ok: boolean; file?: string; error?: string }> =>
     ipcRenderer.invoke('critical:requestReport', kind, id, text),
+  /** What custodians want to send out, held for the human's sign-off (already redacted). */
+  criticalPendingList: (): Promise<Array<{ id: string; kind: 'message' | 'deliverable'; from: string; fromName: string; createdAt: number; to?: string; act?: string; file?: string; subject?: string; text: string; redactions: Record<string, number> }>> =>
+    ipcRenderer.invoke('critical:pendingList'),
+  /** Approve (as is, or with the human's edits) or reject (with a reason the custodian gets). */
+  criticalDecide: (id: string, decision: { action: 'approve'; text?: string; subject?: string } | { action: 'reject'; reason: string }): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('critical:decide', id, decision),
+  onCriticalPending: (cb: (e: { count: number }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { count: number }) => cb(payload);
+    ipcRenderer.on('critical:pending', listener);
+    return () => ipcRenderer.removeListener('critical:pending', listener);
+  },
   // Team: paired installs, sealed end to end over a public relay. Private keys
   // never leave main; this surface sees names, status and the conversation.
   teamStatus: (): Promise<TeamStatusView> => ipcRenderer.invoke('team:status'),

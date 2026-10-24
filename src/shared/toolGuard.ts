@@ -37,6 +37,9 @@ export interface GuardPolicy {
    *  another agent's confidential vault (criticalConnections.ts). Any tool
    *  call or command that names a path in one is refused. */
   deny?: string[];
+  /** Said instead of the usual "you work in…" when a write is refused (a
+   *  custodian is told how its things leave: through the human's sign-off). */
+  fenceHint?: string;
 }
 
 export interface GuardVerdict { deny: true; reason: string }
@@ -312,8 +315,9 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
     const hit = deniedPath(tool, inp, policy, home);
     if (hit) return { deny: true, reason: `Refused: ${hit} is confidential material only its custodian agent and the human may open. Ask the custodian through the hive (your outbox) for what you need.` };
   }
-  const fenceReason = (p: string) =>
-    `Refused: ${p} is outside your folders. You work in ${policy.cwd} (and your hive folder); if the job needs another place, say so to the orchestrator or the human.`;
+  const fenceReason = (p: string) => (policy.fenceHint
+    ? `Refused: ${p} is outside your folders. ${policy.fenceHint}`
+    : `Refused: ${p} is outside your folders. You work in ${policy.cwd} (and your hive folder); if the job needs another place, say so to the orchestrator or the human.`);
 
   // Files a tool writes, in every CLI's spelling (Write/Edit, write_to_file,
   // apply_patch...): the same reading the Deliverables use.

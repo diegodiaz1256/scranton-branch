@@ -2197,6 +2197,27 @@
       "apiAccessBody": "The most any agent can do with each API, and which agents get it. A role can lower it, never raise it. The app checks every request.",
       "apiReadMeans": "Read-only: GET requests and searches (Jira JQL, Notion search, GraphQL queries). Anything that would change data is refused."
     },
+    "signoff": {
+      "title_one": "Waiting for your sign-off ({{count}})",
+      "title_other": "Waiting for your sign-off ({{count}})",
+      "body": "Custodians of critical connections cannot send anything out on their own. This is what they want to send, already redacted by the app: approve it, edit it first, or reject it with a reason they will read.",
+      "toAgent": "message to {{to}}",
+      "toResearch": "file for the deliverables: research/{{file}}",
+      "redacted": "The app redacted: {{what}}.",
+      "nothingRedacted": "The app found nothing to redact.",
+      "approve": "Approve and send",
+      "approveEdited": "Send my version",
+      "edit": "Edit",
+      "reject": "Reject",
+      "rejectSend": "Reject with this reason",
+      "reasonPlaceholder": "Why not (the custodian reads this)",
+      "kind_email": "email(s)",
+      "kind_phone": "phone number(s)",
+      "kind_secret": "credential(s)",
+      "kind_url": "link(s)",
+      "kind_name": "name(s)",
+      "kind_quote": "long quote(s)"
+    },
     "env": {
       "step1": "Plain variables reach every agent",
       "step1Body": "NODE_ENV, API_BASE_URL… anything that is not secret. Agents see these in their environment, like any other variable.",

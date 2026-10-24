@@ -7,6 +7,7 @@ import { MarkdownPreview } from '@/markdown/MarkdownPreview';
 import { waitsOnHuman } from '@/components/TasksKanban';
 import { Avatar, usePoll, type KeyedTask } from './data';
 import { ConversationsView } from './ConversationsView';
+import { SignoffQueue, usePendingCount } from './SignoffQueue';
 
 type Tab = 'chats' | 'you' | 'everyone' | 'outside';
 type Message = Awaited<ReturnType<typeof window.cth.hiveMessages>>[number];
@@ -47,7 +48,7 @@ export function InboxView({ tasks }: { tasks: KeyedTask[] }) {
     direction: 'outbox' as const, owner: p.agentId, archived: true, created_at: p.ts
   })), [prompts]);
   const byId = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
-  const asks = tasks.filter(waitsOnHuman).length;
+  const asks = tasks.filter(waitsOnHuman).length + usePendingCount();
 
   const real = messages.filter((m) => !SYSTEM.has(m.from));
   const forYou = real.filter((m) => m.to === 'human');
@@ -86,6 +87,7 @@ export function InboxView({ tasks }: { tasks: KeyedTask[] }) {
 
       {tab === 'you' && (
         <>
+          <SignoffQueue />
           <div className="pro-embed" style={{ minHeight: 280 }}><AskMeTab /></div>
           {forYou.length > 0 && <h3 style={{ margin: '8px 0 0', fontSize: 14 }}>{t('pro.inbox.addressedToYou')}</h3>}
           {forYou.length > 0 && list(forYou)}

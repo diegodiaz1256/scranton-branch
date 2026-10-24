@@ -125,6 +125,8 @@ button.pro-card:hover { border-color: var(--pro-line-strong); }
 .pro-badge-god { background: var(--cth-lemon-light); box-shadow: inset 0 0 0 1px var(--cth-lemon); color: var(--cth-ink-900); font-weight: 600; }
 /* A critical connection, and its custodian agent (criticalConnections.ts). */
 .pro-badge-critical { background: var(--cth-coral-light); box-shadow: inset 0 0 0 1px var(--cth-coral); color: var(--cth-ink-900); font-weight: 600; }
+/* What the app redacted in a custodian's held mail (SignoffQueue). */
+.pro-redacted { background: var(--cth-coral-light); color: var(--cth-ink-900); box-shadow: inset 0 0 0 1px var(--cth-coral); border-radius: 3px; padding: 0 2px; }
 .pro-badge-god-sub { font-weight: 400; color: var(--cth-ink-700); }
 .pro-god-star { color: var(--cth-lemon); font-size: 13px; line-height: 1; }
 /* Tasks board: the column a card is dragged over, and the "subtasks too?" dialog. */
