@@ -27,7 +27,10 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { hardKillTree } from './procKill';
 import { filterTools, isReadTool, type Access } from '../shared/connectionAccess';
 
@@ -36,6 +39,9 @@ export interface McpLaunchSpec {
   args: string[];
   /** Merged over the gateway's own environment. Holds the credentials. */
   env: Record<string, string>;
+  /** uv dependency overrides (requirement lines): written to a file the
+   *  server's uvx reads through UV_OVERRIDE. No secrets, so a temp file. */
+  uvOverrides?: string[];
 }
 
 /** A remote (streamable-HTTP) server the gateway calls on the agent's behalf. */
@@ -114,6 +120,19 @@ function rpcError(id: unknown, code: number, message: string): Record<string, un
 /** Windows runs npx/uvx shims through cmd.exe, which takes one command line. */
 function quoteWin(a: string): string {
   return /[\s"&|<>^()%!]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a;
+}
+
+/** UV_OVERRIDE pointing at a file with these requirement lines, or nothing. */
+export function uvOverrideEnv(lines: string[] | undefined): Record<string, string> {
+  if (!lines?.length) return {};
+  const text = lines.join('\n') + '\n';
+  const dir = join(tmpdir(), 'munder-uv-overrides');
+  const file = join(dir, `${createHash('sha256').update(text).digest('hex').slice(0, 16)}.txt`);
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, text, 'utf8');
+  } catch { return {}; }
+  return { UV_OVERRIDE: file };
 }
 
 export class McpGateway {
@@ -282,12 +301,13 @@ export class McpGateway {
       this.sessions.set(key, r);
       return r;
     }
+    const env = { ...process.env, ...spec.env, ...uvOverrideEnv(spec.uvOverrides) };
     const win = process.platform === 'win32';
     const proc = win
-      ? spawn([spec.command, ...spec.args].map(quoteWin).join(' '), { shell: true, windowsHide: true, env: { ...process.env, ...spec.env }, stdio: ['pipe', 'pipe', 'pipe'] })
+      ? spawn([spec.command, ...spec.args].map(quoteWin).join(' '), { shell: true, windowsHide: true, env, stdio: ['pipe', 'pipe', 'pipe'] })
       // Own process group, so endSession can take down the whole tree (npx
       // starts the real server as a grandchild).
-      : spawn(spec.command, spec.args, { env: { ...process.env, ...spec.env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+      : spawn(spec.command, spec.args, { env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     const s: StdioSession = { kind: 'stdio', proc, buf: '', pending: new Map(), initialized: false, stderrTail: '', annotations: new Map() };
     proc.stdout?.setEncoding('utf8');
     proc.stdout?.on('data', (d: string) => this.read(s, d));
