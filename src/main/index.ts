@@ -95,6 +95,7 @@ import { addConnection, connectionAccessFor, setConnectionAccess, connectionKeyS
 import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
+import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, heldIds, isCritical, isCustodian, setCritical, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
 import { BrowseCache, browseChars, browseMode, formatBrowsed, formatSearch } from '../shared/browsePage';
 
 /** Pages agents read, kept 10 minutes for their next pages (browsePage.ts). */
@@ -432,7 +433,9 @@ hookServer.notifyAs = (agentId) => ({
 });
 const memory = new MemoryManager(
   () => readConfig().harnessHome,
-  () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; }
+  () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; },
+  // A custodian's memory stays out of the shared palace (criticalConnections.ts).
+  (id) => isCustodian(criticalMap(), id)
 );
 // Enterprise Knowledge Graph — file-backed store + agent CLI (default OFF).
 const knowledge = new KnowledgeManager();
@@ -528,7 +531,12 @@ function workerByPty(ptyId: string): WorkerRec | undefined {
 const mcpCalls: McpCallRecord[] = [];
 const mcpGateway = new McpGateway({
   serviceOf: (id) => serviceOf(id),
-  onCall: (e) => { mcpCalls.push(e); if (mcpCalls.length > 1000) mcpCalls.splice(0, mcpCalls.length - 1000); },
+  onCall: (e) => {
+    mcpCalls.push(e); if (mcpCalls.length > 1000) mcpCalls.splice(0, mcpCalls.length - 1000);
+    if (isCritical(criticalMap(), 'mcp', e.serverId)) criticalAudit({ ts: e.ts, kind: 'mcp', id: e.serverId, agentId: e.agentId, call: e.tool, allowed: e.allowed, ok: e.ok });
+  },
+  // Critical connections: the custodian only, on every call (criticalConnections.ts).
+  refuse: (agentId, serverId) => criticalRefusalFor('mcp', serverId, agentId),
   resolveSpec: (serverId) => {
     if (serverId.startsWith('custom--')) {
       const remote = mcpServers.remoteSpec(serverId);
@@ -695,6 +703,11 @@ const integrationBroker = new IntegrationBroker({
   // so an agent started a moment too early never got it (issue: Jira 403).
   live: (agentId) => apisFor(agentId),
   whyNot: (agentId, id) => apiDenyReason(agentId, id),
+  // Critical APIs: the custodian only, on every request, whatever was granted.
+  refuse: (agentId, id) => criticalRefusalFor('api', id, agentId),
+  onRequest: (e) => {
+    if (isCritical(criticalMap(), 'api', e.integrationId)) criticalAudit({ ts: e.ts, kind: 'api', id: e.integrationId, agentId: e.agentId ?? `worker:${e.workerId}`, call: `${e.method} ${e.path}`, allowed: e.allowed });
+  },
   runners: {
     describe: () => envVault.describeRunners(),
     secretNames: () => envVault.secretNames(),
@@ -722,7 +735,7 @@ const integrationBroker = new IntegrationBroker({
   // The office browser (browser.ts). Web switched off for an agent in
   // Capabilities closes this too, checked here as well as in its MCP list.
   browser: {
-    blocked: (agentId) => (agentId && cleanToolBlocks(readConfig().agentToolBlocks?.[agentId]).includes('web')
+    blocked: (agentId) => (agentId && toolBlocksFor(agentId).includes('web')
       ? 'Web is switched off for this agent (Capabilities), so the office browser is too.'
       : null),
     browse: async (url, o) => {
@@ -3927,7 +3940,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     const connCfg = readConfig();
     const connectionsForAgent: PromptConnection[] = provider === 'claude'
       ? (() => {
-          const ids = new Set(hive.keyedConnectionsFor(connCfg.mcpDefaults, connCfg.agentMcpGrants?.[opts.hive!.id], opts.hive!.id, connCfg.connectionScopes, connCfg.agentToolBlocks?.[opts.hive!.id]));
+          const ids = new Set(hive.keyedConnectionsFor(connCfg.mcpDefaults, connCfg.agentMcpGrants?.[opts.hive!.id], opts.hive!.id, connCfg.connectionScopes, toolBlocksFor(opts.hive!.id)));
           return listConnections().filter((c) => ids.has(c.id)).map((c) => ({ id: c.id, label: c.label, serviceLabel: c.serviceLabel, description: c.description, examples: c.examples, access: connectionAccessFor(opts.hive!.id, c.id) === 'readwrite' ? 'readwrite' as const : 'read' as const }));
         })()
       : [];
@@ -3967,7 +3980,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           // W3 — default-MCP consent state + the bundled skills source dir.
           mcpDefaults: readConfig().mcpDefaults,
           mcpGrant: readConfig().agentMcpGrants?.[opts.hive.id],
-          toolBlocks: readConfig().agentToolBlocks?.[opts.hive.id],
+          toolBlocks: toolBlocksFor(opts.hive.id),
+          critical: criticalLabelsFor(opts.hive.id, provider),
           mcpScopes: readConfig().connectionScopes,
           mcpOnlyManaged: readConfig().mcpOnlyManaged !== false,
           skillsDir: skillsResourceDir(),
@@ -4247,7 +4261,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // remote servers: only a capability token, never the key. Same list the
       // agent's prompt names (hive.keyedConnectionsFor).
       if (mcpGateway.running()) {
-        const ids = hive.keyedConnectionsFor(cfg.mcpDefaults, cfg.agentMcpGrants?.[opts.hive.id], opts.hive.id, cfg.connectionScopes, cfg.agentToolBlocks?.[opts.hive.id]);
+        const ids = hive.keyedConnectionsFor(cfg.mcpDefaults, cfg.agentMcpGrants?.[opts.hive.id], opts.hive.id, cfg.connectionScopes, toolBlocksFor(opts.hive.id));
         if (ids.length) {
           const token = mcpGateway.grant(opts.hive.id, ids, hive.mcpAccessMap(opts.hive.id, ids));
           oc.mcp = Object.fromEntries(ids.map((id) => [`munder-${id}`, {
@@ -4452,6 +4466,7 @@ ipcMain.handle('integrations:setSecret', (_evt, payload: unknown) => {
 ipcMain.handle('integrations:remove', (_evt, payload: unknown) => {
   const p = (payload ?? {}) as { id?: unknown };
   if (typeof p.id !== 'string' || !p.id) return { ok: false, error: 'id required' };
+  writeConfig({ criticalCustodians: setCritical(criticalMap(), 'api', p.id, false) });
   return integrations.removeRecord(p.id);
 });
 // ─── IPC: per-CLI-provider BYOK keys (write-only) ────────────────────────────
@@ -4639,6 +4654,7 @@ hive.setMemoryMcp(() => memory.mcpServer());
 hive.setCustomMcp((agentId) => mcpServers.forAgent(agentId));
 hive.setMcpInstances(instancesOf);
 hive.setMcpAccess(connectionAccessFor);
+hive.setCritical(criticalMap);
 hive.setMcpGateway((agentId, serverIds, access) =>
   mcpGateway.running() ? { url: mcpGateway.url(), token: mcpGateway.grant(agentId, serverIds, access) } : null);
 ipcMain.handle('connections:list', () => listConnections());
@@ -4753,7 +4769,7 @@ ipcMain.handle('mcp:overview', () => {
   // but get nothing: listing them showed every re-hire as a duplicate.
   return Object.values(hive.registry().agents).filter((a) => a.status !== 'gone' && !a.isAssistant && !(a as { archived?: boolean }).archived).map((a) => ({
     agentId: a.id, name: a.name, provider: a.provider ?? 'claude',
-    servers: hive.managedMcpFor(a.id, a.cwd, cfg.mcpDefaults, cfg.agentMcpGrants?.[a.id], cfg.connectionScopes, cfg.agentToolBlocks?.[a.id])
+    servers: hive.managedMcpFor(a.id, a.cwd, cfg.mcpDefaults, cfg.agentMcpGrants?.[a.id], cfg.connectionScopes, toolBlocksFor(a.id))
   }));
 });
 ipcMain.handle('mcp:list', () => ({ mine: mcpServers.listCustom(), found: mcpServers.scanForUi() }));
@@ -4781,7 +4797,10 @@ ipcMain.handle('mcp:setAgents', (_evt, id: unknown, agents: unknown) => {
   if (typeof id === 'string') mcpServers.setAgents(id, Array.isArray(agents) ? agents.filter((x): x is string => typeof x === 'string') : null);
   return { ok: true };
 });
-ipcMain.handle('mcp:remove', (_evt, id: unknown) => { if (typeof id === 'string') mcpServers.remove(id); return { ok: true }; });
+ipcMain.handle('mcp:remove', (_evt, id: unknown) => {
+  if (typeof id === 'string') { mcpServers.remove(id); writeConfig({ criticalCustodians: setCritical(criticalMap(), 'mcp', id, false) }); }
+  return { ok: true };
+});
 
 ipcMain.handle('factories:list', () => factories.list());
 ipcMain.handle('factories:add', (_evt, arg: unknown) => {
@@ -4800,7 +4819,11 @@ ipcMain.handle('factories:call', async (_evt, id: unknown, tool: unknown, args: 
   try { return { ok: true, result: typeof id === 'string' ? await factories.call(id, tool, args, confirmed === true) : null }; } catch (e) { return factoryError(e); }
 });
 ipcMain.handle('connections:rename', (_evt, id: unknown, label: unknown) => renameConnection(id, label));
-ipcMain.handle('connections:remove', (_evt, id: unknown) => removeConnection(id));
+ipcMain.handle('connections:remove', (_evt, id: unknown) => {
+  const r = removeConnection(id);
+  if (r.ok && typeof id === 'string') writeConfig({ criticalCustodians: setCritical(criticalMap(), 'mcp', id, false) });
+  return r;
+});
 // Pro Capabilities: the user's own role bundles, validated (shared/roleBundles).
 ipcMain.handle('config:saveRoleBundles', (_evt, bundles: unknown) => {
   const clean = cleanCustomBundles(bundles);
@@ -4819,8 +4842,9 @@ ipcMain.handle('connections:agents', (_evt, id: unknown) => {
     const provider = a.provider ?? 'claude';
     const r = explainConnection(a.id, {
       service: conn.service, enabled: conn.enabled, ready: conn.ready, scope: conn.scope,
-      grant: cfg.agentMcpGrants?.[a.id], webBlocked: blockedMcpServers(cfg.agentToolBlocks?.[a.id]).has(conn.service),
-      ceiling: cfg.connectionPolicy?.[id], record: cfg.agentMcpAccess?.[a.id], mcpCapable: provider === 'claude'
+      grant: cfg.agentMcpGrants?.[a.id], webBlocked: blockedMcpServers(toolBlocksFor(a.id)).has(conn.service),
+      ceiling: cfg.connectionPolicy?.[id], record: cfg.agentMcpAccess?.[a.id], mcpCapable: provider === 'claude',
+      custodian: custodianOf(criticalMap(), 'mcp', id)
     });
     return { agentId: a.id, name: a.name, ...r };
   });
@@ -5182,13 +5206,113 @@ ipcMain.handle('hive:setAgentHold', (_evt, id: unknown, hold: unknown) => {
 });
 ipcMain.handle('hive:board', () => hive.board());
 ipcMain.handle('hive:tasks', () => hive.tasks());
+// ─── Critical connections (shared/criticalConnections.ts) ───────────────────
+// One custodian agent per critical connection or REST API. Everyone else is
+// left out at spawn AND refused by the gateway / broker on every call.
+
+function criticalMap(): CriticalMap {
+  return cleanCriticalMap(readConfig().criticalCustodians);
+}
+
+function agentProviderOf(agentId: string | undefined): string | undefined {
+  if (!agentId || !hive.enabled()) return undefined;
+  return hive.registry().agents?.[agentId]?.provider ?? 'claude';
+}
+
+function criticalLabel(kind: CriticalKind, id: string): string {
+  if (kind === 'api') return integrations.getRecord(id)?.label ?? id;
+  if (id.startsWith('custom--')) return (readConfig().customMcp ?? []).find((c) => c.id === id)?.name ?? id;
+  return listConnections().find((c) => c.id === id)?.label ?? id;
+}
+
+/** Why this agent may not use a critical connection right now, or null (not
+ *  critical, or it is the custodian, on an engine that qualifies). */
+function criticalRefusalFor(kind: CriticalKind, id: string, agentId: string | undefined): string | null {
+  const map = criticalMap();
+  const custodian = custodianOf(map, kind, id);
+  if (custodian === undefined) return null;
+  const reg = custodian && hive.enabled() ? hive.registry().agents?.[custodian] : undefined;
+  const name = reg ? reg.name : undefined;
+  if (!criticalAllows(map, kind, id, agentId)) return criticalRefusal(criticalLabel(kind, id), name);
+  // The custodian itself, on an engine the app cannot lock down: refused too.
+  if (!canBeCustodian(agentProviderOf(agentId))) return `${criticalLabel(kind, id)} is a critical connection, and only a Claude Code agent can hold one. Ask the human to choose a Claude Code custodian under Connections.`;
+  return null;
+}
+
+/** The tool groups taken from an agent: what Capabilities says, plus Web for
+ *  the custodian of a critical connection (always, so its data cannot be
+ *  posted to the open web). */
+function toolBlocksFor(agentId: string): string[] {
+  const blocks = cleanToolBlocks(readConfig().agentToolBlocks?.[agentId]);
+  if (isCustodian(criticalMap(), agentId) && !blocks.includes('web')) blocks.push('web');
+  return blocks;
+}
+
+/** The names of the critical connections an agent holds, for its prompt. */
+function criticalLabelsFor(agentId: string, provider: string | undefined): string[] {
+  if (!canBeCustodian(provider)) return [];
+  const map = criticalMap();
+  return [...heldIds(map, agentId, 'mcp').map((id) => criticalLabel('mcp', id)), ...heldIds(map, agentId, 'api').map((id) => criticalLabel('api', id))];
+}
+
+/** Audit of every call to a critical connection: who, what, when, allowed.
+ *  Never arguments, queries or bodies. Kept in the app's own folder, outside
+ *  the hive (agents are not given it). */
+interface CriticalAuditEntry { ts: number; kind: CriticalKind; id: string; agentId: string; call: string; allowed: boolean; ok?: boolean }
+function criticalAuditPath(): string { return join(app.getPath('userData'), 'critical-audit.jsonl'); }
+function criticalAudit(e: CriticalAuditEntry): void {
+  try {
+    const name = hive.enabled() ? hive.registry().agents?.[e.agentId]?.name : undefined;
+    appendFileSync(criticalAuditPath(), JSON.stringify({ time: new Date(e.ts).toISOString(), ...e, ...(name ? { agentName: name } : {}) }) + '\n', { encoding: 'utf8', mode: 0o600 });
+  } catch (err) { console.error('[critical] audit write failed:', err); }
+}
+function readCriticalAudit(kind: CriticalKind, id: string, limit = 100): Array<CriticalAuditEntry & { time: string; agentName?: string }> {
+  let text = '';
+  try { text = readFileSync(criticalAuditPath(), 'utf8'); } catch { return []; }
+  const out: Array<CriticalAuditEntry & { time: string; agentName?: string }> = [];
+  for (const line of text.split('\n').reverse()) {
+    if (out.length >= limit) break;
+    if (!line.trim()) continue;
+    try { const e = JSON.parse(line); if (e.kind === kind && e.id === id) out.push(e); } catch { /* torn line */ }
+  }
+  return out;
+}
+
+ipcMain.handle('critical:set', (_evt, kind: unknown, id: unknown, critical: unknown, custodian: unknown) => {
+  if ((kind !== 'mcp' && kind !== 'api') || typeof id !== 'string' || !id) return { ok: false, error: 'bad request' };
+  const known = kind === 'api' ? !!integrations.getRecord(id) : (id.startsWith('custom--') ? (readConfig().customMcp ?? []).some((c) => c.id === id) : !!serviceOf(id));
+  if (!known) return { ok: false, error: 'unknown connection' };
+  let who = '';
+  if (critical === true && typeof custodian === 'string' && custodian) {
+    const a = hive.enabled() ? hive.registry().agents?.[custodian] : undefined;
+    if (!a || a.status === 'gone' || a.archived) return { ok: false, error: 'unknown agent' };
+    if (a.isGod) return { ok: false, error: 'the orchestrator routes everyone\'s work; choose another agent as custodian' };
+    if (!canBeCustodian(a.provider)) return { ok: false, error: 'only a Claude Code agent can be a custodian' };
+    who = custodian;
+  }
+  writeConfig({ criticalCustodians: setCritical(criticalMap(), kind, id, critical === true, who) });
+  return { ok: true };
+});
+ipcMain.handle('critical:audit', (_evt, kind: unknown, id: unknown) =>
+  (kind === 'mcp' || kind === 'api') && typeof id === 'string' ? readCriticalAudit(kind, id) : []);
+ipcMain.handle('critical:revealAudit', () => {
+  const p = criticalAuditPath();
+  if (!existsSync(p)) return { ok: false, error: 'no calls yet' };
+  shell.showItemInFolder(p);
+  return { ok: true };
+});
+
 /** The REST APIs one agent may use, and how (Connections → REST APIs): enabled,
  *  its "who" list, and the lower of the API's limit and the agent's role. */
 function apisFor(agentId: string): { ids: string[]; access: Record<string, Access> } {
   const cfg = readConfig();
   const ids: string[] = [];
   const access: Record<string, Access> = {};
+  const critical = cleanCriticalMap(cfg.criticalCustodians);
+  const held = isCustodian(critical, agentId) ? new Set(heldIds(critical, agentId, 'api')) : null;
   for (const id of integrations.enabledIds()) {
+    // Critical: its custodian only; a custodian only its critical APIs.
+    if (criticalRefusalFor('api', id, agentId) || (held && !held.has(id))) continue;
     const scope = cfg.integrationScopes?.[id];
     if (Array.isArray(scope) && !scope.includes(agentId)) continue;
     const a = effectiveApiAccess(cfg.integrationPolicy?.[id], cfg.agentMcpAccess?.[agentId], id);
@@ -5207,6 +5331,8 @@ function apiDenyReason(agentId: string, id: string): string | undefined {
   if (!rec.enabled) return 'it is switched off in Connections → REST APIs';
   if (rec.authType !== 'none' && !integrations.hasSecret(rec.secretRef)) return 'its key has not been saved in Connections → REST APIs';
   const cfg = readConfig();
+  const critical = criticalRefusalFor('api', id, agentId);
+  if (critical) return critical;
   const scope = cfg.integrationScopes?.[id];
   if (Array.isArray(scope) && !scope.includes(agentId)) return 'it is limited to other agents (Connections → Who may use each REST API)';
   if (effectiveApiAccess(cfg.integrationPolicy?.[id], cfg.agentMcpAccess?.[agentId], id) === 'none') return 'its limit, or this agent\'s role, gives it no access';

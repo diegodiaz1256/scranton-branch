@@ -44,6 +44,7 @@ import { MCP_CATALOG } from '../shared/mcpCatalog';
 import { GENERATED_DOC_NOTICE, PROTOCOL_DIR, protocolFiles } from './protocolDocs';
 import { connectionsPromptLine, envPromptLine, type PromptConnection } from '../shared/agentConnections';
 import type { Access } from '../shared/connectionAccess';
+import { confidentialityPromptLine, criticalAllows, heldIds, isCustodian, type CriticalMap } from '../shared/criticalConnections';
 import { selectBroadcastTargets } from '../shared/broadcast';
 import { preferredAgentRole } from '../shared/agentRole';
 import { mergeTaskLedger, patchTaskInLedger } from '../shared/taskLedger';
@@ -1099,6 +1100,9 @@ export class HiveManager {
       connections?: PromptConnection[];
       /** Names of the plain variables in this agent's environment. */
       envNames?: string[];
+      /** The critical connections this agent is the custodian of (labels), for
+       *  its CONFIDENTIALITY block. Empty/undefined → not a custodian. */
+      critical?: string[];
       theme?: 'light' | 'dark';
       /** Consent state for the default-MCP bundle (W3). Threaded from the live
        *  HarnessConfig by the caller; undefined → catalog defaults apply. */
@@ -1271,7 +1275,7 @@ export class HiveManager {
     if (!isHiveAwareProvider(meta.provider)) {
       const preset = providerPreset(meta.provider ?? 'claude');
       const flag = preset.initialPromptFlag;
-      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'));
+      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical);
       // agy, codex, and grok expose a Claude-style lifecycle-hook surface, so each
       // gets the SAME live status + Stop→inbox-drain Claude does — selected by the
       // preset's `hookBridge`. agy needs a translating shim (its hook stdin/stdout
@@ -1429,10 +1433,12 @@ export class HiveManager {
     // ends the list and nothing positional can be swallowed as a config path.
     const mcp = this.buildDefaultMcpServers(meta.cwd, opts.mcpDefaults, opts.mcpGrant, meta.id, opts.mcpScopes, opts.toolBlocks);
     const mcpPath = join(dir, 'mcp.json');
+    // A custodian never loads servers of its own or the user's, whatever the setting.
+    const onlyManaged = opts.mcpOnlyManaged !== false || isCustodian(this.criticalMap(), meta.id);
     if (Object.keys(mcp.servers).length) {
       this.writeJson(mcpPath, this.forAgentJson({ mcpServers: mcp.servers }));
       args.push('--mcp-config', mcpPath);
-      if (opts.mcpOnlyManaged !== false) args.push('--strict-mcp-config');
+      if (onlyManaged) args.push('--strict-mcp-config');
       // Only the gateway capability token rides in env (the file says `${...}`);
       // keys never reach the agent at all.
       Object.assign(env, mcp.env);
@@ -1440,7 +1446,7 @@ export class HiveManager {
       try { rmSync(mcpPath, { force: true }); } catch { /* stale, harmless */ }
     }
     // Nothing managed to hand over, and still nothing else allowed.
-    if (opts.mcpOnlyManaged !== false && !Object.keys(mcp.servers).length) args.push('--strict-mcp-config');
+    if (onlyManaged && !Object.keys(mcp.servers).length) args.push('--strict-mcp-config');
 
     // The orchestrator delegates through the office (spawn-requests, inboxes).
     // Claude Code's own sub-agent tool starts a helper inside its session that
@@ -1454,7 +1460,7 @@ export class HiveManager {
     // what each may do): no permission prompt per call, or an agent just waits.
     const allowedConnections = Object.keys(mcp.servers).filter((n) => mcp.env.MD_MCP_TOKEN && (mcp.servers[n] as { type?: string }).type === 'http');
     if (allowedConnections.length) args.push('--allowedTools', ...allowedConnections.map((n) => `mcp__${n}`));
-    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web')));
+    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical));
 
     // Phase 1 — autonomy: attach lifecycle hooks via --settings (no edits to the
     // user's repo) so the agent reports activity and drains its inbox on Stop.
@@ -1967,7 +1973,12 @@ export class HiveManager {
     const granted = grant ? new Set(cleanServerList(grant)) : null;
     // Web taken away (Capabilities): no web-reading servers either.
     const noWeb = blockedMcpServers(toolBlocks);
+    // The custodian of a critical connection gets that connection and nothing
+    // else that could carry its data out: no built-in servers, no web, no
+    // memory, lists or browser, none of your own (criticalConnections.ts).
+    const custodian = isCustodian(this.criticalMap(), agentId);
     for (const e of MCP_CATALOG) {
+      if (custodian) break;
       if (noWeb.has(e.id)) continue;
       // Keyed servers never run under the agent (see keyedConnectionsFor):
       // they go through main's MCP gateway below.
@@ -2000,21 +2011,26 @@ export class HiveManager {
     // Your own servers (Manager → MCP, mcpServers.ts): keyed ones go through
     // the gateway like the catalog's, the rest are handed over as they are.
     // Role grants name catalog servers; these carry their own agent scope.
+    // A critical one of these reaches its custodian only, and the custodian
+    // gets no other.
     if (agentId) {
       const mine = this.customMcp(agentId);
-      keyed.push(...mine.gateway);
-      for (const [id, entry] of Object.entries(mine.plain)) servers[`munder-${id}`] = entry;
+      const held = new Set(heldIds(this.criticalMap(), agentId, 'mcp'));
+      keyed.push(...mine.gateway.filter((id) => (custodian ? held.has(id) : criticalAllows(this.criticalMap(), 'mcp', id, agentId))));
+      if (!custodian) {
+        for (const [id, entry] of Object.entries(mine.plain)) if (criticalAllows(this.criticalMap(), 'mcp', id, agentId)) servers[`munder-${id}`] = entry;
+      }
     }
     // The office memory, for every agent while semantic memory is on.
-    const mem = agentId ? this.memoryMcp() : null;
+    const mem = agentId && !custodian ? this.memoryMcp() : null;
     if (mem) servers['munder-memory'] = mem;
     // The human's lists (Memory → Lists), as tools: told only in the prompt,
     // agents kept those things in their own memory instead.
     const root = this.root();
-    if (agentId && root) servers['munder-lists'] = { command: this.nodeCommand(), args: [join(root, 'bin', 'md-lists.cjs'), join(root, 'lists')] };
+    if (agentId && root && !custodian) servers['munder-lists'] = { command: this.nodeCommand(), args: [join(root, 'bin', 'md-lists.cjs'), join(root, 'lists')] };
     // The office browser, unless Web is switched off for this agent (the broker
     // refuses it then as well).
-    if (agentId && root && !cleanToolBlocks(toolBlocks).includes('web')) servers['munder-browser'] = { command: this.nodeCommand(), args: [join(root, 'bin', 'md-browse.cjs')] };
+    if (agentId && root && !custodian && !cleanToolBlocks(toolBlocks).includes('web')) servers['munder-browser'] = { command: this.nodeCommand(), args: [join(root, 'bin', 'md-browse.cjs')] };
     // No gateway (tests, or it failed to bind) → no keyed servers at all: the
     // fallback is "without GitHub", never "with the key in the agent's env".
     const gw = keyed.length && agentId ? (dryRun ? { url: 'http://127.0.0.1:0', token: '' } : this.mcpGateway(agentId, keyed, this.mcpAccessMap(agentId, keyed))) : null;
@@ -2064,11 +2080,17 @@ export class HiveManager {
     const keyed: string[] = [];
     const granted = grant ? new Set(cleanServerList(grant)) : null;
     const noWeb = blockedMcpServers(toolBlocks);
+    const critical = this.criticalMap();
+    // A custodian gets only the critical connections it holds.
+    const held = isCustodian(critical, agentId) ? new Set(heldIds(critical, agentId, 'mcp')) : null;
     for (const e of MCP_CATALOG) {
       if (noWeb.has(e.id) || (e.secrets ?? []).length === 0) continue;
       if (granted && !granted.has(e.id)) continue;
       for (const inst of this.mcpInstances(e.id)) {
         if (cfg?.[inst]?.enabled !== true) continue;
+        // Critical: its custodian only (the gateway refuses anyone else too).
+        if (!criticalAllows(critical, 'mcp', inst, agentId)) continue;
+        if (held && !held.has(inst)) continue;
         const scope = scopes?.[inst];
         if (Array.isArray(scope) && !(agentId && scope.includes(agentId))) continue;
         // The agent's role (and the connection's own ceiling) can rule it out.
@@ -2077,6 +2099,13 @@ export class HiveManager {
       }
     }
     return keyed;
+  }
+
+  /** Critical connections and their custodians (criticalConnections.ts).
+   *  Injected by main; unset means none. */
+  private criticalMap: () => CriticalMap = () => ({});
+  setCritical(get: () => CriticalMap): void {
+    this.criticalMap = get;
   }
 
   /** What one agent may do with one connection (connectionAccess.ts). Injected
@@ -2341,7 +2370,8 @@ export class HiveManager {
     runners?: Array<{ id: string; name: string; description?: string; secrets: string[] }>,
     connections?: PromptConnection[],
     envNames?: string[],
-    webOff = false
+    webOff = false,
+    critical?: string[]
   ): string {
     // Native-separator path helpers — see the 🪟 note above.
     const inDir = (...parts: string[]): string => join(dir, ...parts);
@@ -2494,6 +2524,7 @@ export class HiveManager {
       deliverablesLine,
       integrationsLine,
       connectionsPromptLine(connections),
+      confidentialityPromptLine(critical),
       envPromptLine(envNames),
       runnersLine,
       listsLine,

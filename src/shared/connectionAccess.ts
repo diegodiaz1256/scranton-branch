@@ -91,6 +91,7 @@ export type MissingReason =
   | 'roleLacks'     // the agent's role does not include the service
   | 'webBlocked'    // Web was taken from the agent (Capabilities)
   | 'ceilingNone'   // the connection's own limit is "nothing"
+  | 'critical'      // critical: another agent (or nobody yet) is its custodian
   | 'providerNoMcp';// the agent's CLI does not take MCP servers from the app
 
 export interface ConnectionFacts {
@@ -106,6 +107,9 @@ export interface ConnectionFacts {
   record?: Record<string, Access>;
   /** The agent's CLI can use the app's MCP servers (Claude Code only, see hive.ensureAgent). */
   mcpCapable: boolean;
+  /** Critical connection (criticalConnections.ts): its custodian's agent id
+   *  ('' = none chosen). Absent → not critical. */
+  custodian?: string;
 }
 
 /** What this agent may do with a connection, and if nothing, the first reason why
@@ -115,6 +119,7 @@ export function explainConnection(agentId: string, f: ConnectionFacts): { access
   if (!f.mcpCapable) return none('providerNoMcp');
   if (!f.enabled) return none('off');
   if (!f.ready) return none('noKey');
+  if (f.custodian !== undefined && f.custodian !== agentId) return none('critical');
   if (f.scope && !f.scope.includes(agentId)) return none('notChosen');
   if (f.grant && !f.grant.includes(f.service)) return none('roleLacks');
   if (f.webBlocked) return none('webBlocked');

@@ -8,6 +8,7 @@ import { useProStore } from './proStore';
 import { serverLabel } from '@shared/agentSteps';
 import { StateBadge } from './data';
 import { Guide, useGuide } from './Guide';
+import { CriticalBadge, CriticalSection, custodianFor } from './CriticalConnection';
 
 /**
  * MCP servers: your own, and the ones already set up for Claude Code, Claude
@@ -92,7 +93,7 @@ export function McpView({ roster, config }: { roster: Agent[]; config: HarnessCo
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {mine.length === 0 && !adding && <p className="pro-sub" style={{ margin: 0 }}>{t('pro.mcp.noneYet')}</p>}
         {mine.slice().sort((a, b) => a.name.localeCompare(b.name)).map((s) => (
-          <MineCard key={s.id} s={s} agents={agents} onChanged={reload} onError={setError} />
+          <MineCard key={s.id} s={s} agents={agents} roster={roster} config={config} onChanged={reload} onError={setError} />
         ))}
         {adding
           ? <ServerForm onDone={() => { setAdding(false); reload(); }} onCancel={() => setAdding(false)} onError={setError} />
@@ -143,8 +144,10 @@ function FoundRow({ f, blocked, onImport, onConnection }: { f: McpFoundView; blo
   );
 }
 
-function MineCard({ s, agents, onChanged, onError }: { s: McpMineView; agents: Agent[]; onChanged: () => void; onError: (e: string | null) => void }) {
+function MineCard({ s, agents, roster, config, onChanged, onError }: { s: McpMineView; agents: Agent[]; roster: Agent[]; config: HarnessConfig; onChanged: () => void; onError: (e: string | null) => void }) {
   const { t } = useTranslation();
+  const critical = custodianFor(config, 'mcp', s.id) !== undefined;
+  const keyed = s.secretEnv.length > 0 || s.secretHeaders.length > 0;
   const [editing, setEditing] = useState(false);
   const missing = [...s.secretEnv.filter((e) => !s.secretsStored[e]), ...s.secretHeaders.filter((h) => !s.headersStored[h])];
   const remove = async () => {
@@ -165,6 +168,7 @@ function MineCard({ s, agents, onChanged, onError }: { s: McpMineView; agents: A
         <strong style={{ fontSize: 13 }}>{s.name}</strong>
         <StateBadge label={s.transport.kind === 'stdio' ? t('pro.mcp.local') : t('pro.mcp.remote')} tone={s.transport.kind === 'stdio' ? 'grey' : 'blue'} />
         {(s.secretEnv.length > 0 || s.secretHeaders.length > 0) && <StateBadge label={t('pro.mcp.throughApp')} tone="gold" />}
+        {critical && <CriticalBadge />}
         {s.source && <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.mcp.from', { source: s.source })}</span>}
         <div className="pro-switch" role="group" aria-label={t('pro.mcp.onOff')} style={{ marginInlineStart: 'auto' }}>
           <button aria-pressed={s.enabled} onClick={() => void window.cth.mcpSetEnabled(s.id, true).then(onChanged)}>{t('pro.conn.on')}</button>
@@ -183,7 +187,8 @@ function MineCard({ s, agents, onChanged, onError }: { s: McpMineView; agents: A
         </div>
       )}
       {missing.length > 0 && <span className="pro-sub" style={{ fontSize: 11, color: 'var(--cth-coral)' }}>{t('pro.mcp.missingHint', { names: missing.join(', ') })}</span>}
-      {agents.length > 0 && (
+      {critical && <span className="pro-text" style={{ fontSize: 12 }}>{t('pro.conn.criticalScopeNote')}</span>}
+      {agents.length > 0 && !critical && (
         <div className="pro-row" style={{ gap: 6, flexWrap: 'wrap' }}>
           <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.env.for')}</span>
           <button className={`pro-chip${!s.agents?.length ? ' pro-chip-on' : ''}`} onClick={() => void window.cth.mcpSetAgents(s.id, null).then(onChanged)}>{t('pro.env.allAgents')}</button>
@@ -192,6 +197,8 @@ function MineCard({ s, agents, onChanged, onError }: { s: McpMineView; agents: A
           ))}
         </div>
       )}
+      {/* Only a server the app runs (one with a key) can be refused on every call. */}
+      {(keyed || critical) && <CriticalSection kind="mcp" id={s.id} name={s.name} roster={roster} config={config} />}
       <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.mcp.nextStart')}</span>
     </section>
   );

@@ -12,6 +12,7 @@ import { MessageQueueComposer } from '@/components/MessageQueueComposer';
 import { waitsOnHuman } from '@/components/TasksKanban';
 import { respawnAgent } from '@/hooks/useRestoreTeam';
 import { useProStore } from './proStore';
+import { CustodianBadge } from './CriticalConnection';
 import {
   Avatar, Bar, GodBadge, StateBadge, agentState, fmtTokens, stripAnsi, usePoll, useTerminalTail,
   type AgentDirectoryEntry, type KeyedTask
@@ -72,7 +73,7 @@ export function AgentsView({ roster, tasks, directory, asking, config, onOpen }:
 
       <div className="pro-grid">
         {shown.map((a) => (
-          <AgentTile key={a.id} agent={a} ticket={currentTicket(tasks, a.id)} dir={directory[a.id]} asksYou={asking.has(a.id)} onOpen={onOpen} />
+          <AgentTile key={a.id} agent={a} ticket={currentTicket(tasks, a.id)} dir={directory[a.id]} asksYou={asking.has(a.id)} config={config} onOpen={onOpen} />
         ))}
         <button
           className="pro-card"
@@ -177,8 +178,8 @@ function OrchestratorCard({ god, tasks, directory, config, onOpen }: {
   );
 }
 
-function AgentTile({ agent, ticket, dir, asksYou, onOpen }: {
-  agent: Agent; ticket?: KeyedTask; dir?: AgentDirectoryEntry; asksYou: boolean; onOpen: (id: string) => void;
+function AgentTile({ agent, ticket, dir, asksYou, config, onOpen }: {
+  agent: Agent; ticket?: KeyedTask; dir?: AgentDirectoryEntry; asksYou: boolean; config: HarnessConfig; onOpen: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const feed = useStore((s) => s.feeds[agent.id]);
@@ -205,6 +206,7 @@ function AgentTile({ agent, ticket, dir, asksYou, onOpen }: {
           <p className="pro-title">{agent.name}</p>
           <div className="pro-sub" style={{ fontSize: 12 }}>{agent.model ?? agent.provider ?? t('pro.agents.cliDefault')}</div>
         </div>
+        <CustodianBadge agentId={agent.id} config={config} />
         <StateBadge {...badge} />
       </div>
       {usage && usage.percent >= 50 && (

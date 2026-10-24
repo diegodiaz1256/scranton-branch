@@ -124,6 +124,8 @@ button.pro-card:hover { border-color: var(--pro-line-strong); }
 .pro-pdf-page { flex-shrink: 0; background: var(--cth-page); box-shadow: var(--cth-shadow-hard); }
 /* The orchestrator, wherever it is listed (data.tsx GodBadge). */
 .pro-badge-god { background: var(--cth-lemon-light); box-shadow: inset 0 0 0 1px var(--cth-lemon); color: var(--cth-ink-900); font-weight: 600; }
+/* A critical connection, and its custodian agent (criticalConnections.ts). */
+.pro-badge-critical { background: var(--cth-coral-light); box-shadow: inset 0 0 0 1px var(--cth-coral); color: var(--cth-ink-900); font-weight: 600; }
 .pro-badge-god-sub { font-weight: 400; color: var(--cth-ink-700); }
 .pro-god-star { color: var(--cth-lemon); font-size: 13px; line-height: 1; }
 /* Tasks board: the column a card is dragged over, and the "subtasks too?" dialog. */

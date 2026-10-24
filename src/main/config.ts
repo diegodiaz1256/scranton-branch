@@ -251,6 +251,9 @@ export interface HarnessConfig {
   integrationPolicy?: Record<string, Access>;
   /** REST APIs limited to some agents (integration id → agent ids). Absent → every agent. */
   integrationScopes?: Record<string, string[]>;
+  /** Critical connections (shared/criticalConnections.ts): `mcp:<id>` or
+   *  `api:<id>` → the ONE agent id that may use it ('' = none chosen yet). */
+  criticalCustodians?: Record<string, string>;
   /** What each agent's role grants per service: agent id → service id → level.
    *  Written with the grant. No entry → read-only on the connections it had. */
   agentMcpAccess?: Record<string, Record<string, Access>>;

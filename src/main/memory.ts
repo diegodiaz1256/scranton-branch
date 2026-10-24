@@ -178,7 +178,11 @@ export class MemoryManager {
 
   constructor(
     private getHome: () => string | null,
-    private getSettings: () => MemorySettings
+    private getSettings: () => MemorySettings,
+    /** Agents whose memory never goes into the shared palace: the custodian of
+     *  a critical connection (criticalConnections.ts), whose notes may hold
+     *  confidential data every other agent could then search. */
+    private skipAgent: (id: string) => boolean = () => false
   ) {}
 
   palacePath(): string | null {
@@ -612,6 +616,7 @@ export class MemoryManager {
     this.mining = true;
     try {
       for (const id of ids) {
+        if (this.skipAgent(id)) continue;
         const agentDir = join(agentsDir, id);
         const mem = join(agentDir, 'memory.md');
         if (!existsSync(mem)) continue;

@@ -75,6 +75,14 @@ export interface IntegrationBrokerDeps {
   live?: (agentId: string) => { ids: string[]; access: Record<string, Access> };
   /** Why an agent may not use an integration, in words (for the 403). */
   whyNot?: (agentId: string, integrationId: string) => string | undefined;
+  /** Checked on EVERY request to an integration, after (and whatever) the
+   *  grant says: a reason to refuse it (a critical API this agent is not the
+   *  custodian of, or a capability with no agent behind it), or null. Fail
+   *  closed: a check that throws refuses. */
+  refuse?: (agentId: string | undefined, integrationId: string) => string | null;
+  /** Told about every request to an integration: who, which API, method and
+   *  path (never the query, headers or bodies), allowed or not, the status. */
+  onRequest?: (e: BrokerRequestRecord) => void;
   /** Runners (envVault.ts): what an agent may run with secrets it never sees. */
   runners?: {
     describe: (workerId: string) => Array<{ id: string; name: string; description?: string; secrets: string[] }>;
@@ -91,6 +99,18 @@ export interface IntegrationBrokerDeps {
     browse: (url: string, opts: { links: boolean; maxChars: number; page?: number; mode?: string }) => Promise<string>;
     search: (query: string) => Promise<string>;
   };
+}
+
+export interface BrokerRequestRecord {
+  ts: number;
+  agentId?: string;
+  workerId: string;
+  integrationId: string;
+  method: string;
+  /** The path under the API, without the query string. */
+  path: string;
+  allowed: boolean;
+  status?: number;
 }
 
 /** True for IPv4 loopback (127.0.0.0/8) and IPv6 ::1 (incl. v4-mapped). Mirrors slack.ts. */
@@ -292,6 +312,17 @@ export class IntegrationBroker {
     const integrationId = decodeURIComponent(m[1]);
     const path = m[2] ?? '';
     const query = m[3] ?? '';
+    const method = (req.method ?? 'GET').toUpperCase();
+    const note = (allowed: boolean, status?: number): void => {
+      try { this.deps.onRequest?.({ ts: Date.now(), agentId: cap.agentId, workerId: cap.workerId, integrationId, method, path: `/${path}`, allowed, status }); } catch { /* a log never breaks a call */ }
+    };
+
+    // 3') Critical APIs: only the custodian, checked here whatever was granted.
+    if (this.deps.refuse) {
+      let why: string | null;
+      try { why = this.deps.refuse(cap.agentId, integrationId); } catch { why = `${integrationId} cannot be checked right now, so it is refused.`; }
+      if (why) { note(false, 403); return IntegrationBroker.sendError(res, 403, 'critical', why); }
+    }
 
     // 4) Authorize: live (what the agent may use now) or the spawn-time grant.
     const now = this.allowed(cap);
@@ -318,6 +349,7 @@ export class IntegrationBroker {
 
     // The full upstream path: an API whose base is the endpoint (Linear's /graphql)
     // sends an empty relative one.
+    note(true);
     void this.forward(req, res, rec, upstream, secret, now.access.get(integrationId), upstream.pathname);
   }
 
