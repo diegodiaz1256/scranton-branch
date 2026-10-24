@@ -316,6 +316,9 @@ export interface HarnessConfig {
   /** Passed to every spawned agent as `--max-turns <n>` when set; unset = no cap
    *  (Claude Code's default). A coarse runaway guard independent of the breaker. */
   maxTurns?: number;
+  /** Percent of the subscription's 5-hour / weekly usage window at which agents
+   *  are told to wrap up (shared/usageWindowAlerts.ts). Unset → 95 / 98. */
+  usageWindowAlerts?: { fiveHourPct?: number; weeklyPct?: number };
   /** Max concurrent god-triggered ephemeral Slack workers; extra spawn-requests
    *  wait in the queue (natural backpressure, a resource backstop). Default 4. */
   maxConcurrentWorkers?: number;

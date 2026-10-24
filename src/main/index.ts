@@ -51,6 +51,8 @@ import { HiveManager, type AgentMeta, type HiveMessage, type HiveTask, type Mess
 import { HookServer } from './hooks';
 import { CircuitBreaker, workTokensOf, type BreakerInput } from './breaker';
 import { capStage, capDispatchNote, capWarningBody, lastOutboxMessage, lastWords } from './workerCap';
+import { UsageAlertMonitor, type UsageAlertTarget } from './usageAlerts';
+import { normalizeThresholds } from '../shared/usageWindowAlerts';
 import { CumulativeSampleGate, type UsageProvider } from './usage';
 import { MemoryManager } from './memory';
 import { KnowledgeManager } from './knowledge';
@@ -133,6 +135,7 @@ import {
   argsWithAutoModeFlag,
   defaultCommandForProvider,
   inferAgentProvider,
+  isAgentProvider,
   isClaudeProvider,
   nonInteractiveEnvForProvider,
   providerPreset,
@@ -436,6 +439,33 @@ const hookServer = new HookServer(
 // Subagents agents start (Task/Agent tool), for Temps.
 hookServer.onSubagentsChanged = () => { try { liveWebContents()?.send('subagents:changed', hookServer.subagents.list()); } catch { /* window gone */ } };
 ipcMain.handle('subagents:list', () => hookServer.subagents.list());
+// Subscription usage windows: when one nears its limit, each live agent on that
+// account gets one inbox notice, and the orchestrator is told to stop dispatching
+// (usageAlerts.ts, protocol/usage-windows.md).
+const usageAlerts = new UsageAlertMonitor({
+  root: () => hive.root(),
+  thresholds: () => normalizeThresholds(readConfig().usageWindowAlerts),
+  targets: (provider) => {
+    const reg = hive.registry();
+    const out: UsageAlertTarget[] = [];
+    for (const a of Object.values(reg.agents)) {
+      if (a.archived || a.isAssistant) continue;
+      const orchestrator = a.id === reg.godId || !!a.isGod;
+      // The orchestrator hears it whatever engine it runs on: it dispatches the work.
+      if (orchestrator || (a.provider ?? 'claude') === provider) out.push({ id: a.id, orchestrator });
+    }
+    return out;
+  },
+  accountName: (provider) => (isAgentProvider(provider) ? providerPreset(provider).label : provider),
+  send: (to, subject, body) => { hive.send({ to, act: 'inform', subject, body }, 'usage'); },
+  onChange: (alerts) => { try { liveWebContents()?.send('hive:usageAlerts', alerts); } catch { /* window gone */ } }
+});
+hookServer.onRateLimits = (agentId, rl) => {
+  let provider = 'claude';
+  try { provider = (agentId && hive.registry().agents[agentId]?.provider) || 'claude'; } catch { /* no office open */ }
+  usageAlerts.observe(provider, rl);
+};
+ipcMain.handle('usage:alerts', () => usageAlerts.active());
 // Offline talk: read the orchestrator's reply with the OS's own voices.
 ipcMain.handle('voice:speak', (_evt, text: unknown, lang: unknown) =>
   typeof text === 'string' && text.trim() ? speakAloud(text.slice(0, 4000), typeof lang === 'string' ? lang : 'en') : { ok: false, error: 'nothing to say' });

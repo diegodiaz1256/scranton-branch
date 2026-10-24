@@ -293,6 +293,10 @@
       "hardStopDesc": "When tripped, KILL the agent instead of just constraining it. Off = steer-first (recommended).",
       "killOnTrip": "kill on trip",
       "steerFirst": "steer first",
+      "usageWindows": "Usage windows",
+      "usageWindowsDesc": "When the subscription's 5-hour or weekly window passes these percentages, every agent on that account gets one inbox notice to save its work and wrap up, and the orchestrator is told to stop dispatching until it resets.",
+      "fiveHourThreshold": "5-hour window warning (%)",
+      "weeklyThreshold": "weekly window warning (%)",
       "saved": "saved"
     },
     "memory": {
@@ -451,7 +455,7 @@
       "general": "update version freeze log folder home language idioma keep awake sleep reset erase theme office floor performance walking cards battery cpu gpu",
       "prerequisites": "install claude codex gemini cli git node npm uv python fortress browser chrome prerequisites",
       "agentsModels": "model opus sonnet haiku effort api key anthropic openai openrouter groq certificate tls ca proxy",
-      "autonomyBudgets": "auto mode approve permission budget tokens breaker loop hire spawn",
+      "autonomyBudgets": "auto mode approve permission budget tokens breaker loop hire spawn usage limit window subscription",
       "connections": "mcp server tools slack webhook trigger fetch filesystem github",
       "voice": "dictation whisper microphone mic talk realtime groq speech",
       "memoryKnowledge": "memory mempalace semantic embedding model graph knowledge"
@@ -1650,7 +1654,11 @@
     "weekSonnet": "This week (Sonnet)",
     "fiveHourShort": "5h",
     "weekShort": "week",
-    "resetsIn": "resets in {{time}}"
+    "resetsIn": "resets in {{time}}",
+    "alertNear": "{{window}} near limit",
+    "alertLimit": "{{window}} limit reached",
+    "alertNearTip": "{{window}} nearly spent: agents were told to wrap up (resets in {{time}}).",
+    "alertLimitTip": "{{window}} limit reached: agents were told to save their work (resets in {{time}})."
   },
   "titleBar": {
     "autoOn": "auto mode on",

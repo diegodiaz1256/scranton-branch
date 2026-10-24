@@ -131,6 +131,9 @@ export class HookServer {
   readonly usage = new HookUsageTracker();
   /** Called when that list changes. */
   onSubagentsChanged?: () => void;
+  /** Each status tick that carried usage windows, with the agent it came from
+   *  (main's usage-window notices, usageAlerts.ts). */
+  onRateLimits?: (agentId: string | undefined, rl: RateLimits) => void;
   /** An agent's name and face for its desktop notifications (set by main). */
   notifyAs: ((agentId: string) => { name?: string; icon?: Electron.NativeImage }) | null = null;
   /** The last prompt an agent received, if recent. */
@@ -456,6 +459,7 @@ export class HookServer {
       if (rl) {
         this.rateLimits = rl;
         this.getWebContents()?.send('hive:rateLimits', rl);
+        try { this.onRateLimits?.(agentId, rl); } catch (e) { console.error('[hooks] onRateLimits:', e); }
       }
       const cw = p.context_window;
       if (agentId && cw && typeof cw.total_input_tokens === 'number'
