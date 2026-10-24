@@ -355,6 +355,9 @@ export function hasPlaceholderHost(baseUrl: string): boolean {
  * What "Test connection" should call. A baseUrl alone is rarely an endpoint (Jira's
  * `/rest/api/3` answers 404), so well-known services get their own cheap
  * authenticated read; anything else is probed at its base, as before.
+ * Self-hosted ones (Jira / Confluence Data Center, GitHub Enterprise Server,
+ * self-hosted Sentry) live on any host, often under a context path such as
+ * `/jira`, so they are recognised by how their API path ends.
  */
 export function probeSpecFor(baseUrl: string): ProbeSpec {
   let u: URL;
@@ -365,10 +368,16 @@ export function probeSpecFor(baseUrl: string): ProbeSpec {
     if (path.startsWith('/wiki/api')) return { method: 'GET', path: '/spaces?limit=1' };
     if (path.startsWith('/rest/api')) return { method: 'GET', path: '/myself' };
   }
-  if (host === 'api.github.com') return { method: 'GET', path: '/user' };
+  // Jira Data Center: <base>/rest/api/2 (it has no /3). Confluence Data Center: <base>/rest/api.
+  if (/\/rest\/api\/(2|3|latest)$/.test(path)) return { method: 'GET', path: '/myself' };
+  if (/\/rest\/api$/.test(path)) return { method: 'GET', path: '/space?limit=1' };
+  // GitHub Enterprise Server: https://<host>/api/v3 (its root answers 200 to anyone).
+  if (host === 'api.github.com' || /\/api\/v3$/.test(path)) return { method: 'GET', path: '/user' };
   if (host === 'api.notion.com') return { method: 'GET', path: '/users/me', headers: { 'notion-version': '2022-06-28' } };
   if (host === 'api.stripe.com') return { method: 'GET', path: '/balance' };
-  if (host === 'sentry.io' && path.startsWith('/api/')) return { method: 'GET', path: '/organizations/' };
+  if (((host === 'sentry.io' || host.endsWith('.sentry.io')) && path.startsWith('/api/')) || /\/api\/0$/.test(path)) {
+    return { method: 'GET', path: '/organizations/' };
+  }
   if (host === 'api.linear.app' && path === '/graphql') {
     return { method: 'POST', path: '', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: '{ viewer { id } }' }) };
   }

@@ -22,6 +22,16 @@ test('known services get an authenticated read; Notion sends its version header;
   assert.match(linear.body, /viewer/);
 });
 
+test('self-hosted Atlassian, GitHub Enterprise and Sentry get the same reads on any host', () => {
+  assert.equal(url('https://jira.acme.lan/rest/api/2'), 'https://jira.acme.lan/rest/api/2/myself');
+  assert.equal(url('https://intranet.acme.lan/jira/rest/api/2/'), 'https://intranet.acme.lan/jira/rest/api/2/myself');
+  assert.equal(url('https://wiki.acme.lan/confluence/rest/api'), 'https://wiki.acme.lan/confluence/rest/api/space?limit=1');
+  assert.equal(url('https://acme.atlassian.net/wiki/rest/api'), 'https://acme.atlassian.net/wiki/rest/api/space?limit=1');
+  assert.equal(url('https://github.acme.lan/api/v3'), 'https://github.acme.lan/api/v3/user');
+  assert.equal(url('https://sentry.acme.lan/api/0'), 'https://sentry.acme.lan/api/0/organizations/');
+  assert.equal(url('https://us.sentry.io/api/0'), 'https://us.sentry.io/api/0/organizations/');
+});
+
 test('anything else is probed at its base, as before', () => {
   assert.deepEqual(probeSpecFor('https://example.com/api'), { method: 'GET', path: '' });
   assert.deepEqual(probeSpecFor('not a url'), { method: 'GET', path: '' });
