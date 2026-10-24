@@ -37,6 +37,13 @@ Two data planes feed one renderer:
   server that provider bridges POST lifecycle payloads to (`cth-hook` for Claude Code, `agy-hook`
   for Antigravity). `memory.ts` wraps the semantic memory CLI. The router delivers messages, drains
   provider outboxes, the GOD agent adjudicates, and idle/inbox wakeups keep workers draining mail.
+- **Agent commands.** Bootstrap writes the office's own commands into `<hive>/bin/`: `sb-api`
+  (REST APIs through the key broker), `sb-run` (runners), `sb-browse` (the office browser),
+  `sb-skills` (the skills catalog) and `sb-lists` (the human's lists, as an MCP server); a pi
+  custodian gets `sb-netgate`. Agents reach the broker with `SB_BROKER_URL` / `SB_BROKER_TOKEN`.
+  Before the rename to Scranton Branch these were `md-*` and `MD_*`: the `md-*` files are still
+  written (same script) and the `MD_*` variables still set and read, as deprecated aliases
+  ([`agentBinAliases.ts`](../src/main/agentBinAliases.ts), [`envName.ts`](../src/shared/envName.ts)).
 
 ## Project structure
 
