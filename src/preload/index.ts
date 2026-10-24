@@ -440,6 +440,9 @@ export interface HarnessConfig {
   mcpOnlyManaged?: boolean;
   integrationPolicy?: Record<string, 'none' | 'read' | 'readwrite'>;
   integrationScopes?: Record<string, string[]>;
+  /** Critical connections (shared/criticalConnections.ts): `mcp:<id>` or
+   *  `api:<id>` → the ONE agent id that may use it ('' = none chosen yet). */
+  criticalCustodians?: Record<string, string>;
   agentMcpAccess?: Record<string, Record<string, 'none' | 'read' | 'readwrite'>>;
   /** Claude Code tool groups taken from an agent (Capabilities): agent id → group ids (shared/nativeTools.ts). */
   agentToolBlocks?: Record<string, string[]>;
@@ -1643,6 +1646,14 @@ const api = {
     ipcRenderer.invoke('connections:setScope', id, agentIds),
   connectionsTest: (id: string): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('connections:test', id),
+  /** Critical connections: mark one (kind 'mcp' = a connection or your own MCP
+   *  server, 'api' = a REST API) critical with its ONE custodian agent, or not. */
+  criticalSet: (kind: 'mcp' | 'api', id: string, critical: boolean, custodian?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('critical:set', kind, id, critical, custodian),
+  /** The audit of calls to a critical connection, newest first: who, what, when. Never bodies. */
+  criticalAudit: (kind: 'mcp' | 'api', id: string): Promise<Array<{ time: string; ts: number; agentId: string; agentName?: string; call: string; allowed: boolean; ok?: boolean }>> =>
+    ipcRenderer.invoke('critical:audit', kind, id),
+  criticalRevealAudit: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('critical:revealAudit'),
   // Team: paired installs, sealed end to end over a public relay. Private keys
   // never leave main; this surface sees names, status and the conversation.
   teamStatus: (): Promise<TeamStatusView> => ipcRenderer.invoke('team:status'),

@@ -146,6 +146,9 @@ export interface HarnessConfig {
   mcpOnlyManaged?: boolean;
   integrationPolicy?: Record<string, 'none' | 'read' | 'readwrite'>;
   integrationScopes?: Record<string, string[]>;
+  /** Critical connections (shared/criticalConnections.ts): `mcp:<id>` or
+   *  `api:<id>` → the ONE agent id that may use it ('' = none chosen yet). */
+  criticalCustodians?: Record<string, string>;
   /** Extra Connections beyond each service's first (two GitHub accounts…):
    *  id `<service>--<slug>`, the service's catalog id, and a name. */
   connectionInstances?: Array<{ id: string; service: string; label: string }>;

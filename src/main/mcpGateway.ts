@@ -62,6 +62,11 @@ export interface McpGatewayDeps {
   /** Told about every tool call: who, which server, which tool, allowed or not,
    *  how it went. For the activity log; never given arguments or results. */
   onCall?: (e: McpCallRecord) => void;
+  /** Checked on EVERY request, whatever the agent was granted at spawn: a
+   *  reason to refuse this agent this server right now (a critical connection
+   *  it is not the custodian of), or null. Fail closed: a check that throws
+   *  refuses. */
+  refuse?: (agentId: string, serverId: string) => string | null;
   /** Override for tests. */
   requestTimeoutMs?: number;
 }
@@ -206,9 +211,31 @@ export class McpGateway {
     if (!grant) { res.writeHead(401); res.end(); return; }
     if (!grant.servers.has(serverId)) { res.writeHead(403); res.end(); return; }
     const key = `${token}:${serverId}`;
+    let refusal: string | null = null;
+    if (this.deps.refuse) {
+      try { refusal = this.deps.refuse(grant.agentId, serverId); } catch { refusal = `${serverId} cannot be checked right now, so it is refused.`; }
+    }
 
     if (req.method === 'DELETE') { this.endSession(key); res.writeHead(200); res.end(); return; }
     if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST, DELETE' }); res.end(); return; }
+    if (refusal) {
+      // Never reaches the server (or starts it): every request in the body is
+      // answered with the reason, so the agent reads who to ask instead.
+      this.endSession(key);
+      let raw = '';
+      for await (const chunk of req) { raw += chunk; if (raw.length > MAX_BODY) break; }
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(raw); } catch { /* answered below */ }
+      const list = (Array.isArray(parsed) ? parsed : [parsed]) as Array<Record<string, unknown> | null>;
+      const replies = list.filter((m) => m && typeof m.method === 'string' && m.id !== undefined && m.id !== null).map((m) => {
+        const tool = m!.method === 'tools/call' ? String((m!.params as { name?: unknown } | undefined)?.name ?? '') : String(m!.method);
+        this.record({ ts: Date.now(), agentId: grant.agentId, serverId, tool, allowed: false });
+        return rpcError(m!.id, -32001, refusal!);
+      });
+      if (!replies.length) { res.writeHead(403, { 'content-type': 'application/json' }); res.end(JSON.stringify(rpcError(null, -32001, refusal))); return; }
+      this.json(res, 200, Array.isArray(parsed) ? replies : replies[0]);
+      return;
+    }
 
     let body = '';
     let size = 0;

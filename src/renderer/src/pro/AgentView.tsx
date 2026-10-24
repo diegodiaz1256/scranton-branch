@@ -8,6 +8,7 @@ import { MCP_CATALOG } from '@shared/mcpCatalog';
 import { mcpLabel } from '@shared/roleBundles';
 import { useProStore } from './proStore';
 import { Avatar, Bar, GodBadge, StateBadge, agentState, fmtTokens, isActive, type AgentDirectoryEntry, type KeyedTask } from './data';
+import { CustodianBadge } from './CriticalConnection';
 import { currentTicket, spendLine } from './AgentsView';
 import { StepsView } from './StepsView';
 import { delegations, envelopeReturning, type Delegation, type LogMessage } from '@shared/delegations';
@@ -71,6 +72,7 @@ export function AgentView({ agent, roster, tasks, directory, config, onOpen }: P
         {agent.isGod
           ? <GodBadge />
           : <StateBadge {...st} />}
+        <CustodianBadge agentId={agent.id} config={config} />
         <div className="pro-head-end" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {agent.ptyId && (
           <button className="pro-btn" disabled={restarting} title={t('pro.agent.restartTip')} onClick={() => void restart()}>

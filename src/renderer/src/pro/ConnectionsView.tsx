@@ -7,6 +7,7 @@ import { Avatar, StateBadge } from './data';
 import { Guide, useGuide } from './Guide';
 import type { HarnessConfig } from '@/store/config';
 import { mcpDescription, mcpField } from '@/i18n/catalogText';
+import { CriticalBadge, CriticalSection, custodianFor } from './CriticalConnection';
 
 type Connection = Awaited<ReturnType<typeof window.cth.connectionsList>>[number];
 type TestResult = { ok: boolean; message: string };
@@ -50,7 +51,7 @@ export function ConnectionsView({ roster, config }: { roster: Agent[]; config: H
 
       {services.map(([service, label]) => (
         <ServiceGroup key={service} service={service} label={label}
-          connections={list.filter((c) => c.service === service)} roster={roster} onChange={reload} />
+          connections={list.filter((c) => c.service === service)} roster={roster} config={config} onChange={reload} />
       ))}
 
       <h3 style={{ margin: '10px 0 0', fontSize: 14 }}>{t('pro.conn.restTitle')}</h3>
@@ -64,8 +65,8 @@ export function ConnectionsView({ roster, config }: { roster: Agent[]; config: H
   );
 }
 
-function ServiceGroup({ service, label, connections, roster, onChange }: {
-  service: string; label: string; connections: Connection[]; roster: Agent[]; onChange: () => void;
+function ServiceGroup({ service, label, connections, roster, config, onChange }: {
+  service: string; label: string; connections: Connection[]; roster: Agent[]; config: HarnessConfig; onChange: () => void;
 }) {
   const { t } = useTranslation();
   const [adding, setAdding] = useState(false);
@@ -80,7 +81,7 @@ function ServiceGroup({ service, label, connections, roster, onChange }: {
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div className="pro-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))' }}>
-        {connections.map((c) => <ConnectionCard key={c.id} c={c} roster={roster} onChange={onChange} />)}
+        {connections.map((c) => <ConnectionCard key={c.id} c={c} roster={roster} config={config} onChange={onChange} />)}
       </div>
       {adding ? (
         <div className="pro-row">
@@ -97,8 +98,9 @@ function ServiceGroup({ service, label, connections, roster, onChange }: {
   );
 }
 
-function ConnectionCard({ c, roster, onChange }: { c: Connection; roster: Agent[]; onChange: () => void }) {
+function ConnectionCard({ c, roster, config, onChange }: { c: Connection; roster: Agent[]; config: HarnessConfig; onChange: () => void }) {
   const { t } = useTranslation();
+  const critical = custodianFor(config, 'mcp', c.id) !== undefined;
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -171,6 +173,7 @@ function ConnectionCard({ c, roster, onChange }: { c: Connection; roster: Agent[
             <p className="pro-title">{c.label}</p>
             {!c.primary && <span className="pro-chip">{c.serviceLabel}</span>}
             <StateBadge label={state.label} tone={state.tone} />
+            {critical && <CriticalBadge />}
           </>
         )}
         <span style={{ marginInlineStart: 'auto', display: 'flex', gap: 6 }}>
@@ -223,13 +226,14 @@ function ConnectionCard({ c, roster, onChange }: { c: Connection; roster: Agent[
           ))}
         </div>
         <span className="pro-sub" style={{ fontSize: 11.5 }}>{t('pro.conn.accessHint')}</span>
-        <div className="pro-tabs" role="radiogroup" aria-label={t('pro.conn.whoGetsIt')}>
+        {critical && <span className="pro-text" style={{ fontSize: 12 }}>{t('pro.conn.criticalScopeNote')}</span>}
+        {!critical && <div className="pro-tabs" role="radiogroup" aria-label={t('pro.conn.whoGetsIt')}>
           <button role="radio" aria-selected={!scoped} aria-checked={!scoped} disabled={busy}
             onClick={() => void run(() => window.cth.connectionsSetScope(c.id, null))}>{t('pro.conn.everyAgent')}</button>
           <button role="radio" aria-selected={scoped} aria-checked={scoped} disabled={busy}
             onClick={() => { if (!scoped) void run(() => window.cth.connectionsSetScope(c.id, [])); }}>{t('pro.conn.chooseAgents')}</button>
-        </div>
-        {scoped && (
+        </div>}
+        {scoped && !critical && (
           <div className="pro-row" style={{ flexWrap: 'wrap', gap: 6 }}>
             {roster.length === 0 && <span className="pro-sub">{t('pro.conn.noAgents')}</span>}
             {roster.map((a) => {
@@ -247,7 +251,9 @@ function ConnectionCard({ c, roster, onChange }: { c: Connection; roster: Agent[
         <span className="pro-sub" style={{ fontSize: 11.5 }}>{t('pro.conn.restartNote')}</span>
       </div>
 
-      <WhoAndActivity id={c.id} version={`${c.enabled}|${c.ready}|${c.access}|${(c.scope ?? []).join(',')}`} />
+      <CriticalSection kind="mcp" id={c.id} name={c.label} roster={roster} config={config} />
+
+      <WhoAndActivity id={c.id} version={`${c.enabled}|${c.ready}|${c.access}|${(c.scope ?? []).join(',')}|${custodianFor(config, 'mcp', c.id) ?? '-'}`} />
 
       {c.examples.length > 0 && (
         <details>
@@ -349,12 +355,14 @@ function ApiAccess({ roster, config }: { roster: Agent[]; config: HarnessConfig 
           const level: Level = config.integrationPolicy?.[a.id] ?? 'read';
           const scope = config.integrationScopes?.[a.id];
           const scoped = Array.isArray(scope);
+          const critical = custodianFor(config, 'api', a.id) !== undefined;
           return (
             <article key={a.id} className="pro-card" style={{ display: 'flex', flexDirection: 'column', gap: 8, opacity: a.enabled ? 1 : 0.65 }}>
               <div className="pro-row">
                 <p className="pro-title">{a.label}</p>
                 <span className="pro-chip pro-mono" style={{ fontSize: 11 }}>{a.id}</span>
                 {!a.enabled && <StateBadge label={t('pro.conn.off')} tone="grey" />}
+                {critical && <CriticalBadge />}
               </div>
               <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.conn.accessTitle')}</span>
               <div className="pro-tabs" role="radiogroup" aria-label={t('pro.conn.accessTitle')}>
@@ -364,11 +372,12 @@ function ApiAccess({ roster, config }: { roster: Agent[]; config: HarnessConfig 
                 ))}
               </div>
               {level === 'read' && <span className="pro-sub" style={{ fontSize: 11.5 }}>{t('pro.conn.apiReadMeans')}</span>}
-              <div className="pro-tabs" role="radiogroup" aria-label={t('pro.conn.whoGetsIt')}>
+              {critical && <span className="pro-text" style={{ fontSize: 12 }}>{t('pro.conn.criticalScopeNote')}</span>}
+              {!critical && <div className="pro-tabs" role="radiogroup" aria-label={t('pro.conn.whoGetsIt')}>
                 <button role="radio" aria-selected={!scoped} aria-checked={!scoped} disabled={busy} onClick={() => void act(() => window.cth.integrationsSetScope(a.id, null))}>{t('pro.conn.everyAgent')}</button>
                 <button role="radio" aria-selected={scoped} aria-checked={scoped} disabled={busy} onClick={() => { if (!scoped) void act(() => window.cth.integrationsSetScope(a.id, [])); }}>{t('pro.conn.chooseAgents')}</button>
-              </div>
-              {scoped && (
+              </div>}
+              {scoped && !critical && (
                 <div className="pro-row" style={{ flexWrap: 'wrap', gap: 6 }}>
                   {roster.map((ag) => {
                     const on = scope!.includes(ag.id);
@@ -382,6 +391,7 @@ function ApiAccess({ roster, config }: { roster: Agent[]; config: HarnessConfig 
                   })}
                 </div>
               )}
+              <CriticalSection kind="api" id={a.id} name={a.label} roster={roster} config={config} />
             </article>
           );
         })}
