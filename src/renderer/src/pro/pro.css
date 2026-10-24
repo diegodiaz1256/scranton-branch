@@ -133,6 +133,10 @@ button.pro-card:hover { border-color: var(--pro-line-strong); }
 .pro-col-drop { box-shadow: inset 0 0 0 2px var(--cth-lemon); border-radius: var(--pro-radius); background: var(--cth-lemon-light); }
 .pro-modal-back { position: fixed; inset: 0; z-index: 70; background: rgba(26, 19, 32, 0.45); display: flex; align-items: center; justify-content: center; padding: 24px; }
 .pro-modal { width: 460px; max-width: 100%; display: flex; flex-direction: column; gap: 10px; padding: 18px; box-shadow: var(--cth-shadow-hard); }
+/* "Run without sandbox" (unsandboxed.ts): the warning, and the badge an
+   agent wears for as long as it is on. */
+.pro-modal-danger { border-color: var(--cth-coral); box-shadow: inset 0 4px 0 var(--cth-coral), var(--cth-shadow-hard); }
+.pro-badge-unsandboxed { background: var(--cth-coral-light); box-shadow: inset 0 0 0 2px var(--cth-coral); color: var(--cth-ink-900); font-weight: 700; letter-spacing: .04em; }
 .pro-badge {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 11px; line-height: 20px; padding: 0 8px; border-radius: 6px; white-space: nowrap;
@@ -162,6 +166,9 @@ button.pro-card:hover { border-color: var(--pro-line-strong); }
 .pro-btn:disabled { opacity: .5; cursor: default; }
 .pro-btn-primary { background: var(--cth-ink-900); color: var(--cth-cream-50); border-color: var(--cth-ink-900); }
 .pro-btn-primary:hover { background: var(--cth-ink-700); }
+/* "Run without sandbox" confirms with a button that looks like what it does. */
+.pro-btn-danger { background: var(--cth-coral-light); border-color: var(--cth-coral); color: var(--cth-ink-900); font-weight: 600; }
+.pro-btn-danger:hover { background: var(--cth-coral-light); box-shadow: inset 0 0 0 1px var(--cth-coral); }
 
 .pro-input {
   font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px;

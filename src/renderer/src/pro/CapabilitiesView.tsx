@@ -11,6 +11,9 @@ import { mcpDescription } from '@/i18n/catalogText';
 import { useProStore } from './proStore';
 import { Avatar } from './data';
 import { effectiveServers } from './AgentView';
+import { UnsandboxDialog } from './Unsandboxed';
+import { unsandboxedAgents } from '@shared/unsandboxed';
+import { cleanCriticalMap, custodianships } from '@shared/criticalConnections';
 
 /** A write/secret server is usable only once the user switched it on (Connections). */
 function consented(config: HarnessConfig, id: string): boolean {
@@ -87,6 +90,27 @@ export function CapabilitiesView({ roster, config }: { roster: Agent[]; config: 
       await window.cth.updateConfig({ agentRoam: next });
       const who = roster.find((a) => a.id === agentId)?.name ?? agentId;
       setNote(t('pro.caps.saved', { name: who }));
+    } catch (e) {
+      setNote(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** "Run without sandbox": off at once; on only after the warning, with the
+   *  agent's name typed back (main checks it again and refuses a custodian). */
+  const [unsandbox, setUnsandbox] = useState<{ id: string; name: string; error: string | null } | null>(null);
+  const setUnsandboxed = async (agentId: string, on: boolean, typed?: string) => {
+    const who = roster.find((a) => a.id === agentId)?.name ?? agentId;
+    setSaving(true);
+    try {
+      const r = await window.cth.setAgentUnsandboxed(agentId, on, typed);
+      if (!r.ok) {
+        if (on) setUnsandbox({ id: agentId, name: who, error: r.error ?? null }); else setNote(r.error ?? null);
+        return;
+      }
+      setUnsandbox(null);
+      setNote(t(on ? 'pro.unsandboxed.turnedOn' : 'pro.unsandboxed.turnedOff', { name: who }));
     } catch (e) {
       setNote(String(e));
     } finally {
@@ -231,6 +255,19 @@ export function CapabilitiesView({ roster, config }: { roster: Agent[]; config: 
                   </button>
                 );
               })()}
+              {/* The app sets the OS sandbox for Claude Code and pi only. */}
+              {(a.provider ?? 'claude') === 'claude' || a.provider === 'pi' ? (() => {
+                const on = unsandboxedAgents(config.agentUnsandboxed).includes(a.id);
+                const custodian = custodianships(cleanCriticalMap(config.criticalCustodians), a.id).length > 0;
+                return (
+                  <button className={`pro-chip${on ? ' pro-badge-unsandboxed' : ' pro-chip-off'}`} style={{ cursor: custodian ? 'default' : 'pointer' }}
+                    title={custodian ? t('pro.unsandboxed.chipCustodian') : on ? t('pro.unsandboxed.badgeTip') : t('pro.unsandboxed.chipTip')}
+                    aria-pressed={on} disabled={saving || (custodian && !on)}
+                    onClick={() => (on ? void setUnsandboxed(a.id, false) : setUnsandbox({ id: a.id, name: a.name, error: null }))}>
+                    {on ? `⚠ ${t('pro.unsandboxed.chip')}` : t('pro.unsandboxed.chip')}
+                  </button>
+                );
+              })() : null}
               <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--cth-ink-100)' }} />
               {MCP_CATALOG.map((e) => {
                 const on = has.includes(e.id);
@@ -259,6 +296,10 @@ export function CapabilitiesView({ roster, config }: { roster: Agent[]; config: 
       </p>
       {/* What the folder and git rules can and cannot see (shared/toolGuard.ts). */}
       <p className="pro-sub" style={{ fontSize: 12 }}>{t('pro.caps.guardLimits')}</p>
+      {unsandbox && (
+        <UnsandboxDialog name={unsandbox.name} busy={saving} error={unsandbox.error}
+          onCancel={() => setUnsandbox(null)} onConfirm={(typed) => void setUnsandboxed(unsandbox.id, true, typed)} />
+      )}
     </div>
   );
 }

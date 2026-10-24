@@ -1767,6 +1767,24 @@
       "usage": "{{percent}}% del límite de {{window}}",
       "usageTip": "El motor dice que esta cuenta ha usado el {{percent}}% de su límite de {{window}}."
     },
+    "unsandboxed": {
+      "badge": "SIN SANDBOX",
+      "badgeTip": "Funciona sin su sandbox del sistema (Capacidades): su terminal puede leer y cambiar todo lo que tú puedes, y llegar a cualquier servidor. Solo siguen en pie la valla de sus carpetas y los archivos de control de la oficina.",
+      "chip": "Ejecutar sin sandbox",
+      "chipTip": "Desactivado (por defecto): su terminal funciona dentro de un sandbox del sistema. Activado: sin sandbox, desde su próximo arranque. Solo agentes de Claude Code y pi; nunca un custodio.",
+      "chipCustodian": "El custodio de una conexión crítica siempre funciona dentro de su sandbox.",
+      "title": "¿Ejecutar a {{name}} sin su sandbox?",
+      "intro": "Desde su próximo arranque, su terminal funcionará sin sandbox del sistema, como tú. Podrá:",
+      "risk1": "leer y cambiar cualquier archivo al que tú tengas acceso, en todo el disco",
+      "risk2": "conectarse a cualquier servidor de la red, no solo a los que deja pasar el sandbox",
+      "risk3": "leer tus secretos: claves SSH, credenciales de la nube y de git, tokens de tu carpeta personal",
+      "risk4": "cambiar el trabajo de otros agentes y los archivos de la propia aplicación",
+      "still": "Sigue en pie: la valla de sus carpetas para las herramientas de archivos (salvo que también pueda escribir fuera de ellas) y los archivos de control de la oficina. Un error, o instrucciones escondidas en algo que lea, pueden causar daños reales. Úsalo solo para una tarea que lo necesite y desactívalo después.",
+      "typeLabel": "Escribe {{name}} para confirmar",
+      "confirm": "Ejecutar sin sandbox",
+      "turnedOn": "{{name}} funcionará sin su sandbox desde su próximo arranque. Reinícialo para aplicarlo.",
+      "turnedOff": "{{name}} vuelve a funcionar dentro de su sandbox desde su próximo arranque. Reinícialo para aplicarlo."
+    },
     "agent": {
       "goal": "Objetivo",
       "engine": "Motor",
