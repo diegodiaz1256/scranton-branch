@@ -5,6 +5,7 @@ import { PixelButton } from './PixelButton';
 import { ProviderLogo } from './ProviderLogo';
 import { useStore } from '@/store/store';
 import { PROVIDER_BACKENDS } from '@shared/providerBackends';
+import { normalizeModelHost, resolvePiModelHosts, type PiModelHostsConfig } from '@shared/piModelHosts';
 
 /**
  * AiEnginesSettings — the v0.3.1 per-provider config surface for the BYOK CLI
@@ -181,6 +182,8 @@ export function AiEnginesSettings({ config }: { config: HarnessConfig }) {
         ))}
       </div>
 
+      <PiSandboxSettings config={config} />
+
       <CertificatesSettings config={config} />
 
       {/* Unsandboxed-in-auto caveat (Pam guardrail #6) */}
@@ -189,6 +192,99 @@ export function AiEnginesSettings({ config }: { config: HarnessConfig }) {
         padding: 8, boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', background: 'var(--cth-paper-100)'
       }}>
         {t('aiEngines.autoModeCaveat')}
+      </div>
+    </div>
+  );
+}
+
+/** pi has no OS sandbox of its own (the app builds one with bubblewrap on
+ *  Linux and WSL floors): refuse pi agents where it cannot (shared/piSandbox.ts),
+ *  and the hosts a pi custodian may reach over HTTPS besides the app's loopback
+ *  services (md-netgate, shared/piModelHosts.ts). */
+function PiSandboxSettings({ config }: { config: HarnessConfig }) {
+  const { t } = useTranslation();
+  const [refuse, setRefuse] = useState(config.piRequireSandbox === true);
+  const [hosts, setHosts] = useState<PiModelHostsConfig>({ hosts: config.piModelHosts?.hosts ?? [], mode: config.piModelHosts?.mode === 'replace' ? 'replace' : 'add' });
+  const [detected, setDetected] = useState<string[] | null>(null);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    void window.cth.piModelHosts().then((r) => { if (alive) setDetected(r.detected); }, () => { if (alive) setDetected([]); });
+    return () => { alive = false; };
+  }, []);
+
+  const saveRequire = async (on: boolean) => {
+    setRefuse(on);
+    try { await window.cth.updateConfig({ piRequireSandbox: on }); } catch { /* noop */ }
+  };
+  const saveHosts = async (next: PiModelHostsConfig) => {
+    setHosts(next);
+    try { await window.cth.updateConfig({ piModelHosts: next }); } catch { /* noop */ }
+  };
+  const add = () => {
+    const n = normalizeModelHost(draft);
+    if (!n.ok) { setError(t(`aiEngines.piHostError.${n.error}`)); return; }
+    setError('');
+    setDraft('');
+    if (!hosts.hosts.includes(n.host)) void saveHosts({ ...hosts, hosts: [...hosts.hosts, n.host] });
+  };
+
+  const resolved = resolvePiModelHosts(detected ?? [], hosts);
+  const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--cth-ink-900)' };
+  const chip: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 6px', fontSize: 12, background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', color: 'var(--cth-ink-900)' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={headStyle}>{t('aiEngines.piSandbox')}</div>
+      <label style={row}>
+        <input type="checkbox" checked={refuse} onChange={(e) => void saveRequire(e.target.checked)} />
+        {t('aiEngines.piRequireSandbox')}
+      </label>
+      <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '17px' }}>{t('aiEngines.piRequireSandboxDesc')}</div>
+
+      <label style={{ ...labelStyle, marginTop: 6 }}>{t('aiEngines.piHosts')}</label>
+      <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '17px' }}>{t('aiEngines.piHostsDesc')}</div>
+      <div style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>
+        {detected === null ? t('aiEngines.piHostsLoading') : detected.length ? t('aiEngines.piHostsDetected', { list: detected.join(', ') }) : t('aiEngines.piHostsNoneDetected')}
+      </div>
+      <label style={row}>
+        <input type="radio" name="pi-model-hosts-mode" checked={hosts.mode === 'add'} onChange={() => void saveHosts({ ...hosts, mode: 'add' })} />
+        {t('aiEngines.piHostsModeAdd')}
+      </label>
+      <label style={row}>
+        <input type="radio" name="pi-model-hosts-mode" checked={hosts.mode === 'replace'} onChange={() => void saveHosts({ ...hosts, mode: 'replace' })} />
+        {t('aiEngines.piHostsModeReplace')}
+      </label>
+      {hosts.hosts.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {hosts.hosts.map((h) => (
+            <span key={h} style={chip}>
+              {h}
+              <button
+                type="button"
+                aria-label={t('aiEngines.piHostRemove', { host: h })}
+                title={t('aiEngines.piHostRemove', { host: h })}
+                onClick={() => void saveHosts({ ...hosts, hosts: hosts.hosts.filter((x) => x !== h) })}
+                style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--cth-ink-700)', font: 'inherit' }}
+              >×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input
+          placeholder={t('aiEngines.piHostPlaceholder')}
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); if (error) setError(''); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') add(); }}
+          style={inputStyle}
+        />
+        <PixelButton variant="secondary" size="sm" onClick={add} disabled={!draft.trim()}>{t('aiEngines.piHostAdd')}</PixelButton>
+      </div>
+      {error && <div style={{ fontSize: 11, color: 'var(--cth-ink-900)', padding: '4px 8px', background: 'var(--cth-coral-light)', boxShadow: 'inset 0 0 0 1px var(--cth-coral)' }}>{error}</div>}
+      <div style={{ fontSize: 12, color: 'var(--cth-ink-900)' }}>
+        {resolved.length ? t('aiEngines.piHostsResolved', { list: resolved.join(', ') }) : t('aiEngines.piHostsResolvedNone')}
       </div>
     </div>
   );

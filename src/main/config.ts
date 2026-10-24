@@ -14,6 +14,7 @@ import { MAX_AGENT_TOKEN_CAP } from '../shared/tokenCaps';
 import { cleanServerList } from '../shared/roleBundles';
 import { cleanAccessMap, isAccess, type Access } from '../shared/connectionAccess';
 import { mainRepoOfWorktree } from '../shared/gitWorktree';
+import { sanitizePiModelHosts } from '../shared/piModelHosts';
 import { expandTilde, normalizeHiveHome } from './fs';
 import { distroHomeUnc, fromLinuxPath, parseWslPath } from './wsl';
 import { hasPlainSecrets, mergeSecrets, splitSecrets, type SecretCodec } from './configSecrets';
@@ -404,6 +405,12 @@ export interface HarnessConfig {
   engineModels?: Partial<Record<'pi' | 'opencode', string[]>>;
   /** Per-CLI-provider default model slug, used to pre-fill the model picker. */
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
+  /** Refuse to start a pi agent where the app cannot sandbox it (no bubblewrap,
+   *  or not Linux/WSL): shared/piSandbox.ts. Absent → false (it runs, badged). */
+  piRequireSandbox?: boolean;
+  /** The hosts a pi custodian may reach over HTTPS (md-netgate): added to the
+   *  ones detected from its pi settings, or replacing them (shared/piModelHosts.ts). */
+  piModelHosts?: { hosts: string[]; mode: 'add' | 'replace' };
   /** Certificates for agents' HTTPS (custom endpoints, company gateways):
    *  verify on/off, an extra CA file, and trusting the Windows / WSL stores.
    *  See src/main/caBundle.ts. */
@@ -900,6 +907,8 @@ export function writeConfig(patch: Partial<HarnessConfig>): HarnessConfig {
       trustWsl: t.trustWsl === true
     };
   }
+  // A pi custodian's network allow-list: valid hostnames only, whatever the caller sent.
+  if (patch.piModelHosts !== undefined) next.piModelHosts = sanitizePiModelHosts(patch.piModelHosts);
   if (Array.isArray(patch.registeredRepos)) {
     const seen = new Set<string>();
     // On a WSL floor a typed `/home/u/repo` or `~/repo` is inside the distro.

@@ -102,6 +102,7 @@ import { effectiveApiAccess, explainConnection, isAccess, type Access } from '..
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
 import { runsUnsandboxed, unsandboxedAgents, unsandboxRefusal } from '../shared/unsandboxed';
 import { ensureVaultRoot } from './vaultRoot';
+import { piNoSandboxScript, refusePiWithoutSandbox, type PiSandboxPlace } from '../shared/piSandbox';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
 import { redactConfidential, redactionTotal } from '../shared/confidentialRedact';
 import { cleanDeliverableName, decide, type Decision, type PendingItem } from '../shared/criticalSignoff';
@@ -3847,6 +3848,22 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // the missing-CLI relaunch (the only re-entry, index.ts install-exit handler) does
   // NOT double-count a single user attempt — it is the SAME attempt continuing.
   if (!opts.noAutoInstall) analytics.track('agent_spawn_attempted', { provider });
+  // pi has no sandbox of its own. Where the app cannot build one (no bubblewrap,
+  // or not Linux/WSL) and the human asked to refuse that (Settings → AI
+  // providers), the agent is not started: its terminal says why and how to
+  // install bubblewrap. Off (the default), it runs with the "Not sandboxed" badge.
+  // Before the missing-CLI installer: no point installing a CLI that may not run.
+  if (opts.hive && hive.enabled() && refusePiWithoutSandbox(provider, readConfig().piRequireSandbox, await hive.sandboxAvailable())) {
+    const wslFloor = hive.wslRoot();
+    const place: PiSandboxPlace = wslFloor ? 'wsl' : process.platform === 'linux' ? 'linux' : process.platform === 'darwin' ? 'mac' : 'windows';
+    try { hive.appendLog({ kind: 'spawn-refused', agentId: opts.hive.id, reason: 'pi without an OS sandbox (piRequireSandbox)' }); } catch { /* log is best-effort */ }
+    const res = ptyManager.spawn(
+      { id: opts.id, cwd: opts.cwd, command: opts.command, cols: opts.cols, rows: opts.rows, shellScript: piNoSandboxScript(place, wslFloor?.distro) },
+      owner
+    );
+    syncKeepAwake();
+    return res;
+  }
   // ── Missing engine CLI → run its installer visibly (pre-spawn) ───────────────
   // If the agent's engine binary (claude/codex/…) isn't installed, spawning it
   // just dies with "— process exited (code 1) —" and the user has no idea why.
@@ -4080,6 +4097,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           denyDirs: spawnVaults.deny,
           denyOwners: spawnVaults.denyOwners,
           lockdown: spawnVaults.custodian ? { outgoing: join(hive.agentFolder(opts.hive.id), 'outgoing') } : undefined,
+          modelHosts: readConfig().piModelHosts,
+          piCustomBaseUrls: cleanCustomProviders(readConfig().customModelProviders).map((p) => p.baseUrl),
           mcpScopes: readConfig().connectionScopes,
           mcpOnlyManaged: readConfig().mcpOnlyManaged !== false,
           skillsDir: skillsResourceDir(),
@@ -6424,6 +6443,11 @@ ipcMain.handle('tls:status', async () => {
   caBuild = null; // the user asked: look again (a CA may have been installed)
   const r = await ensureCaBundle();
   return { count: r.count, errors: r.errors, path: r.path };
+});
+// Settings → AI providers → pi: the model hosts the app detects from the
+// user's pi settings (a custodian's network allows them, plus the human's).
+ipcMain.handle('pi:modelHosts', () => {
+  try { return { detected: hive.enabled() ? hive.detectedPiModelHosts(cleanCustomProviders(readConfig().customModelProviders).map((p) => p.baseUrl)) : [] }; } catch { return { detected: [] }; }
 });
 ipcMain.handle('tls:pickCaFile', async (evt) => {
   const win = BrowserWindow.fromWebContents(evt.sender);

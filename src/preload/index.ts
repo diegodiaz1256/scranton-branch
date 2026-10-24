@@ -472,6 +472,12 @@ export interface HarnessConfig {
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
   customModelProviders?: Array<{ id: string; label: string; baseUrl: string; models: string[] }>;
   engineModels?: Partial<Record<'pi' | 'opencode', string[]>>;
+  /** Refuse to start a pi agent where the app cannot sandbox it (no bubblewrap,
+   *  or not Linux/WSL): shared/piSandbox.ts. Absent → false (it runs, badged). */
+  piRequireSandbox?: boolean;
+  /** The hosts a pi custodian may reach over HTTPS (md-netgate): added to the
+   *  ones detected from its pi settings, or replacing them (shared/piModelHosts.ts). */
+  piModelHosts?: { hosts: string[]; mode: 'add' | 'replace' };
   /** Certificates for agents' HTTPS (custom endpoints, company gateways):
    *  verify on/off, an extra CA file, and trusting the Windows / WSL stores.
    *  See src/main/caBundle.ts. */
@@ -1036,6 +1042,8 @@ const api = {
   // ─── Certificates for agents' HTTPS (Settings → AI Engines) ────────────────
   /** Rebuild the CA bundle from the saved settings; how many certificates it holds. */
   tlsStatus: (): Promise<{ count: number; errors: string[]; path: string | null }> => ipcRenderer.invoke('tls:status'),
+  /** The model hosts detected from the user's pi settings (a pi custodian's network). */
+  piModelHosts: (): Promise<{ detected: string[] }> => ipcRenderer.invoke('pi:modelHosts'),
   /** Pick a CA certificate file (PEM). */
   tlsPickCaFile: (): Promise<{ ok: true; path: string } | { ok: false }> => ipcRenderer.invoke('tls:pickCaFile'),
   /** GET <url>/models with the saved certificate settings. */
