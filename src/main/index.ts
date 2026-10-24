@@ -119,8 +119,9 @@ import { PROVIDER_BACKENDS, backendForModel, providerKeyEnv } from '../shared/pr
 import { LIST_MODELS, SIGN_IN, authProviders, piOwnModels, cleanCustomProviders, effectiveModel, keyScope, piSettingsWithModel, customKeyEnv, modelsFromListing, opencodeProviders, parseModelList, piModelsJson, type ManagedEngine } from '../shared/engineModels';
 import { diffTasks, snapshotOf, type TaskEvent, type TaskSnapshot } from '../shared/taskHistory';
 import type { TaskEdit } from '../shared/taskEdit';
-import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, isInside, linkFor, recordElsewhere, writtenFiles, type DeliverableLink, type ElsewhereWrite } from '../shared/deliverables';
+import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, deliverablePaths, isInside, linkFor, recordElsewhere, writtenFiles, type DeliverableLink, type ElsewhereWrite } from '../shared/deliverables';
 import { isDeliverableLike } from '../shared/deliverableOrganize';
+import { matchDeliverable } from '../shared/deliverableMatch';
 import { scanDeliverables } from './deliverableScan';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, hasPlaceholderHost, probeSpecFor } from '../shared/integrations';
 import { RosterStore } from './roster';
@@ -5859,6 +5860,24 @@ ipcMain.handle('deliverables:fileUrl', async (_evt, p: unknown) => {
   const root = hive.enabled() ? hive.root() : null;
   const research = root ? resolve(root, DELIVERABLES_DIR) : null;
   return deliverableFiles.urlFor(research && isInside(st.path, research) ? research : dirname(st.path), st.path);
+});
+// A path clicked in an agent's terminal: the deliverable it is (as the list
+// spells it), or null for any other file (the IDE opens those). The same files
+// deliverables:list shows: research/, task links and cards, written elsewhere.
+ipcMain.handle('deliverables:match', (_evt, p: unknown) => {
+  const root = hive.enabled() ? hive.root() : null;
+  if (!root || typeof p !== 'string' || !p.length || p.length > 4096 || p.includes('\0')) return null;
+  const distro = hive.wslRoot()?.distro ?? null;
+  const toHost = (x: string): string => (distro ? fromLinuxPath(x, distro, () => distroHomeUnc(distro)) : x);
+  const session = Object.values(hive.registry().agents).flatMap((a) => writtenFiles(hookServer.stepsFor(a.id)).map((f) => toHost(f.path)));
+  const cards = ((hive.tasks() as { tasks?: Array<{ deliverable?: unknown }> }).tasks ?? [])
+    .flatMap((x) => (typeof x?.deliverable === 'string' ? deliverablePaths(x.deliverable, root, distro) : []));
+  const known = [
+    ...readDeliverableLinks().map((l) => l.path),
+    ...cards,
+    ...[...readElsewhereWrites(root).map((w) => w.path), ...session].filter((x) => !isInside(x, root) && isDeliverableLike(x))
+  ];
+  return matchDeliverable(p, { researchDir: join(root, DELIVERABLES_DIR), distro, known });
 });
 // What the human typed straight into an agent's terminal, kept for the Inbox
 // (the renderer knows which prompts were typed by a person). Main-only file.

@@ -1073,8 +1073,12 @@ void import('@/store/store')
  *  Both non-reveal verdicts land in the IDE. The IDE already routes by type
  *  (Monaco for source, preview for markdown, the viewer for images), so this
  *  does not need to pass the verdict along — it only needs to know whether the
- *  file is ours to open at all. */
-async function activatePath(abs: string, action: PathAction): Promise<void> {
+ *  file is ours to open at all.
+ *
+ *  A deliverable (a file the Deliverables list shows: research/, linked from a
+ *  task, written elsewhere) opens there instead, on a plain click; ⌘/Ctrl+click
+ *  still takes it to the IDE. */
+async function activatePath(abs: string, action: PathAction, event?: MouseEvent): Promise<void> {
   let hit = mdStatCache.get(abs);
   if (!hit) {
     const res = await window.cth.statAbs(abs).catch(() => null);
@@ -1085,6 +1089,18 @@ async function activatePath(abs: string, action: PathAction): Promise<void> {
   }
   if (action === 'reveal' || !hit.isFile) {
     void window.cth.revealPath(hit.path).catch(() => { /* file browser refused */ });
+    return;
+  }
+  const toIde = !!event && (event.metaKey || event.ctrlKey);
+  const deliverable = toIde ? null : await window.cth.deliverablesMatch(hit.path).catch(() => null);
+  if (deliverable) {
+    // From the Classic floor too: Deliverables lives in the Pro layout (like a
+    // task card's "Open in Deliverables").
+    const { useProStore } = await import('@/pro/proStore');
+    const pro = useProStore.getState();
+    pro.setFocusDeliverable(deliverable);
+    pro.setLayout('pro');
+    pro.setView({ kind: 'section', section: 'deliverables' });
     return;
   }
   storeApi?.getState().openFileInIde(hit.path);
@@ -1152,7 +1168,7 @@ function registerMarkdownLinkProvider(term: Terminal, ptyId: string): void {
             // (a file browser) still wants the modifier. URLs keep ⌘/Ctrl.
             activate: (event: MouseEvent | undefined) => {
               if (action === 'reveal' && event && !(event.metaKey || event.ctrlKey)) return;
-              void activatePath(abs, action);
+              void activatePath(abs, action, event);
             }
           });
         }
