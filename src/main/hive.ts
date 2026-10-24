@@ -1183,14 +1183,20 @@ export class HiveManager {
     const claudeProvider = isClaudeProvider(meta.provider ?? 'claude');
 
     // Git and its folders, enforced at PreToolUse (hooks.ts -> toolGuard.ts).
+    // A WSL floor's agents run in the distro: `~`, the temp dir and Claude's
+    // projects folder are the distro's, not the Windows ones the app runs with.
+    const wslFloor = this.wslRoot();
+    const wslHome = wslFloor ? distroHomeUnc(wslFloor.distro) : null;
+    const agentPlaces = wslFloor
+      ? ['/tmp', ...(wslHome ? [join(wslHome, '.claude', 'projects')] : [])]
+      : [tmpdir(), '/tmp', join(homedir(), '.claude', 'projects')];
     this.guardPolicies.set(meta.id, {
       cwd: meta.cwd || dir,
       roots: [...new Set([meta.cwd, ...this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), ...(opts.writableRoots ?? []),
-        tmpdir(), '/tmp', join(homedir(), '.claude', 'projects')].filter((d): d is string => typeof d === 'string' && d.length > 0))],
+        ...agentPlaces].filter((d): d is string => typeof d === 'string' && d.length > 0))],
       git: gitAllowed(opts.mcpDefaults, opts.mcpGrant),
       contained: !opts.roam,
-      // A WSL floor's agents run in the distro: `~` is the distro user's home.
-      ...(() => { const w = this.wslRoot(); const h = w ? distroHomeUnc(w.distro) : null; return h ? { home: h } : {}; })()
+      ...(wslHome ? { home: wslHome } : {})
     });
 
     // Non-hive-aware providers (for example Antigravity, Codex, Grok and Pi) don't

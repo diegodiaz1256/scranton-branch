@@ -89,6 +89,10 @@ test('through the real hook server: Git off in Capabilities refuses git, the pro
   assert.equal((await ask('Write', { file_path: path.join(os.homedir(), 'x.txt') })).hookSpecificOutput?.permissionDecision, 'deny');
   assert.equal((await ask('Write', { file_path: path.join(cwd, 'ok.txt') })).hookSpecificOutput, undefined);
   assert.equal((await ask('Bash', { command: 'npm test' })).hookSpecificOutput, undefined);
+  // Relative paths resolve where the hook says the shell is.
+  assert.equal((await ask('Bash', { command: 'echo x > ok.txt' })).hookSpecificOutput, undefined);
+  const inHome = await server.handle({ agent_id: 'g1', session_id: 's', hook_event_name: 'PreToolUse', cwd: os.homedir(), tool_name: 'Bash', tool_input: { command: 'echo x > ok.txt' } });
+  assert.equal(inHome.hookSpecificOutput?.permissionDecision, 'deny');
   // Switched back on in Capabilities: the running agent gets it at once.
   hive.refreshGuards({ agentMcpGrants: { g1: ['filesystem', 'git'] } });
   assert.equal((await ask('Bash', { command: 'git push' })).hookSpecificOutput, undefined);
@@ -124,4 +128,52 @@ test('on a WSL floor the agent may write its own folders by their Linux paths', 
   assert.ok(guardToolCall('Write', { file_path: '/home/me/other/x.txt', content: 'x' }, policy, '/c/Users/me'));
   assert.ok(guardToolCall('Bash', { command: 'rm -rf /etc/x' }, policy, '/c/Users/me'));
   assert.ok(guardToolCall('Write', { file_path: 'C:/Windows/x.txt', content: 'x' }, policy, '/c/Users/me'));
+});
+
+// A WSL office (v1.1.3): relative paths resolved against the folder the agent
+// was started in, not where its shell was. From hive/agents/god/inbox,
+// `cd ../..` was "outside your folders"; from hive/research, `>> ../agents/…`
+// too. The policy below is what HiveManager builds for god on that floor; the
+// payloads are real PreToolUse calls from claude in the distro (cwd included).
+test('on a WSL floor relative paths resolve where the shell is (the hook cwd)', () => {
+  const office = r`\\wsl.localhost\Ubuntu\home\zeroge\offices\wsl-guardcwd`;
+  const policy = {
+    cwd: office,
+    roots: [office, `${office}\\hive\\agents\\god`, `${office}\\hive`, '/tmp', r`\\wsl.localhost\Ubuntu\home\zeroge\.claude\projects`],
+    git: false, contained: true, home: r`\\wsl.localhost\Ubuntu\home\zeroge`
+  };
+  const lin = '/home/zeroge/offices/wsl-guardcwd';
+  const call = (command, cwd) => guardToolCall('Bash', { command }, policy, r`C:\Users\me`, cwd);
+  for (const [cwd, command] of [
+    [`${lin}/hive/agents/god/inbox`, 'cd ../.. && pwd'],
+    [`${lin}/hive/agents/god/inbox`, 'ls ../.. && echo done > ../../../board.md'],
+    [`${lin}/hive/research`, 'echo x >> ../agents/god/memory.md'],
+    [`${lin}/hive/research`, `cd ${lin}/hive/agents/god/inbox && echo y >> ../memory.md && cd ../../.. && pwd`],
+    [lin, 'cd hive/research && echo x >> ../board.md'],
+    [lin, 'pushd hive/agents/god/inbox && echo x > ../memory.md && popd && echo y > hive/board.md'],
+    ['/home/zeroge/.claude/projects/-home-zeroge-offices', 'echo x > notes.md']
+  ]) assert.equal(call(command, cwd), null, `${cwd}: ${command}`);
+  // Still fenced, wherever the shell is.
+  for (const [cwd, command] of [
+    [`${lin}/hive/research`, 'echo z > /home/zeroge/escape.txt'],
+    [`${lin}/hive/research`, 'echo z > ../../../escape.txt'],
+    [`${lin}/hive/agents/god/inbox`, 'cd ../../../../.. && rm -rf offices'],
+    [lin, 'cd hive && cd ../.. && touch x'],
+    // A cd inside a subshell does not move the commands after it.
+    [lin, '(cd hive/agents/god/inbox) && echo z > ../../../../escape.txt'],
+    [lin, 'pushd hive/agents/god/inbox && popd && echo z > ../escape.txt'],
+    [`${lin}/hive`, 'git status']
+  ]) assert.ok(call(command, cwd), `${cwd}: ${command}`);
+  // No cwd from the hook (other CLIs): the folder it was started in, as before.
+  assert.ok(call('echo x >> ../agents/god/memory.md'));
+  assert.equal(call('cd hive/research && echo x >> ../agents/god/memory.md'), null);
+});
+
+test('the shell cwd counts on Windows too, and a cd in the line moves what follows', () => {
+  assert.equal(guardToolCall('Bash', { command: 'echo x > ../hive/board.md' }, { ...WIN, roots: [...WIN.roots, r`G:\office`] }, r`C:\Users\me`, r`G:\office\research`), null);
+  assert.equal(bash(r`cd G:\office\hive\agents\jim && echo x > ..\..\board.md`), null);
+  assert.equal(bash(r`cd /d G:\office\hive && echo x > tasks.json`), null);
+  assert.ok(bash(r`cd G:\office\hive && echo x > ..\escape.txt`));
+  assert.ok(guardToolCall('Write', { file_path: '../x.txt' }, WIN, r`C:\Users\me`, r`C:\work\shop`));
+  assert.equal(guardToolCall('Write', { file_path: '../shop/x.txt' }, WIN, r`C:\Users\me`, r`C:\work\shop\src`), null);
 });
