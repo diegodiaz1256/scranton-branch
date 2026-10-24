@@ -1,6 +1,6 @@
 /**
  * An OS sandbox the app builds itself, for CLIs that have none of their own
- * (pi): bubblewrap on Linux and inside a WSL floor's distro.
+ * that holds (pi, agy): bubblewrap on Linux and inside a WSL floor's distro.
  *
  * It mirrors what Claude Code's own sandbox gives an agent in this app:
  *   - the whole filesystem read-only, except the agent's writable set (the
@@ -43,6 +43,32 @@ export interface BwrapProfile {
 
 /** Credential folders under $HOME no agent has any business reading. */
 export const SECRET_HOME_DIRS: readonly string[] = ['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.config/gcloud', '.config/gh', '.password-store'];
+
+/** CLIs the app sandboxes itself. agy has a `--sandbox` of its own, but it
+ *  leaves /home and /tmp writable and only the project read-only (agy 1.4.7,
+ *  tried on WSL), so it confines nothing an agent's folders would need. */
+export type AppSandboxedCli = 'pi' | 'agy';
+
+/**
+ * The CLI's own state under $HOME: what it has to write to work at all, and
+ * the parts of it that stay read-only (the office's hook config, and programs
+ * a later run outside the sandbox would execute).
+ *   - pi: only its login (its settings live in the agent's own folder);
+ *   - agy: ~/.gemini/antigravity-cli (conversations, logs, login, trusted
+ *     folders) and its cache; ~/.gemini/config (hooks, plugins, MCP, skills)
+ *     stays read-only like the rest of $HOME.
+ */
+export function cliStateMounts(cli: AppSandboxedCli, home: string): { writable: string[]; writableFiles: string[]; controls: string[] } {
+  const h = home.replace(/\/+$/, '');
+  if (cli === 'agy') {
+    const state = `${h}/.gemini/antigravity-cli`;
+    // bin/ itself stays writable: agy rewrites bin/agentapi before every shell
+    // command (read-only, each run_command fails). What it installed there
+    // and its built-in skills are only written by an install or update.
+    return { writable: [state, `${h}/.cache/antigravity`], writableFiles: [], controls: [`${state}/hooks.json`, `${state}/bin/webm_encoder`, `${state}/builtin`] };
+  }
+  return { writable: [], writableFiles: [`${h}/.pi/agent/auth.json`], controls: [] };
+}
 
 /** The paths a profile mounts over (for the caller's existence check). */
 export function mountPoints(p: BwrapProfile): string[] {
