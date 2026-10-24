@@ -52,7 +52,7 @@ function officeAsk(connect, sock, payload, waitMs, tries, cb) {
 }
 var OFFLINE_WRITE_TOOLS = ['write', 'edit', 'multiedit', 'notebookedit', 'create', 'write_file', 'edit_file', 'create_file', 'replace', 'str_replace', 'insert', 'write_to_file', 'replace_file_content', 'multi_replace_file_content', 'str_replace_editor', 'str_replace_based_edit_tool', 'apply_patch', 'patch'];
 var OFFLINE_SHELL_TOOLS = ['bash', 'powershell', 'shell', 'run_shell_command', 'exec_command', 'local_shell', 'run_command', 'run_terminal_cmd', 'execute_command'];
-var OFFLINE_PATH_KEYS = ['file_path', 'filePath', 'path', 'TargetFile', 'targetFile', 'target_file', 'AbsolutePath', 'absolutePath', 'absolute_path', 'notebook_path', 'filename', 'file'];
+var OFFLINE_PATH_KEYS = ['file_path', 'filePath', 'path', 'Path', 'TargetFile', 'targetFile', 'target_file', 'AbsolutePath', 'absolutePath', 'absolute_path', 'notebook_path', 'filename', 'file'];
 // A comparable path (toolGuard.ts normPath): forward slashes, C:\ and /mnt/c
 // as /c, a WSL share as the distro path, no . or .. left.
 function officeNorm(p) {

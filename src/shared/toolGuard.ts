@@ -130,7 +130,8 @@ export function within(p: string, root: string): boolean {
 const SINKS = new Set(['/dev/null', '/dev/stdout', '/dev/stderr', 'nul', '$null']);
 
 
-const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'bash', 'shell', 'run_shell_command', 'exec_command', 'local_shell']);
+// run_command: Antigravity's shell (its command in CommandLine).
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'bash', 'shell', 'run_shell_command', 'exec_command', 'local_shell', 'run_command']);
 
 /** Commands that move the shell somewhere else. */
 const MOVES = new Set(['cd', 'pushd', 'chdir', 'set-location', 'sl', 'push-location']);
@@ -370,7 +371,7 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
   for (const p of writtenPathsOf(tool, inp)) { const v = writeRefusal(p); if (v) return v; }
 
   if (!SHELL_TOOLS.has(tool)) return null;
-  const cmd = typeof inp.command === 'string' ? inp.command : Array.isArray(inp.command) ? (inp.command as unknown[]).join(' ') : typeof inp.cmd === 'string' ? inp.cmd : '';
+  const cmd = typeof inp.command === 'string' ? inp.command : Array.isArray(inp.command) ? (inp.command as unknown[]).join(' ') : typeof inp.cmd === 'string' ? inp.cmd : typeof inp.CommandLine === 'string' ? inp.CommandLine : '';
   if (!cmd) return null;
   return checkShell(cmd, 0, start);
 
