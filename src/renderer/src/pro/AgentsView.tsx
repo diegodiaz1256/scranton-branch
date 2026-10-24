@@ -102,7 +102,7 @@ function ArchivedAgents({ config }: { config: HarnessConfig }) {
   const reopen = async (a: Agent) => {
     setBusy(a.id);
     setErrors((e) => ({ ...e, [a.id]: '' }));
-    const r = await respawnAgent(a, config);
+    const r = await respawnAgent(a, config, true);
     setBusy(null);
     if (r.ok) useStore.getState().addAgent(r.agent); // addAgent also drops it from the archive
     else if (r.alreadyLive) useStore.getState().removeArchivedAgent(a.id);

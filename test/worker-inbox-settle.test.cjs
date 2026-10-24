@@ -124,7 +124,7 @@ test('the ephemeral-worker tick settles the inbox on the done path, up to the do
   assert.ok(done > 0, 'the done branch exists');
   const settle = source.indexOf('hive.settleInbox(workerId, doneAt)', done);
   assert.ok(settle > 0, 'the done branch settles the inbox with the done signal as the cut-off');
-  const kill = source.indexOf('ptyManager.kill(workerId)', done);
+  const kill = source.indexOf('ptyManager.kill(workerPty(rec))', done);
   assert.ok(settle < kill, 'the settle happens before the PTY is killed (the worker dir still exists either way, but the order keeps the log readable)');
   const report = source.indexOf('settled.unanswered', settle);
   assert.ok(report > 0 && report < kill, 'the filed requests/queries are reported to god before the kill');
