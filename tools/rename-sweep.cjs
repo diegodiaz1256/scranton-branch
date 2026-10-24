@@ -10,8 +10,9 @@
  * this does not. After a rebase: drop the sweep commit, run
  *
  *     node tools/rename-sweep.cjs names
+ *     cd blog && npm ci && npm run build     # CI checks docs/blog against a fresh build
  *
- * and commit what it changed. `--check` only reports (exit 1 if anything would
+ * and commit what they changed. `--check` only reports (exit 1 if anything would
  * change), which also catches new "Munder Difflin" text that a later branch adds
  * to one of the swept areas.
  *
@@ -140,7 +141,8 @@ const BLOG_RULES = [
   [/(blog — )Munder Difflin(["<])/g, '$1Scranton Branch$2'],
   [/The Munder Difflin (<span class="hl">Blog\.<\/span>)/g, 'The Scranton Branch $1'],
   [/^title: The Munder Difflin Blog$/gm, 'title: The Scranton Branch Blog'],
-  [new RegExp(`${UPSTREAM.replace(/[.]/g, '\\.')}(">GitHub</a>)`, 'g'), `${REPO}$1`],
+  // The footer's GitHub link only (it ends its line); posts link upstream on purpose.
+  [new RegExp(`${UPSTREAM.replace(/[.]/g, '\\.')}(">GitHub</a>\\n)`, 'g'), `${REPO}$1`],
   [/(© \d{4} )Munder Difflin · Local-first · MIT-licensed ·/g, '$1Scranton Branch · Local-first · Apache-2.0 ·'],
   // The archive note, once, after the footer's last line.
   [/(\n([ \t]*)Run an office of agents while you sleep\.\n)(\s*<\/div>\s*\n\s*<\/div>\s*\n<\/footer>)/g,
