@@ -26,15 +26,17 @@ var HIVE_GUARD = (function () { try { return JSON.parse(process.env.HIVE_GUARD |
 // refused or missing socket is tried again (the app may be restarting its
 // hook server) up to tries times; the whole wait is capped at waitMs.
 function officeAsk(connect, sock, payload, waitMs, tries, cb) {
-  var done = false, attempt = 0, timer = null;
-  function finish(v) { if (done) return; done = true; if (timer) clearTimeout(timer); cb(v); }
+  var done = false, attempt = 0, timer = null, c = null;
+  // Never leaves a connection open: a long-lived CLI (pi, OpenCode) asks on
+  // every tool call.
+  function finish(v) { if (done) return; done = true; if (timer && typeof clearTimeout === 'function') clearTimeout(timer); try { if (c) c.destroy(); } catch (e) {} cb(v); }
   timer = setTimeout(function () { finish(null); }, waitMs);
   function retry() { if (attempt < tries) setTimeout(go, 1000); else finish(null); }
   function go() {
     if (done) return;
     if (!sock) return finish(null);
     attempt++;
-    var resp = '', connected = false, c;
+    var resp = '', connected = false;
     try {
       var s = String(sock);
       c = connect(s.indexOf('tcp://') === 0 ? { host: '127.0.0.1', port: Number(s.slice(s.lastIndexOf(':') + 1)) } : s, function () { connected = true; try { c.write(JSON.stringify(payload) + '\n'); } catch (e) {} });
@@ -91,7 +93,7 @@ function officeOffline(tool, input, cwd) {
   try { text = JSON.stringify(inp).replace(/\\n/g, '\n'); } catch (e) {}
   while ((m = re.exec(text))) paths.push(m[1]);
   if (!paths.length) return null;
-  var base = cwd || process.cwd(), home = process.env.HOME || process.env.USERPROFILE || '';
+  var base = cwd || (typeof process.cwd === 'function' ? process.cwd() : ''), home = process.env.HOME || process.env.USERPROFILE || '';
   for (var i = 0; i < paths.length; i++) {
     var raw = String(paths[i]).trim();
     var abs = /^~(?:[\\/]|$)/.test(raw) ? home + raw.slice(1) : /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(raw) ? raw : base + '/' + raw;

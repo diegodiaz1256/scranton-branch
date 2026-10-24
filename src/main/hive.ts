@@ -4877,9 +4877,9 @@ function ask(payload) {
     payload.agent_id = payload.agent_id || AGENT;
     if (SID && !payload.session_id) payload.session_id = SID;
     officeAsk(net.createConnection, SOCK, payload, 8000, 3, function (resp) {
-      if (!resp) return resolve(officeOffline(payload.tool_name, payload.tool_input, process.cwd()));
+      if (!resp) return resolve(officeOffline(payload.tool_name, payload.tool_input));
       try { var r = JSON.parse(resp); var h = r.hookSpecificOutput; resolve(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); }
-      catch (e) { resolve(officeOffline(payload.tool_name, payload.tool_input, process.cwd())); }
+      catch (e) { resolve(officeOffline(payload.tool_name, payload.tool_input)); }
     });
   });
 }
@@ -4974,9 +4974,9 @@ function ask(payload) {
     payload.agent_id = payload.agent_id || AGENT;
     if (SID && !payload.session_id) payload.session_id = SID;
     officeAsk(createConnection, SOCK, payload, 8000, 3, (resp) => {
-      if (!resp) return resolve(officeOffline(payload.tool_name, payload.tool_input, process.cwd()));
+      if (!resp) return resolve(officeOffline(payload.tool_name, payload.tool_input));
       try { const h = JSON.parse(resp).hookSpecificOutput; resolve(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); }
-      catch (e) { resolve(officeOffline(payload.tool_name, payload.tool_input, process.cwd())); }
+      catch (e) { resolve(officeOffline(payload.tool_name, payload.tool_input)); }
     });
   });
 }
