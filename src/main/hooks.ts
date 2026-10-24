@@ -27,7 +27,7 @@ import { isAbsolute, join as joinPath } from 'node:path';
 import { parseRateLimits, type RateLimits } from '../shared/rateLimits';
 import { WEB_FETCH_HINT, webFetchFailed } from '../shared/browsePage';
 import { rosterSignature } from '../shared/tokenDiet';
-import { guardToolCall } from '../shared/toolGuard';
+import { callWrittenFiles, guardToolCall } from '../shared/toolGuard';
 import { homedir } from 'node:os';
 
 /** Maximum JSON payload bytes in one newline-delimited hook frame. */
@@ -732,13 +732,11 @@ export class HookServer {
   }
 
   private writtenFiles(agentId: string | undefined, p: HookPayload): string[] {
-    const paths = writtenPathsOf(p.tool_name, p.tool_input);
-    if (!paths.length) return [];
     let cwd = p.cwd;
     if (!cwd && agentId) { try { cwd = this.hive.registry().agents[agentId]?.cwd; } catch { /* no registry */ } }
-    // A Linux path from an agent inside WSL is absolute too (main maps it later).
-    const abs = (f: string) => (f.startsWith('/') || isAbsolute(f) ? f : cwd ? joinPath(cwd, f) : null);
-    return paths.map(abs).filter((f): f is string => !!f).slice(0, 50);
+    // Write tools and shell writes (`echo … >> research/x.md`); a Linux path
+    // from an agent inside WSL stays one (main maps it later).
+    return callWrittenFiles(p.tool_name, p.tool_input, cwd);
   }
 
   private emit(agentId: string | undefined, event: string, p: HookPayload, blocked = false): void {
