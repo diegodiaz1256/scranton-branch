@@ -105,3 +105,15 @@ test('md-run with no runners says so instead of printing nothing', async (t) => 
   }, (err, stdout) => (err ? reject(err) : resolve(stdout))));
   assert.match(out, /No runners are set up for you yet/);
 });
+
+test('every agent is told where a deliverable goes: one folder per ticket, or a dated topic', async (t) => {
+  for (const meta of [{ id: 'jim', name: 'Jim', provider: 'codex' }, { id: 'god', name: 'Michael', provider: 'claude', isGod: true }]) {
+    const { prompt, root } = await spawn(t, meta);
+    assert.ok(prompt.includes(path.join(root, 'research', '<ticket>')), `${meta.id}: research/<ticket> by full path`);
+    assert.match(prompt, /research\/<yyyy-mm-dd>-<topic>/, meta.id);
+    assert.match(prompt, /one main document per folder/i, meta.id);
+    const services = fs.readFileSync(path.join(root, 'protocol', 'services.md'), 'utf8');
+    assert.match(services, /`research\/<ticket>\/`/);
+    assert.match(services, /`research\/<yyyy-mm-dd>-<topic>\/`/);
+  }
+});
