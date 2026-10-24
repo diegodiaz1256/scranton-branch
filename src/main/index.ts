@@ -3758,7 +3758,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   const provider = inferAgentProvider(opts.command, opts.provider ?? opts.hive?.provider);
   // A custodian works in its own hive folder, never in a project: nothing it
   // writes can land in shared code, and its transcripts get a folder of their own.
-  if (opts.hive && hive.enabled() && canBeCustodian(provider) && isCustodian(criticalMap(), opts.hive.id)) {
+  if (opts.hive && hive.enabled() && canBeCustodian(provider, { osSandbox: await hive.sandboxAvailable() }) && isCustodian(criticalMap(), opts.hive.id)) {
     const own = hive.agentFolder(opts.hive.id);
     mkdirSync(own, { recursive: true });
     opts.cwd = own;
@@ -4025,7 +4025,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // never falls back to running unconfined.
       if (inj.wrap) {
         opts.args = [...inj.wrap, '--', opts.command, ...opts.args];
-        opts.command = 'bwrap';
+        opts.command = inj.wrapCommand ?? 'bwrap';
       }
       if (inj.osSandbox) osSandboxes.set(opts.hive.id, inj.osSandbox);
       seedPrompt = inj.seedPrompt;
@@ -5241,6 +5241,11 @@ ipcMain.handle('hive:tasks', () => hive.tasks());
 // One custodian agent per critical connection or REST API. Everyone else is
 // left out at spawn AND refused by the gateway / broker on every call.
 
+/** Whether the app can build an OS sandbox where this floor's agents run
+ *  (bubblewrap on Linux or in the WSL distro): what a pi custodian needs.
+ *  Refreshed whenever a custodian is chosen or an agent starts. */
+let appSandbox = false;
+
 function criticalMap(): CriticalMap {
   return cleanCriticalMap(readConfig().criticalCustodians);
 }
@@ -5266,7 +5271,7 @@ function criticalRefusalFor(kind: CriticalKind, id: string, agentId: string | un
   const name = reg ? reg.name : undefined;
   if (!criticalAllows(map, kind, id, agentId)) return criticalRefusal(criticalLabel(kind, id), name);
   // The custodian itself, on an engine the app cannot lock down: refused too.
-  if (!canBeCustodian(agentProviderOf(agentId))) return `${criticalLabel(kind, id)} is a critical connection, and only a Claude Code agent can hold one. Ask the human to choose a Claude Code custodian under Connections.`;
+  if (!canBeCustodian(agentProviderOf(agentId), { osSandbox: appSandbox })) return `${criticalLabel(kind, id)} is a critical connection, and only a Claude Code agent, or a pi agent on a Linux or WSL floor with bubblewrap, can hold one. Ask the human to choose another custodian under Connections.`;
   return null;
 }
 
@@ -5281,7 +5286,7 @@ function toolBlocksFor(agentId: string): string[] {
 
 /** The names of the critical connections an agent holds, for its prompt. */
 function criticalLabelsFor(agentId: string, provider: string | undefined): string[] {
-  if (!canBeCustodian(provider)) return [];
+  if (!canBeCustodian(provider, { osSandbox: appSandbox })) return [];
   const map = criticalMap();
   return [...heldIds(map, agentId, 'mcp').map((id) => criticalLabel('mcp', id)), ...heldIds(map, agentId, 'api').map((id) => criticalLabel('api', id))];
 }
@@ -5309,7 +5314,7 @@ function readCriticalAudit(kind: CriticalKind, id: string, limit = 100): Array<C
   return out;
 }
 
-ipcMain.handle('critical:set', (_evt, kind: unknown, id: unknown, critical: unknown, custodian: unknown) => {
+ipcMain.handle('critical:set', async (_evt, kind: unknown, id: unknown, critical: unknown, custodian: unknown) => {
   if ((kind !== 'mcp' && kind !== 'api') || typeof id !== 'string' || !id) return { ok: false, error: 'bad request' };
   const known = kind === 'api' ? !!integrations.getRecord(id) : (id.startsWith('custom--') ? (readConfig().customMcp ?? []).some((c) => c.id === id) : !!serviceOf(id));
   if (!known) return { ok: false, error: 'unknown connection' };
@@ -5318,7 +5323,8 @@ ipcMain.handle('critical:set', (_evt, kind: unknown, id: unknown, critical: unkn
     const a = hive.enabled() ? hive.registry().agents?.[custodian] : undefined;
     if (!a || a.status === 'gone' || a.archived) return { ok: false, error: 'unknown agent' };
     if (a.isGod) return { ok: false, error: 'the orchestrator routes everyone\'s work; choose another agent as custodian' };
-    if (!canBeCustodian(a.provider)) return { ok: false, error: 'only a Claude Code agent can be a custodian' };
+    if (a.provider === 'pi' && !(appSandbox = await hive.sandboxAvailable())) return { ok: false, error: 'a pi agent can be a custodian only where the app can sandbox it: a Linux or WSL floor with bubblewrap. Use a WSL floor, or a Claude Code agent.' };
+    if (!canBeCustodian(a.provider, { osSandbox: appSandbox })) return { ok: false, error: 'only a Claude Code agent, or a pi agent on a Linux or WSL floor, can be a custodian' };
     who = custodian;
   }
   writeConfig({ criticalCustodians: setCritical(criticalMap(), kind, id, critical === true, who) });
@@ -5358,7 +5364,7 @@ async function ensureVault(dir: string): Promise<void> {
 async function prepareVaults(agentId: string, provider: string | undefined): Promise<{ own: string[]; deny: string[]; custodian: boolean }> {
   const root = vaultRoot();
   const map = criticalMap();
-  const custodian = canBeCustodian(provider) && isCustodian(map, agentId);
+  const custodian = canBeCustodian(provider, { osSandbox: appSandbox = await hive.sandboxAvailable() }) && isCustodian(map, agentId);
   // Every other custodian's own folder (its memory, notes, held mail) and its
   // Claude Code transcripts are as confidential as its vault.
   const others = hive.enabled() ? [...new Set(Object.values(map))].filter((id) => id && id !== agentId) : [];

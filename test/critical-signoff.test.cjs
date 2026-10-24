@@ -176,7 +176,11 @@ test('5. another agent may not read the custodian\'s folder or its transcripts',
 
 // ─── 6. engine ──────────────────────────────────────────────────────────────
 
-test('6. only Claude Code can be a custodian (hooks, path guard, OS sandbox, tool and MCP lockdown)', () => {
-  assert.deepEqual([...C.CUSTODIAN_PROVIDERS], ['claude']);
-  for (const p of ['pi', 'codex', 'gemini', 'opencode', 'crush', 'qwen', 'grok', 'agy', 'cursor', 'copilot']) assert.equal(C.canBeCustodian(p), false, p);
+test('6. engines: Claude Code anywhere; pi only where the app sandboxes it; nothing else', () => {
+  assert.deepEqual([...C.CUSTODIAN_PROVIDERS], ['claude', 'pi']);
+  assert.equal(C.canBeCustodian('claude'), true);
+  assert.equal(C.canBeCustodian('pi'), false, 'native Windows: no OS sandbox for pi');
+  assert.equal(C.canBeCustodian('pi', { osSandbox: false }), false);
+  assert.equal(C.canBeCustodian('pi', { osSandbox: true }), true, 'Linux / WSL floor with bubblewrap');
+  for (const p of ['codex', 'gemini', 'opencode', 'crush', 'qwen', 'grok', 'agy', 'cursor', 'copilot']) assert.equal(C.canBeCustodian(p, { osSandbox: true }), false, p);
 });
