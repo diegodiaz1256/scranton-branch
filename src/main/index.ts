@@ -90,6 +90,7 @@ import { cleanCustomBundles } from '../shared/roleBundles';
 import { Factories } from './factories';
 import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toWslUnc, mirroredNetworking, parseWslPath, probeInDistro, WSL_INSTALL, wslAgentTmpDir } from './wsl';
 import { WslBridge } from './wslBridge';
+import { appImageRelaunch } from './appImageLauncher';
 import { McpServers } from './mcpServers';
 import { EnvVault, fingerprintOf, type ProposalAnswer } from './envVault';
 import { addConnection, connectionAccessFor, setConnectionAccess, connectionKeyStored, connectionLaunchEnv, instancesOf, listConnections, removeConnection, renameConnection, serviceOf, setConnectionEnabled, setConnectionScope, setConnectionSecret, testConnection } from './connections';
@@ -202,6 +203,14 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const ptyManager = new PtyManager();
+
+/** app.relaunch(), except as an AppImage: see appImageRelaunch. Call right
+ *  before app.exit(). */
+function relaunchApp(): void {
+  const r = appImageRelaunch(process.env, process.argv, process.pid);
+  if (r) spawn(r.command, r.args, { detached: true, stdio: 'ignore' }).unref();
+  else app.relaunch();
+}
 
 function runCodexDaemonCommand(
   executable: string,
@@ -4993,7 +5002,7 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
   writeConfig({ harnessHome: newHome });
   try { ptyManager.killAll(); } catch (e) { console.error('[changeHome] killAll:', e); }
   releaseClaimedOffice();
-  app.relaunch();
+  relaunchApp();
   app.exit(0);
   return { ok: true as const }; // unreachable (process exits) — typed for the renderer
 });
@@ -6528,7 +6537,7 @@ ipcMain.handle('app:resetAll', () => {
   // re-bootstrap from scratch and the renderer lands on onboarding.
   resetConfig();
   releaseClaimedOffice();
-  app.relaunch();
+  relaunchApp();
   app.exit(0);
 });
 
@@ -8047,7 +8056,7 @@ One office runs in one window at a time, so two orchestrators never share its in
     const w = BrowserWindow.getAllWindows()[0];
     void (w ? dialog.showMessageBox(w, opts) : dialog.showMessageBox(opts)).then(({ response }) => {
       allowQuit = true;
-      if (response === 0) { writeConfig({ harnessHome: null }); app.relaunch(); }
+      if (response === 0) { writeConfig({ harnessHome: null }); relaunchApp(); }
       app.exit(0);
     });
   };
