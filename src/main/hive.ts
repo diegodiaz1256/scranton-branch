@@ -26,7 +26,7 @@ import {
   readdirSync, statSync, lstatSync, realpathSync, rmSync, appendFileSync,
   symlinkSync, unlinkSync, copyFileSync, cpSync, chmodSync, openSync, readSync, closeSync, fstatSync
 } from 'node:fs';
-import { join, dirname, basename, isAbsolute, relative, resolve, posix } from 'node:path';
+import { join, dirname, basename, isAbsolute, relative, resolve, posix, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { execFile, spawnSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
@@ -58,7 +58,7 @@ import { detectProjectType, memoryInstruction, memoryTemplate, parseMemory, type
 import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
 import { bwrapArgs, mountPoints } from '../shared/bwrapSandbox';
-import { within, type GuardPolicy } from '../shared/toolGuard';
+import { AGENT_CONTROL_FILES, within, type GuardPolicy } from '../shared/toolGuard';
 import { MD_NETGATE, piModelHosts } from './netgate';
 import { MD_SKILLS } from './skillsCli';
 import { copySkillTreeSync, restoreExecBits } from './skillArchive';
@@ -1287,6 +1287,7 @@ export class HiveManager {
       contained: opts.lockdown ? true : !opts.roam,
       ...(opts.lockdown ? { fenceHint: `As the custodian of a critical connection you write only in your own folder (${this.forAgent(dir)}) and your confidential vault. Mail goes through your outbox and files for research/ through ${this.forAgent(opts.lockdown.outgoing)}; the human signs both off before anything leaves.` } : {}),
       ...(opts.denyDirs?.length ? { deny: opts.denyDirs } : {}),
+      controls: this.controlPaths(root, meta.cwd),
       ...(wslHome ? { home: wslHome } : {})
     });
 
@@ -1523,7 +1524,8 @@ export class HiveManager {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
       const requireSandbox = await this.sandboxAvailable();
-      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown)));
+      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown,
+        { now: this.controlPathsNow(root, meta.cwd), patterns: this.controlPaths(root, meta.cwd) })));
       args.push('--settings', settingsPath);
     }
     return { args, env };
@@ -1814,6 +1816,32 @@ export class HiveManager {
     return out;
   }
 
+  /** The office's control files inside folders agents may write
+   *  (toolGuard.ts `controls`): every agent's settings and hook configs, the
+   *  hive's bin/ (hook shims, CLIs, the node launcher), the hook socket when
+   *  it sits in the hive, and the Claude settings of this agent's project
+   *  (a settings.local.json there widens the next session's sandbox). A `*`
+   *  is any agent. */
+  private controlPaths(root: string, cwd?: string): string[] {
+    const agents = join(root, 'agents', '*');
+    const sock = this.sockPath();
+    return [
+      ...AGENT_CONTROL_FILES.map((f) => join(agents, ...f.split('/'))),
+      join(root, 'bin'),
+      ...(sock && sock === join(root, 'hooks.sock') ? [sock] : []),
+      ...(cwd ? [join(cwd, '.claude', 'settings.json'), join(cwd, '.claude', 'settings.local.json')] : [])
+    ];
+  }
+
+  /** controlPaths with `*` spelled out for every agent folder there is now:
+   *  the sandbox's denyWrite takes real paths only. */
+  private controlPathsNow(root: string, cwd?: string): string[] {
+    let ids: string[] = [];
+    try { ids = readdirSync(join(root, 'agents'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { /* none yet */ }
+    const star = `${sep}*${sep}`;
+    return this.controlPaths(root, cwd).flatMap((p) => p.includes(star) ? ids.map((id) => p.replace(star, `${sep}${id}${sep}`)) : [p]);
+  }
+
   /** Claude Code settings that route every relevant hook through the shim.
    *  Claude-only — this is invoked solely on the Claude spawn path. (The MCP
    *  bundle is NOT here: see the --mcp-config note in ensureAgent.) */
@@ -1921,7 +1949,13 @@ export class HiveManager {
     return p;
   }
 
-  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = [], onlyBroker = false): unknown {
+  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = [], onlyBroker = false, controls: { now: string[]; patterns: string[] } = { now: [], patterns: [] }): unknown {
+    // The office's controls (controlPaths): read-only for the sandboxed shell
+    // (real paths: denyWrite takes no `*`), and Edit/Write refused by rule
+    // (patterns, so an agent hired later is covered; the rule also follows a
+    // symlink to them). Verified on claude 2.1.310 in bypass mode.
+    const slash = (p: string) => this.forAgent(p).replace(/\\/g, '/');
+    const controlDeny = this.winAgents() ? [] : controls.patterns.map((p) => `Edit(/${slash(p)}${/[\\/](?:bin|\.gemini-hive|extensions|plugins?)$/.test(p) ? '/**' : ''})`);
     // The sandbox gives Bash its own network: the app's loopback broker is
     // reachable only through the sandbox proxy, and only where allowed. The
     // hive's commands (md-api, md-run, md-browse) go through that proxy
@@ -1983,14 +2017,20 @@ export class HiveManager {
               // (`dangerouslyDisableSandbox`) used to run unconfined in bypass
               // mode. Held here, a project's settings cannot reopen it.
               allowUnsandboxedCommands: false,
-              filesystem: { allowWrite: writableDirs, ...(denyDirs.length ? { denyRead: denyDirs } : {}) },
+              filesystem: {
+                allowWrite: writableDirs,
+                ...(controls.now.length ? { denyWrite: controls.now } : {}),
+                ...(denyDirs.length ? { denyRead: denyDirs } : {})
+              },
               ...(onlyBroker
                 ? { network: { allowedDomains: broker ? [broker] : [], strictAllowlist: true } }
                 : broker ? { network: { allowedDomains: [broker] } } : {})
             },
             permissions: {
               additionalDirectories: writableDirs,
-              ...(denyDirs.length ? { deny: denyDirs.flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(/${d.replace(/\\/g, '/')}/**)`)) } : {})
+              ...(denyDirs.length || controlDeny.length
+                ? { deny: [...denyDirs.flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(/${d.replace(/\\/g, '/')}/**)`)), ...controlDeny] }
+                : {})
             }
           }
         : {}),
@@ -3603,13 +3643,16 @@ export class HiveManager {
     const sockDir = sock && !/^tcp:/.test(sock) && !/^\\\\/.test(sock) ? [dirname(sock)] : [];
     const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
     const userHome = lin(this.userHome());
+    // The office's controls stay read-only (not the hook socket: pi's
+    // extension talks to it from inside).
+    const controls = this.controlPathsNow(root, meta.cwd).filter((p) => basename(p) !== 'hooks.sock').map(lin);
     // A custodian: its own folder and its vaults, nothing else; no network
     // (md-netgate gives back the app and its model); the folders it may not
     // read hidden; its pi login is a copy of its own.
     if (opts.lockdown) {
       const profile = {
         writable: [...custodianWriteRoots(dir, opts.vaults ?? []), ...sockDir].map(lin),
-        hide: (opts.denyDirs ?? []).map(lin), home: userHome, network: 'none' as const
+        hide: (opts.denyDirs ?? []).map(lin), home: userHome, network: 'none' as const, controls
       };
       const present = new Set(await this.existingPaths(mountPoints(profile)));
       return bwrapArgs(profile, (p) => present.has(p));
@@ -3621,7 +3664,7 @@ export class HiveManager {
       ...sockDir
     ].filter((d): d is string => typeof d === 'string' && d.length > 0).map(lin);
     // Inside the hive, the other agents' folders stay read-only (its own is reopened).
-    const profile = { writable, readOnly: [lin(join(root, 'agents'))], writableFiles: [`${userHome}/.pi/agent/auth.json`], home: userHome, hide: (opts.denyDirs ?? []).map(lin) };
+    const profile = { writable, readOnly: [lin(join(root, 'agents'))], writableFiles: [`${userHome}/.pi/agent/auth.json`], home: userHome, hide: (opts.denyDirs ?? []).map(lin), controls };
     const present = new Set(await this.existingPaths(mountPoints(profile)));
     return bwrapArgs(profile, (p) => present.has(p));
   }

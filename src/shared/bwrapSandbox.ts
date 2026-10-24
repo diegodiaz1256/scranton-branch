@@ -30,6 +30,9 @@ export interface BwrapProfile {
    *  folders inside the hive); a writable folder inside one of these (the
    *  agent's own) is opened again. */
   readOnly?: string[];
+  /** The office's control files and folders (the hive's bin/, agents'
+   *  settings and hook configs): read-only even inside a writable folder. */
+  controls?: string[];
   /** Folders hidden from the agent: an empty tmpfs over each. */
   hide?: string[];
   /** The agent's home (for the credential folders). */
@@ -70,6 +73,8 @@ export function bwrapArgs(p: BwrapProfile, exists: (path: string) => boolean): s
   for (const r of ro) args.push('--ro-bind-try', r, r);
   for (const w of writable) if (ro.some((r) => w.startsWith(`${r}/`))) args.push('--bind-try', w, w);
   for (const f of clean(p.writableFiles)) if (exists(f)) args.push('--bind', f, f);
+  // Over every writable bind, so nothing reopens them.
+  for (const c of clean(p.controls)) args.push('--ro-bind-try', c, c);
   // Hidden last, so a writable parent cannot uncover them.
   const hidden = clean([...SECRET_HOME_DIRS.map((d) => `${home}/${d}`), ...(p.hide ?? [])]);
   for (const h of hidden) if (exists(h)) args.push('--tmpfs', h);

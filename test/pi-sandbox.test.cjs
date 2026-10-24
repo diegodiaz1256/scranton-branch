@@ -64,7 +64,10 @@ test('a pi agent is wrapped where bubblewrap runs, with Claude\'s writable set p
     assert.ok(binds.includes(lin(d)), `${d} writable`);
   }
   assert.ok(pairs(inj.wrap, '--tmpfs').some((p) => p.endsWith('/.ssh')));
-  assert.deepEqual(pairs(inj.wrap, '--ro-bind-try'), [lin(path.join(home, 'hive', 'agents'))], 'the other agents folders are read-only');
+  const ro = pairs(inj.wrap, '--ro-bind-try');
+  assert.equal(ro[0], lin(path.join(home, 'hive', 'agents')), 'the other agents folders are read-only');
+  // The office's controls stay read-only inside what it may write (sandbox-escapes.test.cjs).
+  for (const c of [path.join(home, 'hive', 'bin'), path.join(home, 'hive', 'agents', 'pi-1', '.pi-agent', 'extensions')]) assert.ok(ro.includes(lin(c)), c);
   assert.ok(inj.wrap.lastIndexOf(lin(path.join(home, 'hive', 'agents', 'pi-1'))) > inj.wrap.indexOf('--ro-bind-try'), 'its own folder reopened after');
   assert.ok(inj.env.PI_CODING_AGENT_DIR, 'still the hive bridge extension');
 });
