@@ -98,7 +98,8 @@ test('an ordinary pi agent keeps the host network and is not strict', async (t) 
 function extension() {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hive.ts'), 'utf8');
   const raw = src.slice(src.indexOf('const PI_EXTENSION = `') + 'const PI_EXTENSION = `'.length);
-  return (0, eval)('`' + raw.slice(0, raw.search(/`;\r?\n/)) + '`');
+  const { HOOK_OFFLINE_JS } = loadTs('src/shared/hookOffline.ts');
+  return new Function('HOOK_OFFLINE_JS', 'return `' + raw.slice(0, raw.search(/`;\r?\n/)) + '`;')(HOOK_OFFLINE_JS);
 }
 
 async function toolCall(t, env, answer) {
@@ -131,13 +132,15 @@ test('extension: no answer from the office blocks a custodian\'s call, not an or
   const strict = await toolCall(t, { AGENT_ID: 'pam-1', HIVE_GUARD_STRICT: '1', HIVE_SOCK: 'tcp://127.0.0.1:1' });
   assert.equal(strict.block, true);
   assert.match(strict.reason, /could not be asked/);
-  assert.equal(await toolCall(t, { AGENT_ID: 'jim-1', HIVE_SOCK: 'tcp://127.0.0.1:1' }), null);
+  // An ordinary agent's shell goes ahead where bubblewrap holds it.
+  const boxed = JSON.stringify({ roots: [], controls: [], contained: true, sandboxed: true });
+  assert.equal(await toolCall(t, { AGENT_ID: 'jim-1', HIVE_SOCK: 'tcp://127.0.0.1:1', HIVE_GUARD: boxed }), null);
   const noSock = await toolCall(t, { AGENT_ID: 'pam-1', HIVE_GUARD_STRICT: '1', HIVE_SOCK: '' });
   assert.equal(noSock.block, true, 'no office at all: refused');
   assert.equal(await toolCall(t, { AGENT_ID: 'pam-1', HIVE_GUARD_STRICT: '1' }, '{}'), null, 'the office allows it');
   const empty = await toolCall(t, { AGENT_ID: 'pam-1', HIVE_GUARD_STRICT: '1' }, '');
   assert.equal(empty.block, true, 'a relay whose far end is down answers nothing: refused');
-  assert.equal(await toolCall(t, { AGENT_ID: 'jim-1' }, ''), null);
+  assert.equal(await toolCall(t, { AGENT_ID: 'jim-1', HIVE_GUARD: boxed }, ''), null);
 });
 
 // ─── md-netgate's proxy: the model host only ────────────────────────────────

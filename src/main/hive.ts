@@ -65,6 +65,7 @@ import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
 import { MD_BROWSE } from './browseCli';
 import { BROKER_CLIENT_JS } from './brokerClient';
+import { HOOK_OFFLINE_JS } from '../shared/hookOffline';
 import { MD_LISTS_MCP } from './listsMcp';
 import { liveNamesakes, similarLive, supersededArchived } from './namesakes';
 
@@ -1290,6 +1291,15 @@ export class HiveManager {
       controls: this.controlPaths(root, meta.cwd),
       ...(wslHome ? { home: wslHome } : {})
     });
+    // What its hook decides alone when the office does not answer
+    // (hookOffline.ts): its folders, the controls, and whether an OS sandbox
+    // holds its shell (Claude Code's where it can run; pi's bubblewrap).
+    {
+      const g = this.guardPolicies.get(meta.id)!;
+      const osSandbox = await this.sandboxAvailable();
+      const sandboxed = claudeProvider ? (osSandbox || process.platform === 'darwin') : meta.provider === 'pi' && osSandbox;
+      env.HIVE_GUARD = JSON.stringify({ roots: g.roots.map((r) => this.forAgent(r)), controls: (g.controls ?? []).map((c) => this.forAgent(c)), contained: g.contained, sandboxed });
+    }
 
     // Non-hive-aware providers (for example Antigravity, Codex, Grok and Pi) don't
     // understand Claude Code's flags (no `--append-system-prompt`, no telemetry,
@@ -4737,17 +4747,20 @@ process.stdin.on('end', () => {
     setTimeout(() => process.exit(0), 1500).unref();
     return;
   }
-  if (!sock) { process.exit(0); }
-  let resp = '';
-  const done = (code) => { if (resp) process.stdout.write(resp); process.exit(code); };
-  const c = net.createConnection((String(sock).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(sock).slice(String(sock).lastIndexOf(':') + 1)) } : sock), () => c.write(JSON.stringify(payload) + '\\n'));
-  c.setEncoding('utf8');
-  c.on('data', (d) => { resp += d; });
-  c.on('end', () => done(0));
-  c.on('error', () => process.exit(0));
-  setTimeout(() => process.exit(0), 5000).unref();
+  // A tool call waits for the office's answer (retrying a few seconds while
+  // the app restarts); with none, officeOffline decides (hookOffline.ts).
+  // Every other event goes on at once: a dead app never stops the agent.
+  const pre = payload.hook_event_name === 'PreToolUse';
+  officeAsk(net.createConnection, sock, payload, pre ? 8000 : 5000, pre ? 3 : 1, (resp) => {
+    if (resp) process.stdout.write(resp);
+    else if (pre) {
+      const why = officeOffline(payload.tool_name, payload.tool_input, payload.cwd);
+      if (why) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } }));
+    }
+    process.exit(0);
+  });
 });
-`;
+${HOOK_OFFLINE_JS}`;
 
 // ─── agy-hook shim (written to <hive>/bin/agy-hook.cjs) ──────────────────────
 // Antigravity's `agy` CLI fires lifecycle hooks (PreToolUse/PostToolUse/Stop/
@@ -4772,7 +4785,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => { data += d; });
 process.stdin.on('end', () => {
   const sock = process.env.HIVE_SOCK;
-  if (!agentId || !sock) { process.exit(0); } // not a hive worker → ignore
+  if (!agentId) { process.exit(0); } // not a hive worker → ignore
   let agy = {};
   try { agy = JSON.parse(data || '{}'); } catch (_) {}
   const tc = agy.toolCall || {};
@@ -4802,16 +4815,16 @@ process.stdin.on('end', () => {
     if (out) { try { process.stdout.write(JSON.stringify(out)); } catch (_) {} }
     process.exit(0);
   };
-  try {
-    const c = net.createConnection((String(sock).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(sock).slice(String(sock).lastIndexOf(':') + 1)) } : sock), () => c.write(JSON.stringify(payload) + '\\n'));
-    c.setEncoding('utf8');
-    c.on('data', (d) => { resp += d; });
-    c.on('end', done);
-    c.on('error', () => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  } catch (_) { process.exit(0); }
+  // No answer to a tool call: officeOffline decides (hookOffline.ts).
+  const pre = event === 'PreToolUse';
+  officeAsk(net.createConnection, sock, payload, pre ? 8000 : 5000, pre ? 3 : 1, (r) => {
+    if (r) { resp = r; return done(); }
+    const why = pre ? officeOffline(tc.name, tc.args, payload.cwd) : null;
+    if (why) { try { process.stdout.write(JSON.stringify({ decision: 'deny', reason: why })); } catch (_) {} }
+    process.exit(0);
+  });
 });
-`;
+${HOOK_OFFLINE_JS}`;
 
 // ─── pi bridge extension (written to <agentDir>/.pi-agent/extensions/) ───────
 // A bundled extension for Pi (earendil-works). Pi exposes a pi.on(event,…)
@@ -4844,10 +4857,6 @@ var net = require('node:net');
 var SOCK = process.env.HIVE_SOCK;
 var AGENT = process.env.AGENT_ID || null;
 var AUTO = process.env.HIVE_AUTO_APPROVE === '1';
-// A custodian (HIVE_GUARD_STRICT): a call the office cannot answer is refused.
-var STRICT = process.env.HIVE_GUARD_STRICT === '1';
-var UNREACHABLE = 'Refused: the office could not be asked about this call, and this agent may not act without its answer. Try again in a moment.';
-function unanswered() { return STRICT ? UNREACHABLE : null; }
 // Pi's session id, from session_start: on every payload, so the office can
 // resume this session (--session <id>) and key its cost rows.
 var SID = null;
@@ -4861,30 +4870,20 @@ function post(payload) {
   } catch (e) {}
 }
 // PreToolUse waits for the answer: the office may refuse a call (git off, a
-// write outside the agent's folders). No answer in 3 s: the call goes ahead,
-// except for a custodian (STRICT), whose call is then refused.
+// write outside the agent's folders). No answer after a few tries:
+// officeOffline decides (hookOffline.ts; a custodian's call is refused).
 function ask(payload) {
   return new Promise(function (resolve) {
-    var done = false, resp = '';
-    function finish(v) { if (!done) { done = true; resolve(v); } }
-    try {
-      if (!SOCK) return finish(unanswered());
-      payload.agent_id = payload.agent_id || AGENT;
-      if (SID && !payload.session_id) payload.session_id = SID;
-      var c = net.createConnection((String(SOCK).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(SOCK).slice(String(SOCK).lastIndexOf(':') + 1)) } : SOCK), function () { try { c.write(JSON.stringify(payload) + '\\n'); } catch (e) {} });
-      c.setEncoding('utf8');
-      c.on('data', function (d) { resp += d; });
-      c.on('end', function () {
-        // The office always answers with a JSON body: nothing at all (a relay
-        // whose far end is down) is no answer.
-        if (!resp.trim() && STRICT) return finish(UNREACHABLE);
-        try { var r = JSON.parse(resp || '{}'); var h = r.hookSpecificOutput; finish(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); } catch (e) { finish(unanswered()); }
-      });
-      c.on('error', function () { finish(unanswered()); });
-      setTimeout(function () { try { c.destroy(); } catch (e) {} finish(unanswered()); }, 3000);
-    } catch (e) { finish(unanswered()); }
+    payload.agent_id = payload.agent_id || AGENT;
+    if (SID && !payload.session_id) payload.session_id = SID;
+    officeAsk(net.createConnection, SOCK, payload, 8000, 3, function (resp) {
+      if (!resp) return resolve(officeOffline(payload.tool_name, payload.tool_input, process.cwd()));
+      try { var r = JSON.parse(resp); var h = r.hookSpecificOutput; resolve(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); }
+      catch (e) { resolve(officeOffline(payload.tool_name, payload.tool_input, process.cwd())); }
+    });
   });
 }
+${HOOK_OFFLINE_JS}
 function firstDefined(primary, fallback) {
   return primary !== undefined && primary !== null ? primary : fallback;
 }
@@ -4968,27 +4967,20 @@ function post(payload) {
   } catch (e) {}
 }
 // PreToolUse waits for the answer: the office may refuse a call (git off, a
-// write outside the agent's folders). No answer in 3 s: the call goes ahead.
+// write outside the agent's folders). No answer after a few tries:
+// officeOffline decides (hookOffline.ts).
 function ask(payload) {
   return new Promise((resolve) => {
-    let done = false;
-    let resp = '';
-    const finish = (v) => { if (!done) { done = true; resolve(v); } };
-    try {
-      if (!SOCK) return finish(null);
-      payload.agent_id = payload.agent_id || AGENT;
-      if (SID && !payload.session_id) payload.session_id = SID;
-      const c = createConnection((String(SOCK).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(SOCK).slice(String(SOCK).lastIndexOf(':') + 1)) } : SOCK), () => { try { c.write(JSON.stringify(payload) + '\\n'); } catch (e) {} });
-      c.setEncoding('utf8');
-      c.on('data', (d) => { resp += d; });
-      c.on('end', () => {
-        try { const h = JSON.parse(resp || '{}').hookSpecificOutput; finish(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); } catch (e) { finish(null); }
-      });
-      c.on('error', () => finish(null));
-      setTimeout(() => { try { c.destroy(); } catch (e) {} finish(null); }, 3000);
-    } catch (e) { finish(null); }
+    payload.agent_id = payload.agent_id || AGENT;
+    if (SID && !payload.session_id) payload.session_id = SID;
+    officeAsk(createConnection, SOCK, payload, 8000, 3, (resp) => {
+      if (!resp) return resolve(officeOffline(payload.tool_name, payload.tool_input, process.cwd()));
+      try { const h = JSON.parse(resp).hookSpecificOutput; resolve(h && h.permissionDecision === 'deny' ? (h.permissionDecisionReason || 'Refused by the office.') : null); }
+      catch (e) { resolve(officeOffline(payload.tool_name, payload.tool_input, process.cwd())); }
+    });
   });
 }
+${HOOK_OFFLINE_JS}
 export const HiveBridge = async () => {
   // The app writes this file to plugin/ and plugins/ (older and newer OpenCode
   // read one or the other); OpenCode 1.18 loads both, which sent every event
@@ -5280,7 +5272,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => { data += d; });
 process.stdin.on('end', () => {
   const sock = process.env.HIVE_SOCK;
-  if (!agentId || !sock) { process.exit(0); }
+  if (!agentId) { process.exit(0); }
   let gemini = {};
   try { gemini = JSON.parse(data || '{}'); } catch (_) {}
   const names = {
@@ -5311,16 +5303,16 @@ process.stdin.on('end', () => {
     if (out) { try { process.stdout.write(JSON.stringify(out)); } catch (_) {} }
     process.exit(0);
   };
-  try {
-    const c = net.createConnection((String(sock).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(sock).slice(String(sock).lastIndexOf(':') + 1)) } : sock), () => c.write(JSON.stringify(payload) + '\\n'));
-    c.setEncoding('utf8');
-    c.on('data', (d) => { resp += d; });
-    c.on('end', done);
-    c.on('error', () => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  } catch (_) { process.exit(0); }
+  // No answer to a tool call: officeOffline decides (hookOffline.ts).
+  const pre = payload.hook_event_name === 'PreToolUse';
+  officeAsk(net.createConnection, sock, payload, pre ? 8000 : 5000, pre ? 3 : 1, (r) => {
+    if (r) { resp = r; return done(); }
+    const why = pre ? officeOffline(payload.tool_name, payload.tool_input, payload.cwd) : null;
+    if (why) { try { process.stdout.write(JSON.stringify({ decision: 'deny', reason: why })); } catch (_) {} }
+    process.exit(0);
+  });
 });
-`;
+${HOOK_OFFLINE_JS}`;
 
 // ─── grok-hook shim (written to <hive>/bin/grok-hook.cjs) ───────────────────
 // Grok's lifecycle events and decisions are Claude-compatible, but the wire
@@ -5337,7 +5329,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => { data += d; });
 process.stdin.on('end', () => {
   const sock = process.env.HIVE_SOCK;
-  if (!agentId || !sock) { process.exit(0); }
+  if (!agentId) { process.exit(0); }
   let grok = {};
   try { grok = JSON.parse(data || '{}'); } catch (_) {}
   const names = {
@@ -5385,13 +5377,13 @@ process.stdin.on('end', () => {
     if (out) { try { process.stdout.write(JSON.stringify(out)); } catch (_) {} }
     process.exit(0);
   };
-  try {
-    const c = net.createConnection((String(sock).startsWith('tcp://') ? { host: '127.0.0.1', port: Number(String(sock).slice(String(sock).lastIndexOf(':') + 1)) } : sock), () => c.write(JSON.stringify(payload) + '\\n'));
-    c.setEncoding('utf8');
-    c.on('data', (d) => { resp += d; });
-    c.on('end', done);
-    c.on('error', () => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  } catch (_) { process.exit(0); }
+  // No answer to a tool call: officeOffline decides (hookOffline.ts).
+  const pre = payload.hook_event_name === 'PreToolUse';
+  officeAsk(net.createConnection, sock, payload, pre ? 8000 : 5000, pre ? 3 : 1, (r) => {
+    if (r) { resp = r; return done(); }
+    const why = pre ? officeOffline(payload.tool_name, payload.tool_input, payload.cwd) : null;
+    if (why) { try { process.stdout.write(JSON.stringify({ decision: 'deny', reason: why })); } catch (_) {} }
+    process.exit(0);
+  });
 });
-`;
+${HOOK_OFFLINE_JS}`;

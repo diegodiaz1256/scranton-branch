@@ -135,3 +135,73 @@ test('bubblewrap keeps the controls read-only over a writable folder', () => {
   assert.equal(args[args.lastIndexOf('/h/hive/agents/jim/settings.json') - 2], '--ro-bind-try');
   assert.ok(args.lastIndexOf('/h/hive/agents/jim/settings.json') > args.lastIndexOf('/h/hive/agents/jim'), 'after its own folder is reopened');
 });
+
+// ─── 1: the hook when the office does not answer ────────────────────────────
+
+/** Run the hive's cth-hook.cjs on one payload; `answer`: what a fake office
+ *  replies (undefined: no office at all). */
+async function hook(t, root, payload, env, answer) {
+  let port = 1;
+  if (answer !== undefined) {
+    const srv = net.createServer((c) => { c.on('data', () => c.end(answer)); c.on('error', () => {}); });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    port = srv.address().port;
+    t.after(() => srv.close());
+  }
+  const p = spawn(process.execPath, [path.join(root, 'bin', 'cth-hook.cjs')], { env: { ...process.env, HIVE_SOCK: `tcp://127.0.0.1:${port}`, ...env } });
+  let out = '';
+  p.stdout.on('data', (d) => { out += d; });
+  p.stdin.end(JSON.stringify(payload));
+  const started = Date.now();
+  const code = await new Promise((r) => p.on('exit', r));
+  const reply = out.trim() ? JSON.parse(out) : null;
+  return { code, ms: Date.now() - started, deny: reply?.hookSpecificOutput?.permissionDecision === 'deny' ? reply.hookSpecificOutput.permissionDecisionReason : null, reply };
+}
+
+test('office down: a write outside its folders or to a control is refused, inside goes ahead', async (t) => {
+  const { inj, root, dir, project } = await claudeAgent(t);
+  const env = { AGENT_ID: 'jim', HIVE_GUARD: inj.env.HIVE_GUARD };
+  const guard = JSON.parse(inj.env.HIVE_GUARD);
+  assert.ok(guard.roots.includes(dir) && guard.contained === true);
+  const pre = (tool_name, tool_input) => ({ hook_event_name: 'PreToolUse', tool_name, tool_input, cwd: project });
+
+  const out = await hook(t, root, pre('Write', { file_path: path.join(os.homedir(), 'escaped.txt') }), env);
+  assert.equal(out.code, 0);
+  assert.match(out.deny, /outside your folders/);
+  assert.match(out.deny, /did not answer/);
+  assert.ok(out.ms >= 1500, 'it tried again before deciding');
+
+  assert.match((await hook(t, root, pre('Edit', { file_path: path.join(dir, 'settings.json') }), env)).deny, /control files/);
+  assert.equal((await hook(t, root, pre('Write', { file_path: path.join(project, 'a.ts') }), env)).deny, null);
+  assert.equal((await hook(t, root, pre('Edit', { file_path: 'src/b.ts' }), env)).deny, null, 'relative to its cwd');
+  assert.equal((await hook(t, root, pre('Read', { file_path: '/etc/hosts' }), env)).deny, null, 'reads go ahead');
+  assert.equal((await hook(t, root, pre('mcp__munder-memory__search', { q: 'x' }), env)).deny, null);
+});
+
+test('office down: a shell goes ahead only where an OS sandbox holds it', async (t) => {
+  const { root, project } = await claudeAgent(t);
+  const pre = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, cwd: project };
+  const boxed = JSON.stringify({ roots: [project], controls: [], contained: true, sandboxed: true });
+  const bare = JSON.stringify({ roots: [project], controls: [], contained: true, sandboxed: false });
+  assert.equal((await hook(t, root, pre, { AGENT_ID: 'jim', HIVE_GUARD: boxed })).deny, null);
+  assert.match((await hook(t, root, pre, { AGENT_ID: 'jim', HIVE_GUARD: bare })).deny, /no OS sandbox/);
+  assert.match((await hook(t, root, pre, { AGENT_ID: 'jim', HIVE_GUARD: boxed, HIVE_GUARD_STRICT: '1' })).deny, /could not be asked/, 'a custodian waits on every call');
+});
+
+test('office down: other events go on at once, and a session outside the hive is untouched', async (t) => {
+  const { inj, root } = await claudeAgent(t);
+  const stop = await hook(t, root, { hook_event_name: 'Stop' }, { AGENT_ID: 'jim', HIVE_GUARD: inj.env.HIVE_GUARD });
+  assert.equal(stop.reply, null);
+  assert.ok(stop.ms < 1500, `Stop did not wait (${stop.ms} ms)`);
+  const mine = await hook(t, root, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: '/etc/x' } }, { AGENT_ID: '', HIVE_GUARD: '' });
+  assert.equal(mine.deny, null, 'no AGENT_ID: not a hive agent');
+});
+
+test('office up: its answer is relayed as before', async (t) => {
+  const { inj, root } = await claudeAgent(t);
+  const env = { AGENT_ID: 'jim', HIVE_GUARD: inj.env.HIVE_GUARD };
+  const write = { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: '/etc/x' } };
+  assert.equal((await hook(t, root, write, env, '{}')).deny, null, 'the office allows it');
+  const no = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Refused: git is off.' } });
+  assert.equal((await hook(t, root, write, env, no)).deny, 'Refused: git is off.');
+});
