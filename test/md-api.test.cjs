@@ -41,7 +41,7 @@ test('md-api calls an integration through the broker, which adds the key', async
     let body = '';
     req.on('data', (d) => { body += d; });
     req.on('end', () => {
-      seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, body });
+      seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, type: req.headers['content-type'], body });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     });
@@ -65,11 +65,18 @@ test('md-api calls an integration through the broker, which adds the key', async
   const post = await run(cli, ['linear', 'post', 'issues', '{"title":"x"}'], env);
   assert.equal(post.code, 0, post.err);
 
+  // Stripe takes only form bodies: a body that is not JSON goes as a form.
+  const form = await run(cli, ['linear', 'POST', 'customers', 'email=a%40b.c&name=Dwight'], env);
+  assert.equal(form.code, 0, form.err);
+
   assert.equal(seen[0].method, 'GET');
   assert.equal(seen[0].url, '/v1/issues?first=1');
   assert.equal(seen[0].auth, `Bearer ${SECRET}`, 'the broker injected the real key upstream');
   assert.equal(seen[1].method, 'POST');
   assert.equal(seen[1].body, '{"title":"x"}');
+  assert.equal(seen[1].type, 'application/json');
+  assert.equal(seen[2].body, 'email=a%40b.c&name=Dwight');
+  assert.equal(seen[2].type, 'application/x-www-form-urlencoded');
   assert.ok(!JSON.stringify(env).includes(SECRET), 'the agent env never held the key');
 
   const other = await run(cli, ['stripe', 'GET', '/'], env);
