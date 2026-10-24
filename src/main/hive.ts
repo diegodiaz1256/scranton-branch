@@ -1281,6 +1281,7 @@ export class HiveManager {
           ...agentPlaces].filter((d): d is string => typeof d === 'string' && d.length > 0))],
       git: opts.lockdown ? false : gitAllowed(opts.mcpDefaults, opts.mcpGrant),
       contained: opts.lockdown ? true : !opts.roam,
+      ...(opts.lockdown ? { fenceHint: `As the custodian of a critical connection you write only in your own folder (${this.forAgent(dir)}) and your confidential vault. Mail goes through your outbox and files for research/ through ${this.forAgent(opts.lockdown.outgoing)}; the human signs both off before anything leaves.` } : {}),
       ...(opts.denyDirs?.length ? { deny: opts.denyDirs } : {}),
       ...(wslHome ? { home: wslHome } : {})
     });
