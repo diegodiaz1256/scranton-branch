@@ -85,6 +85,13 @@ test('PROTOCOL.md is a short index; each topic is its own file', async (t) => {
   assert.match(read('messages.md'), /"act": "request \| inform/);
   assert.match(read('services.md'), /`bin\/md-run\.cjs` with no arguments/);
   assert.match(read('hire.md'), /"spec": "munder-difflin\/hire@1"/);
+  // What a live orchestrator had to guess or got wrong on a WSL floor: the
+  // engine names and pi's model form, polling for the spawn, archiving a temp
+  // that had already sent its done.
+  assert.match(read('spawn.md'), /antigravity \| gemini \| pi \| opencode/);
+  assert.match(read('spawn.md'), /pi and opencode: provider\/model/);
+  assert.match(read('spawn.md'), /Don't sleep or poll/);
+  assert.match(read('spawn.md'), /archives a temp when it sends `done`\*\*: no archive request for that/);
   assert.doesNotMatch(index, /several Claude agents/);
   // The prompt sends agents to the topic, not the whole protocol.
   assert.ok(prompt.includes(path.join(root, 'protocol', 'messages.md')));
