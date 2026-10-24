@@ -78,6 +78,9 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
   // Arriving from a task's "Open": show that task's deliverables only.
   const focusTask = useProStore((s) => s.focusTask);
   const setFocusTask = useProStore((s) => s.setFocusTask);
+  // Arriving from a path clicked in a terminal: open that file.
+  const focusDeliverable = useProStore((s) => s.focusDeliverable);
+  const setFocusDeliverable = useProStore((s) => s.setFocusDeliverable);
 
   useEffect(() => {
     let alive = true;
@@ -170,13 +173,43 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
   const [sort, setSortState] = useState<DeliverableSort>(() => readLs(LS_SORT, DELIVERABLE_SORTS, 'recent'));
   const setSort = (s: DeliverableSort) => { setSortState(s); writeLs(LS_SORT, s); };
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
-  const setOpen = (key: string, open: boolean) => setCollapsed((c) => {
+  // The file a terminal link opened: its sections open (even ones closed
+  // before) and its row scrolls into view, until a section is toggled.
+  const [reveal, setReveal] = useState<string | null>(null);
+  const setOpen = (key: string, open: boolean) => { setReveal(null); setCollapsed((c) => {
     const next = { ...c, [key]: !open };
     writeLs(LS_COLLAPSED, JSON.stringify(next));
     return next;
-  });
+  }); };
   // Assets shown under their document: for this visit only.
   const [openAssets, setOpenAssets] = useState<Record<string, boolean>>({});
+
+  // A file just written may not be in the listing in hand: ask for a fresh one
+  // and wait for it before giving up on the file.
+  const askedWith = useRef<Listing | null | undefined>(undefined);
+  useEffect(() => { if (focusDeliverable) { askedWith.current = data; reload(); } }, [focusDeliverable]);
+  useEffect(() => {
+    if (!focusDeliverable || !data) return;
+    const k = pathKey(focusDeliverable);
+    const hit = items.find((i) => pathKey(i.abs) === k);
+    if (!hit && data === askedWith.current) return;
+    setFocusDeliverable(null);
+    if (!hit) return;
+    // Nothing may hide it: no search, filter or task focus.
+    setQuery(''); setTypeFilter(''); setByFilter(''); setFocusTask(null);
+    if (hit.hidden) setShowHidden(true);
+    setSelected(hit.abs);
+    setReveal(hit.abs);
+  }, [focusDeliverable, data, items]);
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!reveal) return;
+    const id = requestAnimationFrame(() => {
+      const el = [...(listRef.current?.querySelectorAll<HTMLElement>('[data-dlv-row]') ?? [])].find((x) => x.dataset.dlvRow === reveal);
+      el?.scrollIntoView({ block: 'center' });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [reveal, view]);
 
   const q = query.trim().toLowerCase();
   // "DUN-12" in the search: that ticket's deliverables, not DUN-120's too.
@@ -200,7 +233,7 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
   const officeDir = data?.dir ? pathKey(data.dir).replace(/\/$/, '') + '/' : null;
   // Searching or filtering opens every section that has a match.
   const isOpen = (key: string, byDefault: boolean, holdsCurrent = false): boolean =>
-    filtering || !!focusTask || (key in collapsed ? !collapsed[key] : byDefault || holdsCurrent);
+    filtering || !!focusTask || (holdsCurrent && !!reveal && reveal === current) || (key in collapsed ? !collapsed[key] : byDefault || holdsCurrent);
 
   const row = (i: Item, depth: number, entry?: OrgEntry<Item>, showTasks = true) => {
     const assetsOpen = !!entry?.assets.length && (filtering || openAssets[i.abs] || entry.assets.some((a) => a.abs === current));
@@ -267,8 +300,8 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
     const tree = folderTree(shownItems, (i) => i.folder, cmp);
     list = <>
       {tree.research.count > 0 && folderSection(tree.research, 0, `${data?.dir ? splitPath(data.dir).name : 'research'}/`)}
-      {tree.elsewhere.length > 0 && section('elsewhere', t('pro.dlv.group_elsewhere'), tree.elsewhere.reduce((s, n) => s + n.count, 0), isOpen('elsewhere', true),
-        () => tree.elsewhere.map((n) => section(n.key, n.name, n.count, isOpen(n.key, true), () => n.files.map((f) => row(f, 2)), { depth: 1, path: true })))}
+      {tree.elsewhere.length > 0 && section('elsewhere', t('pro.dlv.group_elsewhere'), tree.elsewhere.reduce((s, n) => s + n.count, 0), isOpen('elsewhere', true, tree.elsewhere.some((n) => n.files.some((f) => f.abs === current))),
+        () => tree.elsewhere.map((n) => section(n.key, n.name, n.count, isOpen(n.key, true, n.files.some((f) => f.abs === current)), () => n.files.map((f) => row(f, 2)), { depth: 1, path: true })))}
     </>;
   } else {
     list = entries.map((e) => row(e.item, 0, e));
@@ -321,7 +354,7 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
                 <button className="pro-btn" style={{ padding: '2px 8px' }} onClick={() => setFocusTask(null)}>{t('pro.dlv.showAll')}</button>
               </div>
             )}
-            <div className="pro-card" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 0 }}>
+            <div ref={listRef} className="pro-card" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 0 }}>
               {shownItems.length === 0 && <p className="pro-sub" style={{ margin: 0, padding: 14, fontSize: 12.5 }}>{t(focusTask ? 'pro.dlv.noneForTask' : 'pro.dlv.empty', { dir: data.dir })}</p>}
               {list}
               {data.truncated && <p className="pro-sub" style={{ margin: 0, padding: '8px 12px', fontSize: 11 }}>{t('pro.dlv.truncated', { shown: data.files.length, total: data.total ?? data.files.length })}</p>}
@@ -352,7 +385,7 @@ const FileRow = memo(function FileRow({ item: i, depth, selected, onSelect, tick
 }) {
   const { t } = useTranslation();
   return (
-    <div style={{ borderBottom: '1px solid var(--pro-line)', background: selected ? 'var(--cth-lemon-light)' : 'transparent', opacity: i.hidden ? 0.55 : 1 }}>
+    <div data-dlv-row={i.abs} style={{ borderBottom: '1px solid var(--pro-line)', background: selected ? 'var(--cth-lemon-light)' : 'transparent', opacity: i.hidden ? 0.55 : 1 }}>
       <button onClick={() => onSelect(i.abs)} aria-current={selected}
         style={{ display: 'flex', gap: 8, alignItems: 'flex-start', width: '100%', textAlign: 'start', padding: `7px 12px ${assets > 0 ? 2 : 7}px ${12 + depth * 14}px`, border: 'none', cursor: 'pointer', background: 'transparent', font: 'inherit', color: 'inherit' }}>
         <FileTypeBadge name={i.name} />
