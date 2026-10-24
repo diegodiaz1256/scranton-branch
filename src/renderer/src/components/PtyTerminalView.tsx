@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { Icon } from './Icon';
-import { acquireTerminal, attachTerminal, detachTerminal, reflowTerminal, scrollToPrompt } from './terminalPool';
+import { acquireTerminal, attachTerminal, detachTerminal, reflowTerminal, resizePtyToTerminal, scrollToPrompt } from './terminalPool';
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
   MAX_TERMINAL_FONT_SIZE,
@@ -177,9 +177,7 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
         // previous frame into scrollback — the attach-time refit cascade (rAF,
         // 60ms, 240ms, font-load) used to stack the boot banner three times
         // before the user ever typed anything.
-        if (entry.term.cols !== before.cols || entry.term.rows !== before.rows) {
-          window.cth.resizePty(ptyId, entry.term.cols, entry.term.rows);
-        }
+        if (entry.term.cols !== before.cols || entry.term.rows !== before.rows) resizePtyToTerminal(entry);
         entry.term.refresh(0, Math.max(0, entry.term.rows - 1));
         initialFitDone = true;
       } catch { /* host may not be sized yet */ }
@@ -285,7 +283,7 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
     entry.term.options.fontSize = fontSize;
     try {
       entry.fit.fit();
-      window.cth.resizePty(ptyId, entry.term.cols, entry.term.rows);
+      resizePtyToTerminal(entry);
     } catch { /* host may not be sized yet */ }
   }, [fontSize, ptyId]);
 

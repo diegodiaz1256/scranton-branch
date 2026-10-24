@@ -40,6 +40,7 @@ import { detectRemoteControl, isRemoteControlConfirm, isRemoteControlMenu } from
 import { isChromeLine, usageNotice } from '@shared/terminalChrome';
 import { detectMenu } from '@shared/terminalMenu';
 import { inputAreaHas, inputAreaText, showsUsageLimit } from '@shared/ptySubmit';
+import { isRepaintEcho, repaintEchoUntil } from '@shared/ptyRepaint';
 import { useStore } from '@/store/store';
 import { terminalKeySequence } from './terminalKeys';
 import '@xterm/xterm/css/xterm.css';
@@ -95,6 +96,10 @@ export interface TerminalEntry {
    * the OLD process carry the generation they were registered under, so they can
    * be recognised and dropped instead of corrupting the replacement. */
   generation: number;
+  /** Until when output is the repaint of a resize/redraw this terminal asked
+   *  for. It still draws, but the stream parser (onData) does not read it as
+   *  work: see shared/ptyRepaint. */
+  repaintUntil: number;
   webgl?: WebglAddon;
 }
 
@@ -209,7 +214,8 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
     lineBuf: '',
     humanActedAt: 0,
     limitSeenAt: 0,
-    generation: 0
+    generation: 0,
+    repaintUntil: 0
   };
 
   // Subscribe to the pty stream ONCE for the terminal's whole lifetime, so the
@@ -275,7 +281,7 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
       }
       if (!menuTimer) menuTimer = setTimeout(checkMenu, 250);
     });
-    entry.onData?.(chunk);
+    if (!isRepaintEcho(entry.repaintUntil, Date.now())) entry.onData?.(chunk);
   }));
   // A restart does killPty() then spawnPty() under the SAME pty id, so a stale
   // exit from the killed process could in principle latch `exited` on its
@@ -873,7 +879,10 @@ export function attachTerminal(entry: TerminalEntry, container: HTMLElement): vo
   // PTY startup output can arrive before this pooled terminal subscribes.
   // Request one same-size redraw after open/subscription even when fit() later
   // sees unchanged dimensions and therefore emits no resize of its own.
-  requestInitialPtyRedraw(entry.recovery, () => window.cth.redrawPty(entry.ptyId));
+  requestInitialPtyRedraw(entry.recovery, () => {
+    entry.repaintUntil = repaintEchoUntil(Date.now());
+    return window.cth.redrawPty(entry.ptyId);
+  });
   if (entry.needsRendererRepaint) {
     scheduleWebglRecovery(entry.recovery, requestAnimationFrame, () =>
       repaintTerminalAfterRendererLoss(entry));
@@ -912,6 +921,13 @@ function repaintTerminalAfterRendererLoss(entry: TerminalEntry): void {
   }
 }
 
+/** Resize the pty to this terminal's grid. The TUI repaints its whole screen in
+ *  answer, so that repaint is marked as not-work for the stream parser. */
+export function resizePtyToTerminal(entry: TerminalEntry): void {
+  entry.repaintUntil = repaintEchoUntil(Date.now());
+  void window.cth.resizePty(entry.ptyId, entry.term.cols, entry.term.rows);
+}
+
 /**
  * Re-measure cell metrics and rebuild the viewport scroll-area for a pooled
  * terminal. Use after a display wake / GPU (WebGL) context loss / DPR change:
@@ -948,9 +964,7 @@ export function reflowTerminal(ptyId: string): void {
     entry.fit.fit();
     // Only poke the pty when the grid actually changed (every resize repaints
     // the TUI and pushes a frame into scrollback).
-    if (entry.term.cols !== before.cols || entry.term.rows !== before.rows) {
-      window.cth.resizePty(ptyId, entry.term.cols, entry.term.rows);
-    }
+    if (entry.term.cols !== before.cols || entry.term.rows !== before.rows) resizePtyToTerminal(entry);
     entry.term.refresh(0, Math.max(0, entry.term.rows - 1));
   } catch { /* host may not be sized yet */ }
 }
