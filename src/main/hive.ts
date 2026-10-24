@@ -58,7 +58,7 @@ import { cleanServerList } from '../shared/roleBundles';
 import { detectProjectType, memoryInstruction, memoryTemplate, parseMemory, type ProjectType } from '../shared/memorySections';
 import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
-import { bwrapArgs, cliStateMounts, mountPoints, type AppSandboxedCli } from '../shared/bwrapSandbox';
+import { bwrapArgs, cliStateMounts, mountPoints, KEY_HOME_DIRS, type AppSandboxedCli } from '../shared/bwrapSandbox';
 import { AGENT_CONTROL_FILES, within, type GuardPolicy } from '../shared/toolGuard';
 import { customProviderHosts, MD_NETGATE, piModelHosts } from './netgate';
 import { resolvePiModelHosts } from '../shared/piModelHosts';
@@ -67,6 +67,7 @@ import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
 import { MD_BROWSE } from './browseCli';
 import { BROKER_CLIENT_JS } from './brokerClient';
+import { MD_SSH_CLI, sshWrapperScript } from './sshRelayClient';
 import { HOOK_OFFLINE_JS } from '../shared/hookOffline';
 import { MD_LISTS_MCP } from './listsMcp';
 import { liveNamesakes, similarLive, supersededArchived } from './namesakes';
@@ -704,6 +705,34 @@ export class HiveManager {
     return join(root, 'bin', process.platform === 'win32' ? 'hive-node.cmd' : 'hive-node');
   }
 
+  /** `<root>/bin/ssh`: holds the `ssh` a sandboxed agent finds first on its
+   *  PATH (md-ssh, sshRelay.ts). Null on a Windows floor, where agents have no
+   *  OS sandbox and git uses Windows' own ssh. */
+  sshWrapperDir(): string | null {
+    const root = this.root();
+    if (!root || (process.platform === 'win32' && !this.wslRoot())) return null;
+    return join(root, 'bin', 'ssh');
+  }
+
+  /** Whether each agent's shell was put in an OS sandbox at its last start. */
+  private osSandboxed = new Map<string, boolean>();
+  isOsSandboxed(agentId: string): boolean {
+    return this.osSandboxed.get(agentId) === true;
+  }
+
+  /** The wrapper made executable inside a WSL floor's distro (once per write). */
+  private sshWrapperReady: Promise<void> | null = null;
+  private ensureSshWrapper(): Promise<void> {
+    const w = this.wslRoot();
+    const dir = this.sshWrapperDir();
+    if (!w || !dir) return Promise.resolve();
+    if (!this.sshWrapperReady) {
+      this.sshWrapperReady = runInDistroAsync(w.distro, 'chmod', ['755', this.forAgent(join(dir, 'ssh')).replace(/\\/g, '/')], '/')
+        .then(() => undefined, (e) => { console.error('[hive] chmod of the office ssh failed:', e); this.sshWrapperReady = null; });
+    }
+    return this.sshWrapperReady;
+  }
+
   /** Write the launcher described above. Best-effort: on failure callers fall
    *  back to bare `node`, i.e. exactly the pre-fix behavior. */
   private writeNodeLauncher(): void {
@@ -874,6 +903,15 @@ export class HiveManager {
     return toWslUnc(w.distro, h);
   }
 
+  /** The human's key folders (~/.ssh, ~/.gnupg…) where agents run, hidden
+   *  from a sandboxed Claude Code shell (denyRead) and its file tools. None on
+   *  a Windows floor: no OS sandbox there to hide them with. */
+  private keyHomeDirs(): string[] {
+    if (!this.sshWrapperDir()) return [];
+    const home = this.userHome();
+    return KEY_HOME_DIRS.map((d) => join(home, ...d.split('/')));
+  }
+
   /** A hook command for a CLI that runs it through cmd.exe on Windows (agy,
    *  Gemini, Codex). Those CLIs cannot be handed quotes: they escape embedded
    *  quotes the C-runtime way (`\"`), which cmd.exe does not understand (#350).
@@ -1027,8 +1065,13 @@ export class HiveManager {
       // md-browse: the office browser (browser.ts), as a command and an MCP server.
       [join(root, 'bin', 'md-browse.cjs'), MD_BROWSE],
       // md-skills: the orchestrator's search of the skills catalog (skillsCli.ts).
-      [join(root, 'bin', 'md-skills.cjs'), MD_SKILLS]
+      [join(root, 'bin', 'md-skills.cjs'), MD_SKILLS],
+      // md-ssh: git over SSH through the office, never with the keys
+      // (sshRelay.ts), and the `ssh` on a sandboxed agent's PATH that runs it.
+      [join(root, 'bin', 'md-ssh.cjs'), MD_SSH_CLI],
+      ...(this.sshWrapperDir() ? [[join(this.sshWrapperDir()!, 'ssh'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh.cjs')))] as [string, string]] : [])
     ];
+    if (this.sshWrapperDir()) mkdirSync(this.sshWrapperDir()!, { recursive: true });
     const stampPath = join(root, 'bin', '.generated');
     const stamp = createHash('sha1').update(binFiles.map(([p, c]) => `${p}\0${c}`).join('\0')).digest('hex');
     let current = '';
@@ -1036,7 +1079,12 @@ export class HiveManager {
     if (current !== stamp || binFiles.some(([p]) => !existsSync(p))) {
       for (const [p, c] of binFiles) writeFileSync(p, c, 'utf8');
       try { writeFileSync(stampPath, stamp, 'utf8'); } catch { /* next launch rewrites */ }
+      // A WSL floor's copy is made executable inside the distro, at the first
+      // agent start (ensureSshWrapper): chmod from Windows cannot.
+      this.sshWrapperReady = null;
     }
+    const sshDir = this.sshWrapperDir();
+    if (sshDir && !this.wslRoot()) { try { chmodSync(join(sshDir, 'ssh'), 0o755); } catch { /* it then fails like a missing ssh */ } }
     // The bundled-node launcher every shim above is invoked through — MUST be
     // written before any hook installer runs (they probe for it).
     this.writeNodeLauncher();
@@ -1335,6 +1383,21 @@ export class HiveManager {
       const osSandbox = await this.sandboxAvailable();
       const sandboxed = !unsandboxed && (claudeProvider ? (osSandbox || process.platform === 'darwin') : (meta.provider === 'pi' || meta.provider === 'antigravity') && osSandbox);
       env.HIVE_GUARD = JSON.stringify({ roots: g.roots.map((r) => this.forAgent(r)), controls: (g.controls ?? []).map((c) => this.forAgent(c)), contained: g.contained, sandboxed });
+      // The human's SSH keys: hidden from a sandboxed shell (hookSettings,
+      // bwrapSandbox.ts), and so is their ssh-agent. The `ssh` it finds first
+      // on its PATH is the office's (md-ssh): git over SSH through the app when
+      // the human allows it, else a line saying how (sshRelay.ts).
+      this.osSandboxed.set(meta.id, sandboxed);
+      const sshDir = this.sshWrapperDir();
+      if (sandboxed && sshDir) {
+        await this.ensureSshWrapper();
+        env.MD_PATH_PREPEND = sshDir;
+        env.SSH_AUTH_SOCK = '';
+        // Git too, whatever the user's core.sshCommand says (ssh.exe on a WSL
+        // floor would reach Windows' own agent). Claude Code's sandbox sets its
+        // own `ssh -o …`, which finds the same one on PATH.
+        env.GIT_SSH_COMMAND = 'ssh';
+      }
     }
 
     // Non-hive-aware providers (for example Antigravity, Codex, Grok and Pi) don't
@@ -1575,7 +1638,7 @@ export class HiveManager {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
       const requireSandbox = await this.sandboxAvailable();
-      const settings = this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown,
+      const settings = this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, [...(opts.denyDirs ?? []), ...this.keyHomeDirs()], !!opts.lockdown,
         { now: this.controlPathsNow(root, meta.cwd), patterns: this.controlPaths(root, meta.cwd) }) as { sandbox?: unknown };
       // Run without sandbox: off, said outright (a project's settings cannot
       // turn it back on for it either). Its permission rules stay.
@@ -3788,7 +3851,12 @@ export class HiveManager {
       ...sockDir
     ].filter((d): d is string => typeof d === 'string' && d.length > 0).map(lin);
     // Inside the hive, the other agents' folders stay read-only (its own is reopened).
-    const profile = { writable: [...writable, ...state.writable], readOnly: [lin(join(root, 'agents'))], writableFiles: state.writableFiles, home: userHome, hide: (opts.denyDirs ?? []).map(lin), controls };
+    // The human's ssh-agent socket (native Linux: /run/user/<uid>/keyring…):
+    // its folder hidden when it is one of its own, so the agent cannot ask it
+    // to sign. Its env no longer names it either.
+    const agentSock = !this.wslRoot() && process.env.SSH_AUTH_SOCK ? dirname(process.env.SSH_AUTH_SOCK) : '';
+    const sockHide = agentSock && !['/', '/tmp', '/run', '/var/run', homedir()].includes(agentSock) && !/^\/run\/user\/\d+$/.test(agentSock) ? [agentSock] : [];
+    const profile = { writable: [...writable, ...state.writable], readOnly: [lin(join(root, 'agents'))], writableFiles: state.writableFiles, home: userHome, hide: [...(opts.denyDirs ?? []).map(lin), ...sockHide], controls };
     const present = new Set(await this.existingPaths(mountPoints(profile)));
     return bwrapArgs(profile, (p) => present.has(p));
   }

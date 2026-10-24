@@ -2122,7 +2122,30 @@
         "mktFailed": "No se pudo añadir.",
         "mktStale": "la última actualización falló"
       },
-      "guardLimits": "«Fuera de sus carpetas» y «Git» se comprueban en cada orden antes de ejecutarla: herramientas de ficheros, comandos de terminal (también lo que pasan a bash -c, cmd /c, PowerShell o wsl) y líneas sueltas de python, node, perl o ruby. Un script guardado en un fichero, o una ruta que el programa construye mientras corre, no se puede leer de antemano: es una valla contra errores, no una jaula. Para un límite firme, ejecuta el agente en WSL o en un contenedor."
+      "guardLimits": "«Fuera de sus carpetas» y «Git» se comprueban en cada orden antes de ejecutarla: herramientas de ficheros, comandos de terminal (también lo que pasan a bash -c, cmd /c, PowerShell o wsl) y líneas sueltas de python, node, perl o ruby. Un script guardado en un fichero, o una ruta que el programa construye mientras corre, no se puede leer de antemano: es una valla contra errores, no una jaula. Para un límite firme, ejecuta el agente en WSL o en un contenedor.",
+      "ssh": {
+        "title": "Usar mis claves SSH a través de la oficina: {{name}}",
+        "off": "No",
+        "on": "Sí",
+        "turnOn": "Activar",
+        "body": "Los agentes en un sandbox no pueden leer tu ~/.ssh. Con esto activado, cuando este agente use git por SSH (fetch, pull, push), la app ejecuta ssh por él fuera de su sandbox con tus claves y le devuelve solo la transferencia de git. Nada más pasa: ni una consola en un servidor ni otros comandos. Se aplica al momento.",
+        "warning": "El agente podrá entonces traer y subir cambios a cualquier repositorio que tu clave abra, en tu nombre. Nunca ve la clave.",
+        "confirm": "¿Dejar que {{name}} use tus claves SSH a través de la oficina?",
+        "unavailable": "No disponible en esta planta: los agentes de una planta de Windows no tienen sandbox del sistema, así que la oficina no puede ocultarles tus claves. Usa remotos HTTPS allí, o una planta WSL.",
+        "custodian": "No para el custodio de una conexión crítica: nunca usa tus claves SSH.",
+        "keys": "Claves que puede usar",
+        "noKeys": "No se encontraron claves donde corren los agentes (~/.ssh/*.pub o un ssh-agent). ssh probará las que encuentre en ese momento.",
+        "keysAny": "Ninguna elegida: ssh usa las claves que usaría para ti.",
+        "keysChosen": "Solo se ofrecen al servidor las claves elegidas.",
+        "fromAgent": "en tu ssh-agent",
+        "fromFile": "archivo de clave",
+        "ask": "Preguntarme antes de cada uso",
+        "audit": "Lo que hizo ({{count}})",
+        "auditEmpty": "Nada todavía.",
+        "allowed": "permitido",
+        "refused": "rechazado",
+        "exit": "salida {{code}}"
+      }
     },
     "skills": {
       "sub": "Lo que tus agentes saben hacer, y dónde conseguir más.",

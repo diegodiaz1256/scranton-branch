@@ -88,7 +88,7 @@ test('a pi agent run without sandbox gets no bubblewrap, and is marked off, not 
 test('main: only agent:setUnsandboxed sets it; the generic config write drops it', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
   const update = src.slice(src.indexOf("ipcMain.handle('config:update'"), src.indexOf("ipcMain.handle('config:setAgentMcpGrant'"));
-  assert.match(update, /const \{ agentUnsandboxed: _unsandboxed, \.\.\.safePatch \} = patch/);
+  assert.match(update, /const \{ agentUnsandboxed: _unsandboxed, [^}]*\.\.\.safePatch \} = patch/);
   assert.match(update, /writeConfig\(safePatch\)/);
   assert.ok(!/writeConfig\(patch\)/.test(update));
   const set = src.slice(src.indexOf("ipcMain.handle('agent:setUnsandboxed'"));

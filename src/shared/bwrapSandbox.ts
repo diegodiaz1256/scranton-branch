@@ -41,8 +41,20 @@ export interface BwrapProfile {
   network?: 'host' | 'none';
 }
 
+/** The human's own keys and their agents' sockets: SSH and GPG keys, and
+ *  1Password's SSH agent socket (a WSL bridge puts it in ~/.1password).
+ *  Hidden from every sandboxed agent, Claude Code's too (hive.ts); git over
+ *  SSH goes through the office instead (shared/sshRelay.ts). */
+export const KEY_HOME_DIRS: readonly string[] = ['.ssh', '.gnupg', '.1password'];
+
 /** Credential folders under $HOME no agent has any business reading. */
-export const SECRET_HOME_DIRS: readonly string[] = ['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.config/gcloud', '.config/gh', '.password-store'];
+export const SECRET_HOME_DIRS: readonly string[] = [...KEY_HOME_DIRS, '.aws', '.azure', '.kube', '.docker', '.config/gcloud', '.config/gh', '.password-store'];
+
+/** WSL's interop sockets: through them a command in the distro starts Windows
+ *  programs as the user, outside any Linux sandbox (ssh.exe with the Windows
+ *  ssh-agent, cmd.exe). Hidden, with WSL_INTEROP unset, so nothing in the
+ *  sandbox can start one. Absent on plain Linux. */
+export const WSL_INTEROP_DIR = '/run/WSL';
 
 /** CLIs the app sandboxes itself. agy has a `--sandbox` of its own, but it
  *  leaves /home and /tmp writable and only the project read-only (agy 1.4.7,
@@ -72,7 +84,7 @@ export function cliStateMounts(cli: AppSandboxedCli, home: string): { writable: 
 
 /** The paths a profile mounts over (for the caller's existence check). */
 export function mountPoints(p: BwrapProfile): string[] {
-  return [...SECRET_HOME_DIRS.map((d) => `${p.home.replace(/\/+$/, '')}/${d}`), ...(p.hide ?? []), ...(p.writableFiles ?? [])];
+  return [...SECRET_HOME_DIRS.map((d) => `${p.home.replace(/\/+$/, '')}/${d}`), WSL_INTEROP_DIR, ...(p.hide ?? []), ...(p.writableFiles ?? [])];
 }
 
 const clean = (xs: string[] | undefined): string[] => [...new Set((xs ?? []).filter((x) => typeof x === 'string' && x.startsWith('/') && !x.includes('\0')).map((x) => x.replace(/\/+$/, '') || '/'))];
@@ -89,7 +101,9 @@ export function bwrapArgs(p: BwrapProfile, exists: (path: string) => boolean): s
     '--dev', '/dev',
     '--proc', '/proc',
     // Its own /tmp: nothing it leaves there is shared with other agents.
-    '--tmpfs', '/tmp'
+    '--tmpfs', '/tmp',
+    // No Windows programs from inside (WSL interop, WSL_INTEROP_DIR below).
+    '--unsetenv', 'WSL_INTEROP'
   ];
   if (p.network === 'none') args.push('--unshare-net');
   // Writable folders over the read-only root (a missing one is skipped).
@@ -102,7 +116,7 @@ export function bwrapArgs(p: BwrapProfile, exists: (path: string) => boolean): s
   // Over every writable bind, so nothing reopens them.
   for (const c of clean(p.controls)) args.push('--ro-bind-try', c, c);
   // Hidden last, so a writable parent cannot uncover them.
-  const hidden = clean([...SECRET_HOME_DIRS.map((d) => `${home}/${d}`), ...(p.hide ?? [])]);
+  const hidden = clean([...SECRET_HOME_DIRS.map((d) => `${home}/${d}`), WSL_INTEROP_DIR, ...(p.hide ?? [])]);
   for (const h of hidden) if (exists(h)) args.push('--tmpfs', h);
   return args;
 }

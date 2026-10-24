@@ -2122,7 +2122,30 @@
         "mktFailed": "Could not add it.",
         "mktStale": "last refresh failed"
       },
-      "guardLimits": "\"Outside its folders\" and \"Git\" are checked on every command before it runs: file tools, shell commands (including what they pass to bash -c, cmd /c, PowerShell or wsl) and python/node/perl/ruby one-liners. A script saved in a file, or a path the program builds while it runs, cannot be read in advance, so this is a fence for honest mistakes, not a jail. For a hard limit, run the agent in WSL or a container."
+      "guardLimits": "\"Outside its folders\" and \"Git\" are checked on every command before it runs: file tools, shell commands (including what they pass to bash -c, cmd /c, PowerShell or wsl) and python/node/perl/ruby one-liners. A script saved in a file, or a path the program builds while it runs, cannot be read in advance, so this is a fence for honest mistakes, not a jail. For a hard limit, run the agent in WSL or a container.",
+      "ssh": {
+        "title": "Use my SSH keys through the office: {{name}}",
+        "off": "Off",
+        "on": "On",
+        "turnOn": "Turn on",
+        "body": "Agents in a sandbox cannot read your ~/.ssh. With this on, when this agent runs git over SSH (fetch, pull, push), the app runs ssh for it outside its sandbox with your keys and passes only the git transfer back. Nothing else goes through: no shell on a server, no other commands. It applies at once.",
+        "warning": "The agent can then fetch from and push to any repository your key opens, as you. It never sees the key.",
+        "confirm": "Let {{name}} use your SSH keys through the office?",
+        "unavailable": "Not available on this floor: agents on a Windows floor run without an OS sandbox, so the office cannot keep your keys from them. Use HTTPS remotes there, or a WSL floor.",
+        "custodian": "Not for the custodian of a critical connection: it never uses your SSH keys.",
+        "keys": "Keys it may use",
+        "noKeys": "No keys found where agents run (~/.ssh/*.pub or an ssh-agent). ssh will try the ones it finds at the time.",
+        "keysAny": "None chosen: ssh uses the keys it would use for you.",
+        "keysChosen": "Only the chosen keys are offered to the server.",
+        "fromAgent": "in your ssh-agent",
+        "fromFile": "key file",
+        "ask": "Ask me before each use",
+        "audit": "What it did ({{count}})",
+        "auditEmpty": "Nothing yet.",
+        "allowed": "allowed",
+        "refused": "refused",
+        "exit": "exit {{code}}"
+      }
     },
     "skills": {
       "sub": "What your agents know how to do, and where to get more.",

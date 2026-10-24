@@ -125,7 +125,10 @@ export function describeWslError(raw: unknown, distro?: string): string {
 const WSL_SETUP = [
   '[ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1',
   '[ -d "$HOME/.volta/bin" ] && PATH="$HOME/.volta/bin:$PATH"',
-  'command -v fnm >/dev/null 2>&1 && eval "$(fnm env)"'
+  'command -v fnm >/dev/null 2>&1 && eval "$(fnm env)"',
+  // A folder that must come first (the office's `ssh` for a sandboxed agent,
+  // shared/sshRelay.ts): after the version managers, which prepend too.
+  '[ -n "${MD_PATH_PREPEND:-}" ] && PATH="$MD_PATH_PREPEND:$PATH"'
 ];
 export const WSL_PRELUDE = [...WSL_SETUP, 'exec "$@"'].join('; ');
 

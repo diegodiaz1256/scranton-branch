@@ -138,6 +138,9 @@ export interface HarnessConfig {
   agentRoam?: string[];
   /** Agents the human let run without their OS sandbox (shared/unsandboxed.ts). */
   agentUnsandboxed?: string[];
+  /** SSH through the office (shared/sshRelay.ts): agent id → the keys it may use
+   *  (fingerprints; none = any) and whether to ask first. Absent → off. */
+  agentSshRelay?: Record<string, { keys?: string[]; ask?: boolean }>;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'mine' | 'catalog';

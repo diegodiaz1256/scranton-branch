@@ -63,9 +63,12 @@ export function buildPtyEnv(
     if (k !== 'PATH' && k.toUpperCase() === 'PATH') continue;
     inherited[k] = v;
   }
+  // A folder that must come first on the agent's PATH (the office's `ssh`
+  // for a sandboxed agent, shared/sshRelay.ts).
+  const first = agentEnv?.MD_PATH_PREPEND;
   return {
     ...inherited,
-    PATH: userPath,
+    PATH: first ? `${first}${platform === 'win32' ? ';' : ':'}${userPath}` : userPath,
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
     // Help apps that look for a real interactive shell

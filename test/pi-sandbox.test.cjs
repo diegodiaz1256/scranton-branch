@@ -42,7 +42,9 @@ test('folders it may not read are hidden; no network when asked; nonsense paths 
 test('mount points to check: the credential folders, the hidden ones and the writable files', () => {
   const m = mountPoints({ writable: [], hide: ['/x'], writableFiles: ['/home/u/.pi/agent/auth.json'], home: '/home/u/' });
   assert.ok(m.includes('/home/u/.ssh') && m.includes('/x') && m.includes('/home/u/.pi/agent/auth.json'));
-  assert.equal(m.length, SECRET_HOME_DIRS.length + 2);
+  // + WSL's interop sockets (/run/WSL).
+  assert.ok(m.includes('/run/WSL'));
+  assert.equal(m.length, SECRET_HOME_DIRS.length + 3);
 });
 
 function tmpHome(t) { const h = fs.mkdtempSync(path.join(os.tmpdir(), 'md-pisbx-')); t.after(() => fs.rmSync(h, { recursive: true, force: true })); return h; }

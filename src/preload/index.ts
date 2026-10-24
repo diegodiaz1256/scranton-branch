@@ -449,6 +449,9 @@ export interface HarnessConfig {
   agentToolBlocks?: Record<string, string[]>;
   agentRoam?: string[];
   agentUnsandboxed?: string[];
+  /** SSH through the office (shared/sshRelay.ts): agent id → the keys it may use
+   *  (fingerprints; none = any) and whether to ask first. Absent → off. */
+  agentSshRelay?: Record<string, { keys?: string[]; ask?: boolean }>;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'mine' | 'catalog';
@@ -1576,6 +1579,15 @@ const api = {
   // feature-detection (camelCase ↔ colon-channel), so its real path activates as-is.
   integrationsList: (): Promise<IntegrationRecordView[]> =>
     ipcRenderer.invoke('integrations:list'),
+  // SSH through the office (Capabilities): the keys where agents run (public
+  // fingerprints and labels, never a key), and the relay's audit.
+  sshRelayKeys: (): Promise<{ available: boolean; agentSocket?: boolean; keys: Array<{ fingerprint: string; label: string; source: 'file' | 'agent' }> }> =>
+    ipcRenderer.invoke('sshRelay:keys'),
+  sshRelayAudit: (agentId?: string): Promise<Array<{ ts: number; agentId: string; agentName?: string; host?: string; user?: string; service?: string; path?: string; keys?: string[]; allowed: boolean; reason?: string; exit?: number | null }>> =>
+    ipcRenderer.invoke('sshRelay:audit', agentId),
+  /** Turn it on (a grant: keys, ask) or off (null) for one agent. */
+  sshRelaySet: (agentId: string, grant: { keys?: string[]; ask?: boolean } | null): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('sshRelay:set', agentId, grant),
   // Manager → Connections (keyed MCP servers). WRITE-ONLY like the integrations:
   // `connectionsList` reports only whether each field is stored.
   /** Save the user's own role bundles; resolves to what was kept after validation. */
