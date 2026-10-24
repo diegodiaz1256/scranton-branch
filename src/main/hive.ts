@@ -3346,16 +3346,21 @@ export class HiveManager {
     mkdirSync(join(root, 'bin'), { recursive: true });
     writeFileSync(shim, AGY_HOOK_SHIM, 'utf8');
     // Bundled node, not bare `node` — agy's hooks run with a stripped PATH too.
+    // A WSL floor has no launcher: its hook is the distro's bare `node`, which
+    // a plain agy (no AGENT_ID, no nvm on PATH) may lack; agy then refuses every
+    // tool call. That run is not ours: the hook ends there, before node.
     const command = (event: string) => this.winAgents()
       ? this.windowsHookCommand('md-agy-hook', shim, event)
-      : this.nodeRun(shim, event);
+      : this.wslRoot() ? `[ -n "$AGENT_ID" ] || exit 0; ${this.nodeRun(shim, event)}` : this.nodeRun(shim, event);
     const tool = (event: string) => ({
       matcher: '*',
       hooks: [{ type: 'command', command: command(event), timeout: 0 }]
     });
-    const plain = (event: string) => ({
-      hooks: [{ type: 'command', command: command(event), timeout: 0 }]
-    });
+    // Events without a matcher take their handlers directly (agy's hooks.md:
+    // "Flat (list of handler objects directly)"). Wrapped in { hooks: [...] }
+    // like the tool events, agy 1.4 rejects the whole file ("command hook must
+    // specify 'command'") and no hook fires at all, PreToolUse included.
+    const plain = (event: string) => ({ type: 'command', command: command(event), timeout: 0 });
     const group = {
       PreToolUse: [tool('PreToolUse')],
       PostToolUse: [tool('PostToolUse')],

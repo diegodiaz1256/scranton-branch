@@ -112,8 +112,8 @@ const WRITE_TOOL_NAMES = new Set([
   'str_replace_editor', 'str_replace_based_edit_tool',
   'apply_patch', 'patch'
 ]);
-/** Where those tools put the path. */
-const PATH_KEYS = ['file_path', 'filePath', 'path', 'TargetFile', 'targetFile', 'target_file', 'AbsolutePath', 'absolutePath', 'absolute_path', 'notebook_path', 'filename', 'file'];
+/** Where those tools put the path (Path: Antigravity 1.4's write_file/edit_file). */
+const PATH_KEYS = ['file_path', 'filePath', 'path', 'Path', 'TargetFile', 'targetFile', 'target_file', 'AbsolutePath', 'absolutePath', 'absolute_path', 'notebook_path', 'filename', 'file'];
 /** Patch text (Codex apply_patch, OpenCode patch): the files it adds, changes or moves to. */
 const PATCH_FILE = /^\*\*\* (?:Add File|Update File|Move to): (.+?)\s*$/gm;
 
