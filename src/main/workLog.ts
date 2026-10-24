@@ -8,7 +8,7 @@ import { join } from 'node:path';
  * agents/<orchestrator>/worklog.md, next to memory.md, and Memory shows it as
  * part of the orchestrator's notes.
  */
-export type WorkOutcome = 'done' | 'exited' | 'idle' | 'tokens';
+export type WorkOutcome = 'done' | 'exited' | 'idle' | 'tokens' | 'archived';
 
 export interface WorkLogEntry {
   /** Who did the job (the temp's display name). */
@@ -39,6 +39,8 @@ export function workLogLine(e: WorkLogEntry): string {
       return `- ${day}: ${e.who} was stopped after going idle on${job || ' its job'}`;
     case 'tokens':
       return `- ${day}: ${e.who} was stopped at its token cap on${job || ' its job'}`;
+    case 'archived':
+      return `- ${day}: ${e.who} was archived by the orchestrator on${job || ' its job'}`;
   }
 }
 

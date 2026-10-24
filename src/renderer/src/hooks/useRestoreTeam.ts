@@ -57,7 +57,7 @@ export interface RestoreTeamState {
   restoreTeam: () => Promise<void>;
 }
 
-export type RespawnResult = { ok: true; agent: Agent } | { ok: false; error: string; alreadyLive?: boolean };
+export type RespawnResult = { ok: true; agent: Agent } | { ok: false; error: string; alreadyLive?: boolean; finishedTemp?: boolean };
 
 /** Respawn ONE agent from its saved recipe — original id, cwd, model and command,
  *  resuming its prior CLI session — and hand back the card to add. Shared by the
@@ -67,8 +67,11 @@ export type RespawnResult = { ok: true; agent: Agent } | { ok: false; error: str
  *
  * @param config used only to rebuild a spawn command for an agent persisted
  *        before the `command` field existed.
+ * @param reopen the human asked for this agent by hand (Reopen), so a temp
+ *        whose job is done comes back as a regular agent instead of staying
+ *        archived.
  */
-export async function respawnAgent(a: Agent, config?: HarnessConfig | null): Promise<RespawnResult> {
+export async function respawnAgent(a: Agent, config?: HarnessConfig | null, reopen = false): Promise<RespawnResult> {
   try {
   const provider = inferAgentProvider(a.command, a.provider);
   const command = (a.command ?? '').trim() || (config ? buildSpawnCommand(config, a.model, provider) : '');
@@ -117,6 +120,7 @@ export async function respawnAgent(a: Agent, config?: HarnessConfig | null): Pro
     // agent id is preserved across restart, so its registry entry,
     // memory.md and inbox reattach by id. No-op without a recorded session.
     resume: true,
+    reopen,
     hive: { id: a.id, name: a.name, provider, cwd, role: roleForHiveSpawn(a) }
   });
   if (res.ok) {
@@ -144,6 +148,8 @@ export async function respawnAgent(a: Agent, config?: HarnessConfig | null): Pro
   // A live PTY with this id is already running (e.g. respawned at boot or
   // by another path) — the agent isn't actually missing.
   if ((res.error ?? '').includes('already exists')) return { ok: false, error: 'already running', alreadyLive: true };
+  // A temp that already signaled done: main archived it instead of starting it.
+  if (res.finishedTemp) return { ok: false, error: res.error ?? 'its job is done', finishedTemp: true };
   console.error('[restore] spawn failed for', a.id, res.error);
   return { ok: false, error: res.error ?? 'spawn failed' };
   } catch (e) {
@@ -176,6 +182,7 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
     // couldn't spawn anything looked like a dead button.
     let restored = 0;
     let alreadyLive = 0;
+    let finished = 0;
     const failures: string[] = [];
     try {
       // Restore every agent CONCURRENTLY. Each spawn is keyed by its own ptyId and
@@ -202,6 +209,10 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
           // rather than reporting a phantom failure.
           alreadyLive++;
           useStore.getState().removeRestorableAgent(a.id);
+        } else if (r.finishedTemp) {
+          // A temp whose job was done: archived, not missing.
+          finished++;
+          useStore.getState().removeRestorableAgent(a.id);
         } else {
           // Leave it restorable so the user can retry — but record WHY so the
           // outcome is shown on the floor, not buried in the devtools console.
@@ -222,6 +233,7 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
       const parts: string[] = [];
       if (restored) parts.push(`restored ${restored}`);
       if (alreadyLive) parts.push(`${alreadyLive} already live`);
+      if (finished) parts.push(`${finished} finished temp${finished === 1 ? '' : 's'} archived`);
       if (failures.length) parts.push(`${failures.length} failed — ${failures.join('; ')}`);
       note = parts.length ? parts.join(' · ') : 'nothing to restore';
       emit();

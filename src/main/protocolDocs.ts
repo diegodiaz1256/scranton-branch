@@ -209,8 +209,15 @@ failures to a thread; \`character\`/\`accent\` set its look (a cast member's nam
 
 **It can be switched off** (Settings → Autonomy & limits, off by default). While off, a request
 waits in \`spawn-requests/\` untouched; raise it with the human instead of retrying. Route work to an
-agent already on the floor first either way. A temp is archived when its job is done: for a
-permanent member of the office, see \`hire.md\`.`
+agent already on the floor first either way. A temp is archived when its job is done (when it sends
+its \`done\`, also after an app restart): for a permanent member of the office, see \`hire.md\`.
+
+**Archiving a temp yourself.** When a temp you started is no longer needed (it finished without
+sending \`done\`, or its job was dropped), write \`archive-requests/<any-name>.json\` in the hive root:
+\`{"id": "worker-<id>"}\`. The harness closes its terminal, archives it (its folder, memory and
+committed work are kept), moves the request to \`archive-requests/.done/\` and tells you in your inbox.
+Only a temp you hired through \`spawn-requests\` can be archived this way: anyone else is refused
+(the request goes to \`.failed/\` and you hear why). The live roster marks temps with \`temp\`.`
   },
   {
     file: 'hire.md',
@@ -403,7 +410,7 @@ export function renderProtocolIndex(): string {
     '- `registry.json`, `fleet.json`, `log.jsonl` — the roster, live state, the event feed.',
     '- `research/` — deliverables for the human; `research/hires/` — hire proposals.',
     '- `lists/` — the human\'s personal lists.',
-    '- `spawn-requests/`, `missions.json` — worker requests and scheduled missions.',
+    '- `spawn-requests/`, `archive-requests/`, `missions.json` — temps started and archived, and scheduled missions.',
     '- `bin/md-api.cjs` (REST APIs), `bin/md-run.cjs` (runners) — no arguments lists what you may use.',
     '',
     'Never hunt for office files or tools across the disk, in other projects, or in Scranton Branch\'s',

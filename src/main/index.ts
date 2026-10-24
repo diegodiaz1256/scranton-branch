@@ -47,7 +47,7 @@ import { excludeOfficeFromRepo } from './gitExclude';
 import { openTerminalAt } from './openTerminal';
 import { agentKind, effortArgs } from '../shared/roleModels';
 import { formatList, parseList, type PersonalList } from '../shared/lists';
-import { HiveManager, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
+import { HiveManager, type AgentMeta, type HiveMessage, type HiveTask, type TempHiring } from './hive';
 import { HookServer } from './hooks';
 import { CircuitBreaker, type BreakerInput } from './breaker';
 import { CumulativeSampleGate, type UsageProvider } from './usage';
@@ -150,7 +150,7 @@ import { makeSpawnGate } from './spawnGate';
 import { clearWorkerScratch } from './workerScratch';
 import { speak as speakAloud, stopSpeaking } from './speak';
 import { appendWorkLog, workLogLine, type WorkLogEntry } from './workLog';
-import { messageBody } from '../shared/messageBody';
+import { latestDone, archiveRequestProblem, legacyTemps } from './tempWorkers';
 import { FreezeMonitor, instrumentEvents, instrumentIpc, instrumentTimers, type FreezeEntry } from './freezeLog';
 
 // Freeze log (freezeLog.ts): set up before any handler or timer exists, so all
@@ -499,11 +499,23 @@ interface WorkerRec {
    *  that was not listening yet (a request processed while the app boots) can
    *  card the worker later through workers:cards. */
   card?: Record<string, unknown>;
+  /** The PTY id when it is not the worker id: a temp brought back by Restore
+   *  team runs in the renderer's `pty-<id>`. Unset = same as workerId. */
+  ptyId?: string;
 }
 /** Live ephemeral workers by id. Populated by the spawn-request watcher; consulted
  *  by teardownPty so a finished/crashed/reaped worker's worktree is PRESERVED (not
  *  force-removed) when it holds unintegrated work — god is the sole integrator. */
 const liveWorkers = new Map<string, WorkerRec>();
+/** The PTY a worker runs in. */
+const workerPty = (rec: WorkerRec): string => rec.ptyId ?? rec.workerId;
+/** The live worker running in PTY `ptyId`, if any. */
+function workerByPty(ptyId: string): WorkerRec | undefined {
+  const direct = liveWorkers.get(ptyId);
+  if (direct && workerPty(direct) === ptyId) return direct;
+  for (const rec of liveWorkers.values()) if (workerPty(rec) === ptyId) return rec;
+  return undefined;
+}
 
 /** The loopback secret broker (Phase 2). Workers reach registered integrations through
  *  it without ever seeing a credential. getRecord/getSecret are injected so the broker
@@ -791,8 +803,9 @@ function teardownPty(id: string): void {
   // worker deaths (done-release, idle/token reap, manual stop, crash) funnel
   // through here, so this is the one place their floor card gets archived
   // (workers card via the hive:agentSpawned broadcast in processSpawnRequest).
-  // pty id == worker id == agent id for workers.
-  const wasWorker = liveWorkers.has(id);
+  // pty id == worker id == agent id for a fresh worker; a restored temp keeps
+  // its renderer pty id (WorkerRec.ptyId).
+  const workerRec = workerByPty(id);
   // 0) Revoke this id's broker capability (if any). Idempotent + harmless for a
   //    non-worker PTY; ensures a dead worker's token can never reach an integration.
   try { integrationBroker.revoke(id); } catch { /* best-effort */ }
@@ -828,9 +841,9 @@ function teardownPty(id: string): void {
     // that holds unintegrated work. This sits INSIDE teardownPty so it covers ALL
     // teardown routes — a worker that finished (controller kill), crashed, or was
     // idle-reaped all land here. Normal agents get the same rule (below).
-    const worker = liveWorkers.get(id);
+    const worker = workerRec;
     if (worker) {
-      liveWorkers.delete(id);
+      liveWorkers.delete(worker.workerId);
       void finalizeWorkerWorktree(wtPath, origCwd, worker);
     } else {
       void finalizeAgentWorktree(wtPath, origCwd, agentId ?? id);
@@ -838,12 +851,12 @@ function teardownPty(id: string): void {
   }
   // A worker whose isolation failed (non-repo cwd) has no worktree to gate above —
   // still clear its tracking entry so the controller stops watching a dead PTY.
-  if (liveWorkers.has(id)) liveWorkers.delete(id);
+  if (workerRec && liveWorkers.get(workerRec.workerId) === workerRec) liveWorkers.delete(workerRec.workerId);
   // Archive the dead worker's floor card (mirrors killAgent's voice-kill path;
   // the renderer's archiveAgent is a no-op if the card is already gone). NOT
   // done for regular agents: their kill flows already manage their own card.
-  if (wasWorker) {
-    try { liveWebContents()?.send('hive:agentArchived', { id }); } catch { /* window torn down */ }
+  if (workerRec) {
+    try { liveWebContents()?.send('hive:agentArchived', { id: workerRec.workerId }); } catch { /* window torn down */ }
   }
   syncKeepAwake();
 }
@@ -868,23 +881,7 @@ function logWork(rec: WorkerRec, outcome: WorkLogEntry['outcome'], extra: Partia
 function workerDoneText(workerId: string, spawnedAt: number): string {
   const root = hive.root();
   if (!root) return '';
-  const base = join(root, 'agents', workerId, 'outbox');
-  let best: { ts: number; text: string } | null = null;
-  for (const dir of [base, join(base, '.sent')]) {
-    let files: string[] = [];
-    try { files = readdirSync(dir); } catch { continue; }
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue;
-      try {
-        const msg = JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>;
-        if (msg.act !== 'done') continue;
-        const ts = Date.parse(String(msg.created_at ?? '')) || statSync(join(dir, f)).mtimeMs;
-        if (ts <= spawnedAt || (best && ts <= best.ts)) continue;
-        best = { ts, text: messageBody(msg) || (typeof msg.subject === 'string' ? msg.subject : '') };
-      } catch { /* skip unreadable/partial */ }
-    }
-  }
-  return best?.text ?? '';
+  return latestDone(join(root, 'agents', workerId), spawnedAt)?.text ?? '';
 }
 
 function informGod(subject: string, body: string, slack?: { channel: string; thread_ts: string }): void {
@@ -1312,7 +1309,7 @@ ptyManager.setExitHandler((id, exitCode, info) => {
   // Whatever subagents that agent had running ended with it.
   { const owner = ptyToAgent.get(id); if (owner && hookServer.subagents.endFor(owner)) hookServer.onSubagentsChanged?.(); }
   // A temp whose process ended before it reported done (crash, refused start).
-  const exitingWorker = liveWorkers.get(id);
+  const exitingWorker = workerByPty(id);
   if (exitingWorker && !exitingWorker.releasing) logWork(exitingWorker, 'exited', { exitCode });
   try {
     const dyingAgent = ptyToAgent.get(id);
@@ -3614,7 +3611,7 @@ function findCodexHomeForSession(sessionId: string, siblingsRoot: string): strin
 
 /** Spawn options shared by the `pty:spawn` IPC handler and the god-triggered
  *  ephemeral-worker watcher. */
-type AgentSpawnOptions = SpawnOptions & { hive?: AgentMeta; temp?: boolean; isolate?: boolean; resume?: boolean; requireResume?: boolean; resumeSessionId?: string; provider?: AgentProvider; noAutoInstall?: boolean };
+type AgentSpawnOptions = SpawnOptions & { hive?: AgentMeta; temp?: boolean; isolate?: boolean; resume?: boolean; requireResume?: boolean; resumeSessionId?: string; provider?: AgentProvider; noAutoInstall?: boolean; reopen?: boolean };
 
 /** Map a `ptyManager.spawn` failure string to the closed `agent_spawn_failed.reason`
  *  enum (analytics.ts). The two known strings come from PtyManager.spawn; anything
@@ -3634,6 +3631,24 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
   // Record the spawning window as the PTY's owner so its output routes ONLY back
   // to that floor, then run the shared spawn core.
   const owner = BrowserWindow.fromWebContents(evt.sender)?.webContents ?? null;
+  // A temp the orchestrator hired outlives an app restart as a temp (its hiring
+  // is in the registry). Restore team used to bring it back as a regular agent
+  // that nothing ever released: a finished temp sat on the roster for 3 days.
+  // Now a finished one stays archived instead of being respawned (unless the
+  // human reopens it by hand, which keeps it as a regular agent), and an
+  // unfinished one goes back under the worker controller below.
+  const tempId = opts.hive?.id;
+  let temp: TempHiring | undefined;
+  try { temp = tempId && hive.enabled() ? hive.registry().agents[tempId]?.temp : undefined; } catch { temp = undefined; }
+  if (tempId && temp && workerDoneAt(tempId, temp.spawnedAt) !== null) {
+    if (!opts.reopen) {
+      hive.setArchived(tempId, true);
+      console.log(`[worker] not restoring ${tempId}: it already signaled done`);
+      return { ok: false, error: 'its job is done (a finished temp is archived, not restored)', finishedTemp: true };
+    }
+    hive.setTemp(tempId, null);
+    temp = undefined;
+  }
   // A start that never finishes used to leave the UI waiting forever (the
   // orchestrator never appeared, and nothing said why). Give up after 90 s
   // with the step it was stuck on; the core keeps its own log of steps.
@@ -3647,7 +3662,17 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
   });
   try {
     // One at a time (spawnGate.ts): a team coming up no longer freezes the app.
-    return await Promise.race([spawnTurn(() => spawnAgentCore(opts, owner)), watchdog]);
+    const res = await Promise.race([spawnTurn(() => spawnAgentCore(opts, owner)), watchdog]);
+    if (res.ok && tempId && temp && !liveWorkers.has(tempId)) {
+      // Tracked again: released on its done, reaped idle or over its cap, and
+      // archived at teardown, measured from the ORIGINAL hiring.
+      liveWorkers.set(tempId, {
+        workerId: tempId, reqId: temp.reqId, name: opts.hive?.name, objective: temp.objective, slack: temp.slack,
+        baseBranch: temp.baseBranch, spawnedAt: temp.spawnedAt, tokenCap: temp.tokenCap, ptyId: opts.id
+      });
+      console.log(`[worker] restored temp ${tempId} is tracked again (pty ${opts.id})`);
+    }
+    return res;
   } finally {
     clearTimeout(timer);
     spawnStepsDone(opts.id);
@@ -6969,6 +6994,76 @@ function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {
   }
 }
 
+/** HIVE_ROOT/archive-requests — where the orchestrator asks to archive a temp. */
+function archiveRequestsDir(): string | null {
+  const root = hive.root();
+  return root ? join(root, 'archive-requests') : null;
+}
+
+/** The orchestrator's archive requests: `archive-requests/<any>.json` holding
+ *  {"id":"worker-…"}. It had no way to let go of a temp it hired: a temp that
+ *  never sent its done (or was restored as a regular agent) stayed on the floor
+ *  until the human closed it. Same shape as spawn-requests: the file is
+ *  untrusted, so only a temp the orchestrator hired is archived
+ *  (archiveRequestProblem); each request moves to .done/ or .failed/ and the
+ *  orchestrator hears the outcome in its inbox. Work committed on the temp's
+ *  branch is preserved by the usual teardown. */
+function processArchiveRequests(): void {
+  const dir = archiveRequestsDir();
+  if (!dir || !existsSync(dir)) return;
+  let files: string[] = [];
+  try { files = readdirSync(dir).filter((f) => f.endsWith('.json')).sort(); } catch { return; }
+  for (const f of files) {
+    const fp = join(dir, f);
+    let id = '';
+    try {
+      const raw = JSON.parse(readFileSync(fp, 'utf8')) as { id?: unknown };
+      id = typeof raw.id === 'string' ? raw.id.trim() : '';
+    } catch { /* unparseable → refused below as missing id */ }
+    const problem = hive.enabled() ? archiveRequestProblem(hive.registry(), id) : 'no hive is open';
+    const sub = problem ? '.failed' : '.done';
+    try {
+      mkdirSync(join(dir, sub), { recursive: true });
+      renameSync(fp, join(dir, sub, f));
+    } catch { try { unlinkSync(fp); } catch { /* noop */ } }
+    if (problem) {
+      informGod(`[archive request refused] ${id || f}`, `archive-requests/${f} was refused: ${problem}.`);
+      continue;
+    }
+    const rec = liveWorkers.get(id);
+    const pty = rec ? workerPty(rec) : ptyForAgent(id);
+    if (rec && !rec.releasing) {
+      rec.releasing = true;
+      logWork(rec, 'archived');
+    }
+    if (pty) {
+      ptyManager.kill(pty);
+      teardownPty(pty);
+      // teardownPty archives a tracked worker's card; an untracked one (a temp
+      // restored before its hiring was persisted) needs it said here.
+      if (!rec) { try { liveWebContents()?.send('hive:agentArchived', { id }); } catch { /* window torn down */ } }
+    }
+    hive.setArchived(id, true);
+    console.log(`[worker] archived ${id} at the orchestrator's request`);
+    informGod(`[temp archived] ${id}`, `${id} was archived as you asked${pty ? ' (its terminal was closed)' : ''}. Work committed on its branch is preserved for you.`, rec?.slack);
+  }
+}
+
+/** Mark temps hired before their hiring was persisted (legacyTemps), so Restore
+ *  team stops bringing them back as permanent agents. Boot-time, best-effort. */
+function markLegacyTemps(): void {
+  const queue = spawnRequestsDir();
+  if (!queue || !hive.enabled()) return;
+  try {
+    for (const [id, temp] of Object.entries(legacyTemps(hive.registry(), join(queue, '.done')))) {
+      hive.setTemp(id, temp);
+      console.log('[migration] marked temp hired before its hiring was persisted:', id);
+    }
+  } catch (e) {
+    console.error('[migration] markLegacyTemps failed:', e);
+  }
+}
+
 /** When did this worker post its terminal `act:"done"` — or null when it has
  *  not yet. Scans its own outbox AND outbox/.sent (the router archives delivered
  *  mail there ~every 1.5s), so the signal is caught whether or not it's been
@@ -6986,27 +7081,7 @@ function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {
 function workerDoneAt(workerId: string, spawnedAt: number): number | null {
   const root = hive.root();
   if (!root) return null;
-  const base = join(root, 'agents', workerId, 'outbox');
-  let doneAt: number | null = null;
-  for (const dir of [base, join(base, '.sent')]) {
-    if (!existsSync(dir)) continue;
-    let files: string[];
-    try { files = readdirSync(dir); } catch { continue; }
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue;
-      const fp = join(dir, f);
-      try {
-        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };
-        if (msg.act !== 'done') continue;
-        let ts = Date.parse(msg.created_at ?? '');
-        if (!Number.isFinite(ts)) {
-          try { ts = statSync(fp).mtimeMs; } catch { ts = NaN; }
-        }
-        if (Number.isFinite(ts) && ts > spawnedAt && (doneAt === null || ts > doneAt)) doneAt = ts;
-      } catch { /* skip unreadable/partial */ }
-    }
-  }
-  return doneAt;
+  return latestDone(join(root, 'agents', workerId), spawnedAt)?.at ?? null;
 }
 
 /** Spin up one ephemeral worker from a spawn-request. Terminal failures (bad
@@ -7146,9 +7221,9 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   // the worker is invisible on the floor, never enters the roster, and after a
   // restart nothing offers to restore it. The card rides the normal agent
   // lifecycle from here — teardownPty broadcasts the matching archive. A card
-  // RESTORED after an app quit revives through the renderer's normal spawn path
-  // and never re-enters liveWorkers: ephemerality is a property of the hiring,
-  // not of the card, so a restored worker is a regular agent (no reaping).
+  // RESTORED after an app quit revives through the renderer's normal spawn path;
+  // the hiring is persisted in the registry (setTemp below), so pty:spawn puts
+  // an unfinished temp back under this controller and refuses a finished one.
   const card = {
     id: workerId,
     name: meta.name,
@@ -7168,7 +7243,10 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   // tokenCap is optional plumbing (default unlimited) — only a positive finite cap is kept.
   const tokenCap = typeof raw.tokenCap === 'number' && Number.isFinite(raw.tokenCap) && raw.tokenCap > 0
     ? raw.tokenCap : undefined;
-  liveWorkers.set(workerId, { workerId, reqId, name: meta.name, objective, slack, baseBranch, spawnedAt: Date.now(), tokenCap, card });
+  const spawnedAt = Date.now();
+  liveWorkers.set(workerId, { workerId, reqId, name: meta.name, objective, slack, baseBranch, spawnedAt, tokenCap, card });
+  // …and on disk, so a restart does not turn it into a permanent agent.
+  hive.setTemp(workerId, { reqId, spawnedAt, baseBranch, tokenCap, objective, slack, hiredBy: basename(dirname(filePath)) === 'human' ? 'human' : 'orchestrator' });
 
   // Dispatch the objective via the standard inbox path (zero new transport),
   // reusing the autonomous-request preamble so the worker gets the exact Slack
@@ -7310,8 +7388,8 @@ async function ephemeralWorkerTick(): Promise<void> {
             rec.slack
           );
         }
-        ptyManager.kill(workerId);
-        teardownPty(workerId);
+        ptyManager.kill(workerPty(rec));
+        teardownPty(workerPty(rec));
         continue;
       }
       // Token-cap reap (default-off plumbing). An effective cap > 0 → reap when the
@@ -7328,12 +7406,12 @@ async function ephemeralWorkerTick(): Promise<void> {
             `Worker ${workerId} used ${used.toLocaleString()} tokens (> its cap of ${tokenCap.toLocaleString()}) and was reaped. Any committed work on its branch is preserved for you.`,
             rec.slack
           );
-          ptyManager.kill(workerId);
-          teardownPty(workerId);
+          ptyManager.kill(workerPty(rec));
+          teardownPty(workerPty(rec));
           continue;
         }
       }
-      const idleMs = ptyManager.idleFor(workerId);
+      const idleMs = ptyManager.idleFor(workerPty(rec));
       if (idleMs === undefined) continue; // PTY already gone; teardownPty cleans up
       if (idleMs > idleTimeoutMs) {
         rec.releasing = true;
@@ -7344,8 +7422,8 @@ async function ephemeralWorkerTick(): Promise<void> {
           `Worker ${workerId} produced no output for ${Math.round(idleMs / 60000)} min (> the ${Math.round(idleTimeoutMs / 60000)} min cap) and never signaled done, so it was reaped. Any committed work on its branch is preserved for you.`,
           rec.slack
         );
-        ptyManager.kill(workerId);
-        teardownPty(workerId);
+        ptyManager.kill(workerPty(rec));
+        teardownPty(workerPty(rec));
       }
     }
 
@@ -7379,6 +7457,9 @@ async function ephemeralWorkerTick(): Promise<void> {
     //      scheduled mission). Not gated by orchestratorMaySpawn: every change
     //      shows up in Automations and is reported back to the orchestrator.
     processScheduleRequests();
+    // (2c) The orchestrator archiving a temp it hired. Not gated either: it
+    //      only ever lets go of a worker, which costs nothing.
+    processArchiveRequests();
     await processTeamRequests();
     await processSkillRequests().catch((e) => console.error('[skills] requests failed:', e));
 
@@ -7441,7 +7522,7 @@ ipcMain.handle('workers:list', (): { live: WorkerSnapshot[]; preserved: Preserve
     ? cfg.defaultWorkerTokenCap : 0;
   const now = Date.now();
   const live: WorkerSnapshot[] = [...liveWorkers.values()].map((rec) => {
-    const idle = ptyManager.idleFor(rec.workerId);
+    const idle = ptyManager.idleFor(workerPty(rec));
     const effCap = (rec.tokenCap && rec.tokenCap > 0) ? rec.tokenCap : (defaultCap > 0 ? defaultCap : 0);
     return {
       workerId: rec.workerId,
@@ -7479,8 +7560,8 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
   if (rec.releasing) return { ok: true }; // already stopping
   rec.releasing = true;
   console.log(`[worker] manual stop requested for ${workerId}`);
-  try { ptyManager.kill(workerId); } catch (e) { return { ok: false, error: String(e) }; }
-  teardownPty(workerId);
+  try { ptyManager.kill(workerPty(rec)); } catch (e) { return { ok: false, error: String(e) }; }
+  teardownPty(workerPty(rec));
   return { ok: true };
 });
 
@@ -7592,6 +7673,7 @@ function bootstrapHiveServices(): void {
     platform: process.platform
   });
   control.replaceAutoDeliveryPauses(readConfig().autoDeliveryPausedAgents ?? []);
+  freezes.time('boot: markLegacyTemps', () => markLegacyTemps()); // temps hired before the hiring was persisted
   freezes.time('boot: archiveOrphanedAgents', () => archiveOrphanedAgents()); // #57/#58: archive stale archived:false entries with no live PTY
   freezes.time('boot: hive.startRouter', () => hive.startRouter());
   freezes.time('boot: startEphemeralWorkerWatcher', () => startEphemeralWorkerWatcher()); // poll HIVE_ROOT/spawn-requests → ephemeral workers

@@ -208,6 +208,25 @@ export interface RegistryAgent extends AgentMeta {
    *  (e.g. "ClaudeTerminalHarness") spawns into a nonexistent dir and fails; this
    *  flag makes that visible instead of letting it slip through silently. */
   cwdValid?: boolean;
+  /** Set while the agent is a temp the orchestrator started through
+   *  spawn-requests. Persisted (not just main's in-memory worker map) so a temp
+   *  brought back by Restore team after an app restart is still a temp: it is
+   *  tracked again, released on its done signal, and a finished one is not
+   *  respawned at all. ensureAgent keeps it across respawns. */
+  temp?: TempHiring;
+}
+
+/** What main needs to keep treating a temp as a temp across an app restart. */
+export interface TempHiring {
+  reqId: string;
+  /** Epoch ms of the hiring: only a done authored after it counts. */
+  spawnedAt: number;
+  baseBranch: string;
+  tokenCap?: number;
+  objective?: string;
+  slack?: { channel: string; thread_ts: string };
+  /** Who asked for it: the orchestrator (spawn-requests) or the human (Temps). */
+  hiredBy?: 'orchestrator' | 'human';
 }
 
 /** One entry of an agent's MCP config: a stdio server it runs itself, or a
@@ -1484,6 +1503,22 @@ export class HiveManager {
     } catch { /* best-effort — never crash a lifecycle handler */ }
   }
 
+  /** Record (or, with null, clear) that an agent is a temp. Best-effort. */
+  setTemp(id: string, temp: TempHiring | null): void {
+    const root = this.root();
+    if (!root) return;
+    try {
+      const reg = this.registry();
+      const agent = reg.agents[id];
+      if (!agent) return;
+      if (temp) agent.temp = temp;
+      else if (agent.temp) delete agent.temp;
+      else return;
+      this.atomicWriteJson(join(root, 'registry.json'), reg);
+      this.commit(`hive: ${temp ? 'temp' : 'untemp'} ${id}`);
+    } catch { /* best-effort */ }
+  }
+
   /**
    * Move every unread message in an agent's inbox to inbox/.done — the agent has
    * finished with the whole mailbox (an ephemeral worker that signaled done), so
@@ -2318,7 +2353,7 @@ export class HiveManager {
     // saying nothing, and COMMANDS.md documents it either way for the case where
     // the operator turns it on after god was already running.
     const spawnQueueLine = meta.isGod && this.orchestratorMaySpawn()
-      ? `SPAWNING A WORKER: you can start an ephemeral worker yourself by writing ONE JSON file into ${inRoot('spawn-requests')}/<id>.json. Required: \`objective\` (what the worker must do) and \`cwd\` (the repo it runs in). Optional: \`name\`, \`command\` (overrides the provider default; it must be an agent CLI — claude, codex, agy… — with no --settings/--mcp-config/--add-dir/-c/--config/--provider/--base-url flags, and \`cwd\` must be a registered repo, this office or an agent's folder, or the request is refused), \`provider\` (selects its default CLI when command is omitted), \`model\`, \`isolate\` (default true = its own git worktree), \`tokenCap\`, and \`slack\` ({channel, thread_ts}) to route its failures back to a thread. The harness polls that directory, spawns \`worker-<id>\`, and moves the request to \`spawn-requests/.done/\` on success or \`.failed/\` with a reason. This is the ONLY way you can spawn; a hire manifest under research/hires/ needs the human to confirm it in the UI, so it is not a route you can complete on your own. Reuse an existing agent first, as above — a worker is a fresh spend every time.`
+      ? `SPAWNING A WORKER: you can start an ephemeral worker yourself by writing ONE JSON file into ${inRoot('spawn-requests')}/<id>.json. Required: \`objective\` (what the worker must do) and \`cwd\` (the repo it runs in). Optional: \`name\`, \`command\` (overrides the provider default; it must be an agent CLI — claude, codex, agy… — with no --settings/--mcp-config/--add-dir/-c/--config/--provider/--base-url flags, and \`cwd\` must be a registered repo, this office or an agent's folder, or the request is refused), \`provider\` (selects its default CLI when command is omitted), \`model\`, \`isolate\` (default true = its own git worktree), \`tokenCap\`, and \`slack\` ({channel, thread_ts}) to route its failures back to a thread. The harness polls that directory, spawns \`worker-<id>\`, and moves the request to \`spawn-requests/.done/\` on success or \`.failed/\` with a reason. This is the ONLY way you can spawn; a hire manifest under research/hires/ needs the human to confirm it in the UI, so it is not a route you can complete on your own. Reuse an existing agent first, as above — a worker is a fresh spend every time. A worker is archived when it sends its done; to let go of one you started that is no longer needed, write ${inRoot('archive-requests')}/<any-name>.json with {"id":"worker-<id>"} (only your own temps; the outcome comes back to your inbox).`
       : '';
     const godLine = meta.isGod
       ? 'You are the GOD / ORCHESTRATOR of this hive — your job is to ORCHESTRATE, not to implement: maintain live situational awareness and delegate the work. (1) AWARENESS — always know what is going on: keep an accurate picture of every agent (active vs archived/idle), the task board, and all in-flight work; drain your inbox continually and triage every other agent\'s requests, answering clarifications so the team runs autonomously. (2) DELEGATE — decompose work and fan it out to the hive agents via their inboxes (route messages and assign owners; do not do their jobs); your own sub-agent tool is switched off — a helper started inside your session is invisible to the office, so "put an agent on it" always means an agent on the floor (an existing one, or a worker through spawn-requests); do NOT take on grunt implementation yourself. Stay aware of who is already on the floor and delegate OPPORTUNISTICALLY: BEFORE you spawn anything, CHECK THE LIVE ROSTER (active agents in registry.json + their state in fleet.json) and prefer routing to an EXISTING agent that fits — above all when the request names one ("ask Pam to…", "have Jim…"), route to that agent instead of reflexively creating a new one. Reuse an idle or already-running agent whose role matches; only spawn a fresh agent when no existing one is a sensible fit, and say that you checked. One capable owner beats a duplicate. (3) OWN ONLY THE IMPORTANT, high-leverage things — task decomposition, dispatch decisions, sign-offs, conflict resolution, branch integration, and final QA — and remain the sole scribe of board.md. You are otherwise fully autonomous — there is NO separate approval queue. For the genuinely critical (destructive actions, spending real money, scope changes, unresolvable conflicts), ask the human directly in your own session and let the tool-permission prompt gate the action; the human approves natively, including remotely from their phone via /remote-control. Keep the team unblocked. When you DISPATCH a task, write it as a 4-part contract so the agent can run autonomously: (1) OBJECTIVE — the concrete goal; (2) OUTPUT — the expected deliverable/format; (3) TOOLS — what to use or avoid, and any references to read instead of re-deriving; (4) BOUNDARIES — scope limits + the definition of done. Pass references (file paths, message ids, board sections), not pasted content — keep dispatches short.'
@@ -3596,6 +3631,10 @@ export class HiveManager {
       const shown = agents.slice(0, MAX);
       let anyCtx = false;
       let anyHold = false;
+      let anyTemp = false;
+      // Temps are marked from the registry (fleet.json does not carry it), so
+      // god can tell the help it hired from the permanent staff.
+      const reg = this.registry();
       const rows = shown.map((a) => {
         const bits = [a.role ?? 'agent',
           typeof a.lastActiveSecAgo === 'number' ? `active ${ago(a.lastActiveSecAgo)}` : 'no activity yet'];
@@ -3608,6 +3647,7 @@ export class HiveManager {
         // the same scan as `breaker` and `inbox`, and god already treats those
         // as routing signals.
         if (a.onHold) { bits.push('ON HOLD — 1:1 with the human'); anyHold = true; }
+        if (reg.agents[a.id]?.temp) { bits.push('temp'); anyTemp = true; }
         // Live context-window occupancy from the statusLine shim — lets god see
         // which agents are near-full when routing, instead of guessing from the
         // cumulative token count. Clamp to 0-100; a fresh meter can briefly
@@ -3636,6 +3676,10 @@ export class HiveManager {
             + 'them when picking an owner. Route to someone else, or say the work is waiting. They '
             + 'are still running and their terminal is alive, so this is not a reason to archive '
             + 'them or spawn a replacement. The human flips it off when they are done. '
+          : '')
+        + (anyTemp
+          ? 'A `temp` is a worker you started through spawn-requests: it is archived when it sends its done; '
+            + `archive one whose job is over with ${join(root, 'archive-requests')}/<id>.json (see spawn.md). `
           : '')
         + 'Route work to someone on this list before spawning anyone new.';
     } catch { return null; }
