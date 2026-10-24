@@ -130,6 +130,25 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
     }
   };
 
+  /** Install a copy of a skill folder on this computer. The result shows
+   *  under the controls, since there is no catalog row to attach it to. */
+  const [folderResult, setFolderResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const installFolder = async () => {
+    setFolderResult(null);
+    try {
+      const res = await window.cth.skillsInstallFolder();
+      if (res.ok) {
+        const name = res.path.split(/[\\/]/).pop() ?? res.path;
+        setFolderResult({ ok: true, text: `${t('skillsTab.installedFrom', { name })}${res.skipped ? ` ${t('skillsTab.linksSkipped', { count: res.skipped })}` : ''}` });
+        void loadLocal();
+      } else if (!res.cancelled) {
+        setFolderResult({ ok: false, text: res.error });
+      }
+    } catch (e) {
+      setFolderResult({ ok: false, text: e instanceof Error ? e.message : t('skillsTab.installFailed') });
+    }
+  };
+
   const uninstall = async (sk: LocalSkill) => {
     setConfirming(null);
     setAction((a) => ({ ...a, [sk.path]: { busy: true } }));
@@ -224,7 +243,19 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
           onClick={() => (mode === 'installed' ? void loadLocal() : void loadCatalog(true))}
           disabled={busy}
         >{busy ? t('skillsTab.loading') : t('skillsTab.refresh')}</PixelButton>
+        {mode === 'installed' && (
+          <PixelButton variant="ghost" size="sm" onClick={() => void installFolder()} title={t('skillsTab.installFolderTitle')}>
+            {t('skillsTab.installFolder')}
+          </PixelButton>
+        )}
       </div>
+      {folderResult && (
+        <div style={{
+          flexShrink: 0, padding: '6px 10px', fontSize: 12, color: 'var(--cth-ink-900)',
+          background: folderResult.ok ? 'var(--cth-mint-light)' : 'var(--cth-coral-light)',
+          boxShadow: `inset 0 0 0 1px ${folderResult.ok ? 'var(--cth-mint)' : 'var(--cth-coral)'}`
+        }}>{folderResult.text}</div>
+      )}
 
       {/* Body */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 10 }}>

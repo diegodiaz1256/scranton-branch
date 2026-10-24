@@ -985,6 +985,10 @@ const api = {
   skillsInstall: (url: string, name: string): Promise<
     { ok: true; path: string } | { ok: false; error: string; unsupported?: boolean }
   > => ipcRenderer.invoke('skills:install', url, name),
+  /** Pick a local folder holding SKILL.md and install a copy of it. */
+  skillsInstallFolder: (): Promise<
+    { ok: true; path: string; skipped?: number } | { ok: false; error: string; cancelled?: boolean }
+  > => ipcRenderer.invoke('skills:installFolder'),
   /** Delete an installed skill. Main refuses any path outside a skills root. */
   skillsUninstall: (path: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('skills:uninstall', path),
