@@ -46,6 +46,7 @@ import { connectionsPromptLine, envPromptLine, type PromptConnection } from '../
 import type { Access } from '../shared/connectionAccess';
 import { confidentialityPromptLine, criticalAllows, heldIds, isCustodian, VAULT_ROOT, type CriticalMap } from '../shared/criticalConnections';
 import { custodianWriteRoots, signoffPromptLine } from '../shared/criticalSignoff';
+import type { SessionContext } from '../shared/sessionResume';
 import { selectBroadcastTargets } from '../shared/broadcast';
 import { preferredAgentRole } from '../shared/agentRole';
 import { mergeTaskLedger, patchTaskInLedger } from '../shared/taskLedger';
@@ -215,6 +216,13 @@ export interface RegistryAgent extends AgentMeta {
    *  resume after a crash/restart) AND the cost accounting/dedup key on every
    *  AgentUsageSample / cost-ledger row. */
   sessionId?: string;
+  /** The working folder and custodian role `sessionId` ran under
+   *  (sessionResume.ts): a restart in another folder, or across a change of
+   *  custodian, starts fresh instead of resuming it. */
+  sessionCwd?: string;
+  sessionCustodian?: boolean;
+  /** Spawned as the custodian of a critical connection (its last spawn). */
+  custodian?: boolean;
   /** Whether `cwd` is actually usable for a (re)spawn — i.e. an ABSOLUTE path
    *  that exists as a directory. Computed + persisted at spawn so the roster
    *  reliably exposes each worker's environment validity. A non-absolute fragment
@@ -1240,6 +1248,7 @@ export class HiveManager {
       role,
       status: 'idle',
       cwdValid: cwd.valid,
+      custodian: !!opts.lockdown,
       // A (re)spawn always means a live terminal — clear any prior archived flag.
       archived: false,
       // Back on the floor, so no longer replaced by anyone.
@@ -1827,8 +1836,12 @@ export class HiveManager {
     try {
       const reg = this.registry();
       const agent = reg.agents[agentId];
-      if (!agent || agent.sessionId === sessionId) return; // unknown agent or unchanged → no write
+      const custodian = !!agent?.custodian;
+      // unknown agent, or the same session in the same folder and role → no write
+      if (!agent || (agent.sessionId === sessionId && agent.sessionCwd === agent.cwd && agent.sessionCustodian === custodian)) return;
       agent.sessionId = sessionId;
+      agent.sessionCwd = agent.cwd;
+      agent.sessionCustodian = custodian;
       agent.lastSeen = Date.now();
       this.atomicWriteJson(join(root, 'registry.json'), reg);
       this.appendLog({ kind: 'session', agentId, sessionId });
@@ -1840,6 +1853,15 @@ export class HiveManager {
    *  `claude --resume <id>` spawn so a restarted agent resumes its thread. */
   lastSession(agentId: string): string | undefined {
     return this.registry().agents[agentId]?.sessionId;
+  }
+
+  /** Where and as what the agent's recorded session ran. Read BEFORE
+   *  ensureAgent rewrites the entry: an entry from before sessionCwd was
+   *  recorded falls back to the folder and role of the agent's last spawn. */
+  sessionContext(agentId: string): SessionContext | undefined {
+    const a = this.registry().agents[agentId];
+    if (!a?.sessionId) return undefined;
+    return { cwd: a.sessionCwd ?? a.cwd, custodian: a.sessionCustodian ?? a.custodian };
   }
 
   /**
@@ -1988,7 +2010,9 @@ export class HiveManager {
    *  agents get it on their next tool call, no restart (the folders stay). */
   refreshGuards(cfg: { mcpDefaults?: { [id: string]: { enabled: boolean } }; agentMcpGrants?: Record<string, string[]>; agentRoam?: string[] }): void {
     for (const [id, g] of this.guardPolicies) {
-      this.guardPolicies.set(id, { ...g, git: gitAllowed(cfg.mcpDefaults, cfg.agentMcpGrants?.[id]), contained: !(cfg.agentRoam ?? []).includes(id) });
+      // A custodian (fenceHint) stays locked down: no git, never let out.
+      if (g.fenceHint) continue;
+      this.guardPolicies.set(id,{ ...g, git: gitAllowed(cfg.mcpDefaults, cfg.agentMcpGrants?.[id]), contained: !(cfg.agentRoam ?? []).includes(id) });
     }
   }
 
@@ -4949,7 +4973,10 @@ export function gitAllowed(cfg?: { [id: string]: { enabled: boolean } }, grant?:
 export function fenceLine(g: GuardPolicy | undefined): string {
   if (!g) return '';
   const parts: string[] = [];
-  if (g.contained) parts.push(`write only inside your folders (${g.cwd}, your hive folder, the hive, the temp dir): writes, moves and deletes elsewhere are refused; reading is fine`);
+  // A custodian (fenceHint) writes only in its own folder and its vault: the
+  // usual list (the hive, the temp dir) would contradict its SIGN-OFF rules.
+  if (g.contained && g.fenceHint) parts.push(`${g.fenceHint.replace(/\.\s*$/, '')}. Writes, moves and deletes anywhere else (projects, research/, the hive, other agents' folders, the temp dir) are refused; reading is fine`);
+  else if (g.contained) parts.push(`write only inside your folders (${g.cwd}, your hive folder, the hive, the temp dir): writes, moves and deletes elsewhere are refused; reading is fine`);
   if (!g.git) parts.push('git is switched off for you: do not run git; ask the orchestrator if something needs it');
   return parts.length ? `LIMITS: ${parts.join('. ')}.` : '';
 }
