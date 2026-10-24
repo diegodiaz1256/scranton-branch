@@ -924,11 +924,25 @@ export class HiveManager {
     // can include tokens, paths and prompt fragments, and the hive repo is
     // committed on every change — a secret written there would be permanent.
     // log.jsonl gets the structured, non-sensitive fields; the dump stays local.
-    const want = ['fleet.json', 'hooks.sock', 'cost-ledger.jsonl', 'crashes/', '.DS_Store'];
+    const want = ['fleet.json', 'hooks.sock', 'cost-ledger.jsonl', 'crashes/', '.DS_Store', '.mcp.json'];
     let lines: string[] = [];
     if (existsSync(gitignore)) { try { lines = readFileSync(gitignore, 'utf8').split('\n'); } catch { lines = []; } }
     const missing = want.filter((w) => !lines.includes(w));
     if (missing.length) writeFileSync(gitignore, [...lines.filter(Boolean), ...missing].join('\n') + '\n', 'utf8');
+
+    // A real, empty .mcp.json in the hive root. Claude Code's sandbox protects
+    // that file in every folder a sandboxed command may write: when it is
+    // missing, each sandboxed Bash call creates an empty placeholder there and
+    // removes it afterwards. Every agent may write the hive root, so one
+    // agent's cleanup deleted the file another agent's bubblewrap was about to
+    // mount ("bwrap: Can't get type of source …/hive/.mcp.json"). With the file
+    // in place the sandbox mounts it read-only and never creates or removes it.
+    // It declares no servers; agents get theirs through --mcp-config.
+    const mcpJson = join(root, '.mcp.json');
+    // An empty one is a placeholder a sandbox left behind: fill it in.
+    let mcpSize = -1;
+    try { mcpSize = statSync(mcpJson).size; } catch { /* missing */ }
+    if (mcpSize <= 0) { try { writeFileSync(mcpJson, '{ "mcpServers": {} }\n', 'utf8'); } catch { /* next bootstrap */ } }
 
     // The hook shim: a dumb pipe between a `claude` hook and our UDS. Refreshed
     // on every bootstrap so it tracks code changes.
