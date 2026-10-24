@@ -488,6 +488,8 @@ export interface HarnessConfig {
   triggersMigratedV1?: boolean;
   /** One-time guard for `migrateMcpTrimV1` (redundant MCP servers off). */
   mcpTrimmedV1?: boolean;
+  /** One-time guard for `migrateDefaultModelV1` (old Fable 5 default → Sonnet 5.5). */
+  defaultModelMigratedV1?: boolean;
 
   // ─── Memory reflection (the janitor's condense half) ───────────────────────
   /** Master toggle for the in-process MemoryReflector. Default on. */
@@ -506,6 +508,9 @@ export interface HarnessConfig {
   reflectMinBytes?: number;
 }
 
+/** The default model before Sonnet 5.5 (see migrateDefaultModelV1). */
+const OLD_DEFAULT_MODEL = 'claude-fable-5';
+
 const DEFAULTS: HarnessConfig = {
   onboardingComplete: false,
   harnessHome: null,
@@ -518,8 +523,8 @@ const DEFAULTS: HarnessConfig = {
   godModel: 'claude-opus-5-5',
   // Global default model for every agent that hasn't picked one explicitly — wins
   // over the role-based tiers (modelForRole) in the spawn handler, so all agents
-  // (incl. god) default to Fable 5. A per-agent model choice still overrides it.
-  defaultModel: 'claude-fable-5',
+  // (incl. god) default to Sonnet 5.5. A per-agent model choice still overrides it.
+  defaultModel: 'claude-sonnet-5-5',
   // Seeded from the MCP catalog so the consent defaults never drift from it
   // (safe-readonly ON, write/secret OFF).
   mcpDefaults: defaultMcpDefaults(),
@@ -618,6 +623,26 @@ function migrateMcpTrimV1(cfg: HarnessConfig): HarnessConfig {
   try {
     const next: HarnessConfig = { ...cfg, mcpTrimmedV1: true, mcpDefaults: trimRedundantMcp(cfg.mcpDefaults) };
     persistConfig(next);
+    return next;
+  } catch { return cfg; }
+}
+
+let defaultModelRan = false;
+
+/** The default model moved from Fable 5 to Sonnet 5.5. A config saved before
+ *  holds the old default as if it were a choice, so switch it once, and only
+ *  when it still reads exactly the old default: any other model was picked by
+ *  the human and stays. Choosing Fable again afterwards is respected. */
+export function migrateDefaultModelV1(cfg: HarnessConfig, persist: (c: HarnessConfig) => void = persistConfig): HarnessConfig {
+  if (cfg.defaultModelMigratedV1 || defaultModelRan) return cfg;
+  defaultModelRan = true;
+  try {
+    const next: HarnessConfig = {
+      ...cfg,
+      defaultModelMigratedV1: true,
+      ...(cfg.defaultModel === OLD_DEFAULT_MODEL ? { defaultModel: DEFAULTS.defaultModel } : {})
+    };
+    persist(next);
     return next;
   } catch { return cfg; }
 }
@@ -790,7 +815,7 @@ function readConfigUncached(): HarnessConfig {
       try { writeConfigFiles(p, mergeSecrets(parsed, readSecretsFile(), codec)); } catch { /* retried next launch */ }
     }
     const withSecrets = mergeSecrets(parsed, readSecretsFile(), codec);
-    return normalizeStoredHomes(migrateMcpTrimV1(migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...withSecrets }))));
+    return normalizeStoredHomes(migrateDefaultModelV1(migrateMcpTrimV1(migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...withSecrets })))));
   } catch {
     return withTriggerDefaults({ ...DEFAULTS });
   }

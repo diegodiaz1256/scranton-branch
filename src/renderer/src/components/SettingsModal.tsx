@@ -320,7 +320,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     setOrchSpawnOn(next);
     stage({ orchestratorMaySpawn: next } as Partial<HarnessConfig>);
   };
-  const [defaultModelSel, setDefaultModelSel] = useState<string>(cfgX.defaultModel ?? 'claude-fable-5');
+  const [defaultModelSel, setDefaultModelSel] = useState<string>(cfgX.defaultModel ?? 'claude-sonnet-5-5');
   const saveDefaultModel = (id: string): void => {
     setDefaultModelSel(id);
     stage({ defaultModel: id } as Partial<HarnessConfig>);
