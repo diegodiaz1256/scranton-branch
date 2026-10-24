@@ -58,7 +58,8 @@ Every file has a single writer, and only the harness runs git.`
 }
 \`\`\`
 
-The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps.
+The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps. An \`id\` or \`from\` you write is replaced
+(your \`id\` travels as \`agent_id_hint\`, and an \`in_reply_to\` naming it still threads).
 
 - Only \`request\`, \`query\` and \`propose\` expect a reply. \`inform\` and \`done\` are terminal — don't
   reply to them, or two agents loop forever.
