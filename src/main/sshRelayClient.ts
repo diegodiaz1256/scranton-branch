@@ -23,7 +23,7 @@ const spec = Buffer.from(JSON.stringify({ argv, gitProtocol: process.env.GIT_PRO
 const sock = proxy ? net.connect(+(proxy.port || 80), proxy.hostname) : net.connect(+u.port, u.hostname);
 let phase = proxy ? 'connect' : 'upgrade';
 let buf = Buffer.alloc(0);
-let status = 0, body = '', framed = false;
+let status = 0, body = '', framed = false, exiting = false;
 const frame = (type, data) => { const h = Buffer.alloc(5); h[0] = type; h.writeUInt32BE(data ? data.length : 0, 1); return data ? Buffer.concat([h, data]) : h; };
 const sendUpgrade = () => sock.write('GET /ssh HTTP/1.1\\r\\nHost: ' + u.host + '\\r\\nAuthorization: Bearer ' + token + '\\r\\nConnection: Upgrade\\r\\nUpgrade: md-ssh\\r\\nX-MD-SSH: ' + spec + '\\r\\n\\r\\n');
 sock.on('connect', () => {
@@ -43,7 +43,7 @@ const onFrames = (d) => {
     pending = pending.subarray(5 + len);
     if (type === 1) { if (!process.stdout.write(data)) { sock.pause(); process.stdout.once('drain', () => sock.resume()); } }
     else if (type === 2) process.stderr.write(data);
-    else if (type === 3) { const code = data.readInt32BE(0); process.stdout.write('', () => process.exit(code)); return; }
+    else if (type === 3) { exiting = true; const code = data.readInt32BE(0); process.stdout.write('', () => process.exit(code)); return; }
   }
 };
 sock.on('data', (d) => {
@@ -73,6 +73,8 @@ sock.on('data', (d) => {
   body = rest.toString('utf8');
 });
 sock.on('close', () => {
+  // ssh already finished: its exit code is out, only stdout is still flushing.
+  if (exiting) return;
   if (framed) die('the connection to the app closed before ssh finished');
   let msg = body;
   try { msg = JSON.parse(body).error || body; } catch { /* plain text */ }

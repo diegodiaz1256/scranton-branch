@@ -102,7 +102,8 @@ test('spawn: another agent\'s sandbox hides the vault (denyRead) and its file to
   const root = path.join(home, 'confidential');
   const inj = await hive.ensureAgent({ id: 'jim-1', name: 'Jim', provider: 'claude', cwd: home }, { denyDirs: [root] });
   const s = settingsOf(inj);
-  assert.deepEqual(s.sandbox.filesystem.denyRead, [root]);
+  // The vault, besides the key folders every sandboxed agent is denied (sshRelay).
+  assert.ok(s.sandbox.filesystem.denyRead.includes(root));
   assert.ok(s.permissions.deny.includes(`Read(/${root.replace(/\\/g, '/')}/**)`));
   assert.ok(!s.sandbox.filesystem.allowWrite.some((d) => d.startsWith(root)));
 });
@@ -114,7 +115,8 @@ test('spawn: the custodian may write its vault and is told about it', async (t) 
   const inj = await hive.ensureAgent({ id: 'pam-1', name: 'Pam', provider: 'claude', cwd: home }, { critical: ['Jira'], vaults: [vault], extraWritableDirs: [vault] });
   const s = settingsOf(inj);
   assert.ok(s.sandbox.filesystem.allowWrite.includes(vault));
-  assert.equal(s.sandbox.filesystem.denyRead, undefined);
+  // Its own vault is not hidden from it (only the key folders every agent is denied).
+  assert.ok(!(s.sandbox.filesystem.denyRead ?? []).some((d) => d.startsWith(path.join(home, 'confidential'))));
   const prompt = inj.args[inj.args.indexOf('--append-system-prompt') + 1];
   assert.match(prompt, /CONFIDENTIAL VAULT: /);
   assert.ok(prompt.includes(vault));
