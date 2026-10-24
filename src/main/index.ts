@@ -4078,6 +4078,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           critical: criticalLabelsFor(opts.hive.id, provider),
           vaults: spawnVaults.own,
           denyDirs: spawnVaults.deny,
+          denyOwners: spawnVaults.denyOwners,
           lockdown: spawnVaults.custodian ? { outgoing: join(hive.agentFolder(opts.hive.id), 'outgoing') } : undefined,
           mcpScopes: readConfig().connectionScopes,
           mcpOnlyManaged: readConfig().mcpOnlyManaged !== false,
@@ -4440,6 +4441,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         const tmp = await wslAgentTmpDir(wslLoc.distro);
         if (tmp) opts.env = { ...(opts.env ?? {}), CLAUDE_CODE_TMPDIR: tmp };
       }
+      // Its temp folder (and Claude's scratchpad in it) is one of its folders.
+      if (opts.hive && opts.env?.CLAUDE_CODE_TMPDIR) hive.noteAgentTmp(opts.hive.id, opts.env.CLAUDE_CODE_TMPDIR);
     } catch (e) {
       console.error('[wsl-bridge] start failed:', e);
       return { ok: false, error: `Could not start the agent in WSL (${wslLoc.distro}): ${e instanceof Error ? e.message : describeWslError(e, wslLoc.distro)}` };
@@ -5464,15 +5467,22 @@ async function ensureVault(dir: string): Promise<void> {
 
 /** What an agent gets at spawn: the vaults it may write (its own, created
  *  now) and the folders it may not read. */
-async function prepareVaults(agentId: string, provider: string | undefined): Promise<{ own: string[]; deny: string[]; custodian: boolean }> {
+async function prepareVaults(agentId: string, provider: string | undefined): Promise<{ own: string[]; deny: string[]; denyOwners: Record<string, string[]>; custodian: boolean }> {
   const root = vaultRoot();
   const map = criticalMap();
   const custodian = canBeCustodian(provider, { osSandbox: appSandbox = await hive.sandboxAvailable() }) && isCustodian(map, agentId);
   // Every other custodian's own folder (its memory, notes, held mail) and its
   // Claude Code transcripts are as confidential as its vault.
   const others = hive.enabled() ? [...new Set(Object.values(map))].filter((id) => id && id !== agentId) : [];
-  const theirs = others.flatMap((id) => { const d = hive.agentFolder(id); return [d, projectDir(d)]; });
-  if (!root) return { own: [], deny: theirs, custodian };
+  // Who a refused agent may ask about each folder (toolGuard.ts); none: not for agents.
+  const denyOwners: Record<string, string[]> = {};
+  // Its name and the id its mail goes to ("Dwight (worker-dwight)").
+  const who = (id: string): string => {
+    const name = hive.enabled() ? hive.registry().agents?.[id]?.name : undefined;
+    return name && name !== id ? `${name} (${id})` : id;
+  };
+  const theirs = others.flatMap((id) => { const d = hive.agentFolder(id); denyOwners[d] = [who(id)]; denyOwners[projectDir(d)] = [who(id)]; return [d, projectDir(d)]; });
+  if (!root) return { own: [], deny: theirs, denyOwners, custodian };
   // A real folder before anyone is denied it: see vaultRoot.ts.
   try { if (!ensureVaultRoot(root)) console.error('[critical] vault root is not a folder:', root); } catch (e) { console.error('[critical] vault root', e); }
   const access = vaultAccess(map, custodian ? agentId : undefined);
@@ -5486,7 +5496,13 @@ async function prepareVaults(agentId: string, provider: string | undefined): Pro
   }
   // A custodian never reads the Slack reply key (an agent posting to Slack is a way out).
   const slackKey = custodian ? [slackReplyConfigPath()] : [];
-  return { own, deny: [...(access.denyAll ? [root] : access.denyOthers.map((n) => join(root, n))), ...theirs, ...slackKey], custodian };
+  const holders = (name?: string) => [...new Set(Object.entries(map)
+    .filter(([k, v]) => v && v !== agentId && (name === undefined || vaultName(k.slice(0, 3) as CriticalKind, k.slice(4)) === name))
+    .map(([, v]) => who(v)))];
+  const vaults = access.denyAll ? [root] : access.denyOthers.map((n) => join(root, n));
+  if (access.denyAll) denyOwners[root] = holders();
+  else for (const n of access.denyOthers) denyOwners[join(root, n)] = holders(n);
+  return { own, deny: [...vaults, ...theirs, ...slackKey], denyOwners, custodian };
 }
 
 /** Hosts of the critical connections an agent holds: links to them are redacted. */
