@@ -58,6 +58,10 @@ export interface McpCatalogEntry {
     /** Required env (e.g. an API token). Present only on write/secret entries; the
      *  value is supplied via consent, never hard-coded here. */
     env?: Record<string, string>;
+    /** uvx servers only: version overrides for the server's own dependencies
+     *  (requirement lines, handed to uv through UV_OVERRIDE). For a release whose
+     *  pins no longer install. */
+    uvOverrides?: string[];
   };
   tier: McpTier;
   /** Seed for `config.mcpDefaults[id].enabled`. Always === (tier === 'safe-readonly'). */
@@ -166,7 +170,12 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     spec: {
       command: 'uvx',
       args: ['postgres-mcp', '--access-mode=restricted'],
-      env: { DATABASE_URI: '' }
+      env: { DATABASE_URI: '' },
+      // Its latest release (0.3.0) pins pglast==7.2.0, which PyPI no longer has,
+      // so uv falls back to 0.1.0, which crashes on start under mcp 2.x
+      // ('Server' object has no attribute 'list_resources'). Let 0.3.0 install
+      // with a pglast that exists and the mcp major it was written for.
+      uvOverrides: ['pglast>=7.20,<8', 'mcp<2']
     },
     tier: 'secret',
     defaultEnabled: false,

@@ -544,7 +544,7 @@ const mcpGateway = new McpGateway({
     if (!entry || !keys) return null;
     // npx/uvx need the user's PATH; a Finder-launched app has launchd's bare one.
     const path = process.platform === 'win32' ? (process.env.PATH ?? '') : userShellPath();
-    return { command: entry.spec.command, args: entry.spec.args, env: { ...keys, PATH: path } };
+    return { command: entry.spec.command, args: entry.spec.args, env: { ...keys, PATH: path }, uvOverrides: entry.spec.uvOverrides };
   }
 });
 
