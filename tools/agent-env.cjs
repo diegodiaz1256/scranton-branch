@@ -26,7 +26,8 @@
  *
  * USAGE (run from anywhere; $HIVE_ROOT or --hive locates the hive):
  *   node tools/agent-env.cjs                 # table of live (non-archived) agents
- *   node tools/agent-env.cjs --all           # include archived agents
+ *   node tools/agent-env.cjs --all           # include archived agents (not old copies
+ *                                            # of a live namesake: add --superseded)
  *   node tools/agent-env.cjs <agent-id>      # one agent, pretty JSON
  *   node tools/agent-env.cjs --json [--all]  # JSON array to stdout
  *   node tools/agent-env.cjs --snapshot      # also write <hive>/shared/agent-env.json
@@ -81,6 +82,7 @@ function buildRecords(hiveRoot) {
       role: a.role ?? null,
       isGod: !!a.isGod,
       archived: !!a.archived,
+      supersededBy: a.supersededBy ?? null, // archived copy of this live agent (same name)
       // --- environment ---
       cwd,
       cwdValid: valid,
@@ -127,6 +129,7 @@ function main() {
 
   let records = buildRecords(hiveRoot);
   if (!includeArchived && !id) records = records.filter(r => !r.archived);
+  if (!flags.has('--superseded') && !id) records = records.filter(r => !r.supersededBy);
 
   if (flags.has('--snapshot')) {
     const snap = { generatedBy: 'tools/agent-env.cjs', ts: Date.now(), agents: records };

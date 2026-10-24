@@ -61,6 +61,7 @@ import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } f
 import { MD_BROWSE } from './browseCli';
 import { BROKER_CLIENT_JS } from './brokerClient';
 import { MD_LISTS_MCP } from './listsMcp';
+import { liveNamesakes, similarLive, supersededArchived } from './namesakes';
 
 /** The subset of HarnessConfig the hive consumes for the default-MCP merge.
  *  Kept as a local shape so hive.ts never imports the foundation-owned config
@@ -208,6 +209,11 @@ export interface RegistryAgent extends AgentMeta {
    *  (e.g. "ClaudeTerminalHarness") spawns into a nonexistent dir and fails; this
    *  flag makes that visible instead of letting it slip through silently. */
   cwdValid?: boolean;
+  /** Set on an ARCHIVED agent once a single live agent with the same name has
+   *  replaced it (a re-hire under a new id): the id to use instead. The entry
+   *  and its folder are kept as history; readers of the roster skip it. Cleared
+   *  when this agent itself is respawned. */
+  supersededBy?: string;
   /** Set while the agent is a temp the orchestrator started through
    *  spawn-requests. Persisted (not just main's in-memory worker map) so a temp
    *  brought back by Restore team after an app restart is still a temp: it is
@@ -1185,9 +1191,14 @@ export class HiveManager {
       cwdValid: cwd.valid,
       // A (re)spawn always means a live terminal — clear any prior archived flag.
       archived: false,
+      // Back on the floor, so no longer replaced by anyone.
+      supersededBy: undefined,
       lastSeen: Date.now()
     };
     if (meta.isGod) reg.godId = meta.id;
+    // A respawn can make this agent the one live successor of archived
+    // namesakes: flag them in the same write.
+    this.flagSuperseded(reg);
     this.atomicWriteJson(join(root, 'registry.json'), reg);
 
     this.appendLog({ kind: 'spawn', agentId: meta.id, name: meta.name, isGod: !!meta.isGod });
@@ -1481,6 +1492,35 @@ export class HiveManager {
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
+  }
+
+  /** Flag (in place) archived agents that one live namesake has replaced
+   *  (namesakes.ts). Only adds or re-points flags: a successor that is merely
+   *  not running right now (the app booting, a team mid-restore) does not
+   *  un-supersede anyone. Returns what changed. */
+  private flagSuperseded(reg: Registry): Record<string, string> {
+    const changed: Record<string, string> = {};
+    for (const [id, heir] of Object.entries(supersededArchived(reg.agents))) {
+      const a = reg.agents[id];
+      if (a && a.supersededBy !== heir) { a.supersededBy = heir; changed[id] = heir; }
+    }
+    return changed;
+  }
+
+  /** flagSuperseded on the registry on disk, written only when something
+   *  changed. Folders and history are never touched. */
+  markSuperseded(): Record<string, string> {
+    const root = this.root();
+    if (!root) return {};
+    try {
+      const reg = this.registry();
+      const changed = this.flagSuperseded(reg);
+      if (Object.keys(changed).length) {
+        this.atomicWriteJson(join(root, 'registry.json'), reg);
+        this.commit('hive: flag archived agents replaced by a live namesake');
+      }
+      return changed;
+    } catch { return {}; }
   }
 
   /**
@@ -2571,7 +2611,8 @@ export class HiveManager {
     // Targets that actually took delivery. The log below reports these instead of
     // intent, so a bounced or dropped message can never read as delivered.
     const delivered: string[] = [];
-    for (const t of targets) {
+    for (const target of targets) {
+      let t = target;
       // The send-only prep assistant must never be a delivery target: it doesn't
       // drain an inbox, so direct mail to it would rot unread (observed live: a
       // task brief plus the follow-up reprimand about the unread inbox, both
@@ -2587,32 +2628,64 @@ export class HiveManager {
       // (a released worker's inbox is settled only up to its done signal). But
       // the sender learned nothing, so god kept mailing dead agents for hours
       // (seen live 2026-08-16), and a request to a worker nobody re-hires was
-      // simply lost. Now mail that expects an answer is filed AND its sender is
-      // told, at once, that no one is there to answer it. Inform-only mail
-      // (status, done, agree) is filed quietly. This comes BEFORE the provider
-      // branches below on purpose: with no terminal there is nothing to hand a
-      // work order to, whatever the engine — the inbox is the only place left.
-      // The notice itself is ROUTED, not dropped into an inbox, so a sender on
-      // a hookless or proxy-tier engine gets it the way it gets any mail.
+      // simply lost. This comes BEFORE the provider branches below on purpose:
+      // with no terminal there is nothing to hand a work order to, whatever the
+      // engine — the inbox is the only place left. The notice itself is ROUTED,
+      // not dropped into an inbox, so a sender on a hookless or proxy-tier
+      // engine gets it the way it gets any mail.
+      //
+      // A re-hire usually gets a NEW id under the same name, so an office piles
+      // up archived namesakes (seen live: ~20 archived "Jim - Jira Manager" next
+      // to the live one) and an agent that remembered an old id kept mailing a
+      // dead inbox; an inform or a done vanished without a word. So: exactly one
+      // live agent with that name → the mail goes to it (normal delivery below)
+      // and the sender is told the live id. Otherwise it is filed as before and
+      // the sender is told for EVERY act, with the live agents of a similar name.
       if (t !== godId && reg.agents[t]?.archived) {
-        if (this.deliver(msg, t)) delivered.push(t);
-        this.appendLog({ kind: 'archived-recipient', from: msg.from, to: t, id: msg.id, act: msg.act });
         const sender = reg.agents[msg.from];
-        if (msg.requires_reply && sender && !sender.archived) {
-          this.routeMessage(this.normalize({
-            to: msg.from,
-            act: 'inform',
-            in_reply_to: msg.id,
-            conversation: msg.conversation,
-            hops: msg.hops + 1,
-            requires_reply: false,
-            subject: `[no one is there to answer — "${t}" is archived] ${msg.subject}`,
-            body: `Your ${msg.act} to ${t} was filed in its inbox, but ${t} has no live terminal (archived), `
-              + `so it will only be read if ${t} is restored or re-hired under the same id. `
-              + 'If you need this done now, route it to an agent on the live roster or hire one.'
-          }, 'system'));
+        const tell = !!sender && !sender.archived;
+        const live = liveNamesakes(reg.agents, t);
+        const heir = live.length === 1 && live[0] !== msg.from ? live[0] : undefined;
+        if (heir) {
+          this.appendLog({ kind: 'archived-recipient', from: msg.from, to: t, id: msg.id, act: msg.act, reroutedTo: heir });
+          if (tell) {
+            this.routeMessage(this.normalize({
+              to: msg.from,
+              act: 'inform',
+              in_reply_to: msg.id,
+              conversation: msg.conversation,
+              hops: msg.hops + 1,
+              requires_reply: false,
+              subject: `["${t}" is archived — delivered to "${heir}"] ${msg.subject}`,
+              body: `${t} has no live terminal (archived). Your ${msg.act} was delivered to ${heir} `
+                + `"${reg.agents[heir]?.name ?? heir}", the live agent with that name: use ${heir} from now on.`
+            }, 'system'));
+          }
+          t = heir;
+        } else {
+          if (this.deliver(msg, t)) delivered.push(t);
+          this.appendLog({ kind: 'archived-recipient', from: msg.from, to: t, id: msg.id, act: msg.act });
+          if (tell) {
+            const similar = similarLive(reg.agents, t).filter((k) => k !== msg.from);
+            const who = similar.length
+              ? `Live agents with a similar name: ${similar.map((k) => `${k} "${reg.agents[k]?.name ?? k}"`).join(', ')}. `
+              : 'No live agent has a similar name. ';
+            this.routeMessage(this.normalize({
+              to: msg.from,
+              act: 'inform',
+              in_reply_to: msg.id,
+              conversation: msg.conversation,
+              hops: msg.hops + 1,
+              requires_reply: false,
+              subject: `[no one is there to answer — "${t}" is archived] ${msg.subject}`,
+              body: `Your ${msg.act} to ${t} was filed in its inbox, but ${t} has no live terminal (archived), `
+                + `so it will only be read if ${t} is restored or re-hired under the same id. `
+                + who
+                + 'If this matters, send it to an agent on the live roster or hire one.'
+            }, 'system'));
+          }
+          continue;
         }
-        continue;
       }
       // A provider without safe-idle lifecycle state (a hookless custom command)
       // would let direct mail rot unread. Claude and bridged Antigravity/Codex
