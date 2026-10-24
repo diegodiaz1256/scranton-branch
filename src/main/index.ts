@@ -3947,7 +3947,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           // Its folders (toolGuard.ts): the orchestrator also writes in the
           // office's repos (it integrates branches); the human may let anyone out.
           writableRoots: opts.hive.isGod ? (readConfig().registeredRepos ?? []) : [],
-          roam: (readConfig().agentRoam ?? []).includes(opts.hive.id)
+          roam: (readConfig().agentRoam ?? []).includes(opts.hive.id),
+          // Its sandboxed shell may reach this broker port (md-api, md-run…).
+          brokerUrl: opts.env?.MD_BROKER_URL
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];

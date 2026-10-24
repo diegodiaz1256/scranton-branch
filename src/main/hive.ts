@@ -58,6 +58,7 @@ import type { GuardPolicy } from '../shared/toolGuard';
 import { MD_SKILLS } from './skillsCli';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
 import { MD_BROWSE } from './browseCli';
+import { BROKER_CLIENT_JS } from './brokerClient';
 import { MD_LISTS_MCP } from './listsMcp';
 
 /** The subset of HarnessConfig the hive consumes for the default-MCP merge.
@@ -1083,6 +1084,9 @@ export class HiveManager {
       writableRoots?: string[];
       /** The human let this agent write outside its folders (Capabilities). */
       roam?: boolean;
+      /** The key broker this agent was handed (MD_BROKER_URL): its sandbox may
+       *  reach that one loopback port (hookSettings). */
+      brokerUrl?: string;
     } = {}
   ): Promise<SpawnInjection> {
     const root = this.root();
@@ -1408,7 +1412,7 @@ export class HiveManager {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
       const requireSandbox = await this.sandboxAvailable();
-      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox)));
+      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox, opts.brokerUrl)));
       args.push('--settings', settingsPath);
     }
     return { args, env };
@@ -1761,7 +1765,14 @@ export class HiveManager {
     return p;
   }
 
-  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false): unknown {
+  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string): unknown {
+    // The sandbox gives Bash its own network: the app's loopback broker is
+    // reachable only through the sandbox proxy, and only where allowed. The
+    // hive's commands (md-api, md-run, md-browse) go through that proxy
+    // (brokerClient.ts); this opens exactly the broker's host:port, not
+    // localhost at large. Without it a bypass-mode agent still gets through
+    // (unlisted hosts are allowed there) but any other mode is refused.
+    const broker = (() => { try { return brokerUrl ? new URL(brokerUrl).host : ''; } catch { return ''; } })();
     // Bundled node, NOT bare `node` — see nodeLauncherPath(). Claude runs each of
     // these through `sh -c` with a stripped PATH, where `node` is often absent.
     const cmd = this.claudeHookCommand(shim);
@@ -1803,7 +1814,12 @@ export class HiveManager {
             // Where the sandbox CAN run (bubblewrap found on Linux / in a WSL
             // floor's distro), it must: if it ever fails to start, the agent's
             // shell refuses to run rather than running unconfined.
-            sandbox: { enabled: true, ...(requireSandbox ? { failIfUnavailable: true } : {}), filesystem: { allowWrite: writableDirs } },
+            sandbox: {
+              enabled: true,
+              ...(requireSandbox ? { failIfUnavailable: true } : {}),
+              filesystem: { allowWrite: writableDirs },
+              ...(broker ? { network: { allowedDomains: [broker] } } : {})
+            },
             permissions: { additionalDirectories: writableDirs }
           }
         : {}),
@@ -4137,11 +4153,13 @@ if (!base || !token) {
   console.error('md-api: this agent was started without the app key broker (the app was still starting, or it is an old session). Ask the human to restart this agent.');
   process.exit(2);
 }
+${BROKER_CLIENT_JS}
 const headers = { Authorization: 'Bearer ' + token, Accept: 'application/json' };
 // No arguments: the APIs this agent may use right now, and how.
 if (!id) {
-  fetch(base.replace(/\\/+$/, '') + '/i', { headers })
+  brokerRequest(base.replace(/\\/+$/, '') + '/i', { headers })
     .then(async (res) => {
+      if (!res.ok) { console.error('md-api: the app answered HTTP ' + res.status + ' at ' + base + ' ' + (await res.text()).slice(0, 200)); process.exit(1); }
       const j = await res.json().catch(() => ({}));
       const apis = (j && j.apis) || [];
       if (!apis.length) console.log('No REST APIs are available to you right now (the human connects them in Connections; they work at once).');
@@ -4149,7 +4167,7 @@ if (!id) {
       console.log('usage: md-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [json-body]');
       process.exit(0);
     })
-    .catch((e) => { console.error('md-api: ' + (e && e.message || e)); process.exit(1); });
+    .catch((e) => { console.error(brokerError('md-api', e, base)); process.exit(1); });
 } else {
   if (!methodArg) {
     console.error('usage: md-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [json-body]   (md-api alone lists your APIs)');
@@ -4159,14 +4177,14 @@ if (!id) {
   const path = (pathArg || '/').replace(/^\\/*/, '');
   const url = base.replace(/\\/+$/, '') + '/i/' + encodeURIComponent(id) + '/' + path;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  fetch(url, { method, headers, body })
+  brokerRequest(url, { method, headers, body })
     .then(async (res) => {
       console.log('HTTP ' + res.status);
       const text = await res.text();
       if (text) console.log(text);
       process.exit(res.ok ? 0 : 1);
     })
-    .catch((e) => { console.error('md-api: ' + (e && e.message || e)); process.exit(1); });
+    .catch((e) => { console.error(brokerError('md-api', e, base)); process.exit(1); });
 }
 `;
 
@@ -4181,9 +4199,10 @@ const MD_RUN_CLI = `#!/usr/bin/env node
 const argv = process.argv.slice(2);
 const base = process.env.MD_BROKER_URL, token = process.env.MD_BROKER_TOKEN;
 if (!base || !token) { console.error('md-run: no runners are available to this agent.'); process.exit(2); }
+${BROKER_CLIENT_JS}
 const headers = { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' };
 const root = base.replace(/\\/+$/, '') + '/run';
-const fail = (e) => { console.error('md-run: ' + (e && e.message || e)); process.exit(1); };
+const fail = (e) => { console.error(brokerError('md-run', e, base)); process.exit(1); };
 if (argv[0] === '--propose') {
   const sep = argv.indexOf('--');
   const opts = sep === -1 ? argv.slice(1) : argv.slice(1, sep);
@@ -4196,7 +4215,7 @@ if (argv[0] === '--propose') {
   }
   const secrets = val('--secrets').split(',').map((x) => x.trim()).filter(Boolean);
   console.log('Waiting for the human to approve runner "' + name + '"…');
-  fetch(root, { method: 'POST', headers, body: JSON.stringify({ name, command, secrets, description: val('--why') }) })
+  brokerRequest(root, { method: 'POST', headers, body: JSON.stringify({ name, command, secrets, description: val('--why') }) })
     .then(async (res) => {
       const body = await res.json().catch(() => ({}));
       if (!body.ok) { console.error('md-run: ' + (body.error || ('HTTP ' + res.status))); process.exit(1); }
@@ -4205,7 +4224,7 @@ if (argv[0] === '--propose') {
     .catch(fail);
 } else {
   const id = argv[0];
-  fetch(root + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'POST' : 'GET', headers })
+  brokerRequest(root + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'POST' : 'GET', headers })
     .then(async (res) => {
       const body = await res.json().catch(() => ({}));
       if (!id) {

@@ -7,19 +7,23 @@
  * browse_page and web_search, for Claude Code. Both talk to the integration
  * broker (MD_BROKER_URL / MD_BROKER_TOKEN, already in every agent's env), so
  * WSL floors reach the app's Chromium too. Plain Node, no dependencies.
+ * Requests go through brokerClient.ts so the command also works inside
+ * Claude Code's sandbox.
  */
+import { BROKER_CLIENT_JS } from './brokerClient';
+
 export const MD_BROWSE = String.raw`#!/usr/bin/env node
 'use strict';
 // md-browse — written by Scranton Branch; do not edit (it is rewritten).
 const base = process.env.MD_BROKER_URL, token = process.env.MD_BROKER_TOKEN;
-
+${BROKER_CLIENT_JS}
 async function ask(route, body) {
   if (!base || !token) throw new Error('the office browser is not available to this agent');
-  const res = await fetch(base.replace(/\/+$/, '') + '/' + route, {
+  const res = await brokerRequest(base.replace(/\/+$/, '') + '/' + route, {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
-  });
+  }).catch((e) => { throw new Error(brokerError('', e, base)); });
   const text = await res.text();
   if (!res.ok) { let msg = text; try { msg = JSON.parse(text).error || text; } catch {} throw new Error(msg); }
   return text;
