@@ -1,6 +1,7 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { agentModels, type HarnessConfig } from '@/store/config';
+import { normalizeThresholds } from '@shared/usageWindowAlerts';
 import { RoleModelsSettings } from './RoleModelsSettings';
 import { LocalWhisperSettings } from './LocalWhisperSettings';
 import { useStore } from '@/store/store';
@@ -369,6 +370,16 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
       }
     } as Partial<HarnessConfig>;
   };
+  // Usage-window warnings (shared/usageWindowAlerts.ts): shown as the effective
+  // percentages; a blank field goes back to the default.
+  const usageTh = normalizeThresholds(config.usageWindowAlerts);
+  const [usageFiveHour, setUsageFiveHour] = useState(String(usageTh.fiveHourPct));
+  const [usageWeekly, setUsageWeekly] = useState(String(usageTh.weeklyPct));
+  const usageAlertsPatch = (): Partial<HarnessConfig> => {
+    const num = (raw: string): number | undefined => (raw.trim() === '' ? undefined : Number(raw));
+    const th = normalizeThresholds({ fiveHourPct: num(usageFiveHour), weeklyPct: num(usageWeekly) });
+    return { usageWindowAlerts: th };
+  };
   /** The one writer. Commits what the form currently shows, in a single
    *  updateConfig, so a half-applied save is not a state the app can reach. */
   const saveAll = async (): Promise<void> => {
@@ -377,6 +388,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
       const patch: Partial<HarnessConfig> = {
         ...maxTurnsPatch(),
         ...budgetPatch(),
+        ...usageAlertsPatch(),
         ...pending
       };
       if (autoCompactPending !== null) {
@@ -571,6 +583,9 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
       setNotifications(cc.notifications === true);
       setAgentBudget(cc.costCapTokens != null ? String(cc.costCapTokens) : '');
       setVelocityCeiling(cc.circuitBreaker?.tokenVelocityPerMin != null ? String(cc.circuitBreaker.tokenVelocityPerMin) : '');
+      const th = normalizeThresholds(cc.usageWindowAlerts);
+      setUsageFiveHour(String(th.fiveHourPct));
+      setUsageWeekly(String(th.weeklyPct));
       setSlackEnabled(cc.slackEnabled ?? false);
       setSlackSecret(cc.slackSigningSecret ?? '');
       setSlackBotToken(cc.slackBotToken ?? '');
@@ -1386,6 +1401,40 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                               onClick={() => { setBrkHardStop(!brkHardStop); }}>
                               {brkHardStop ? t('settings.autonomy.killOnTrip') : t('settings.autonomy.steerFirst')}
                             </PixelButton>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
+
+                      {/* Usage windows: when agents are told the subscription is nearly spent */}
+                      <div>
+                        <div style={sectionHead}>
+                          {t('settings.autonomy.usageWindows')}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+                            {t('settings.autonomy.usageWindowsDesc')}
+                          </span>
+                          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
+                              {t('settings.autonomy.fiveHourThreshold')}
+                              <input
+                                type="number" min="1" max="100" step="1" value={usageFiveHour}
+                                onChange={(e) => setUsageFiveHour(e.target.value)}
+                                placeholder="95"
+                                style={{ ...slackInputStyle, width: 140 }}
+                              />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
+                              {t('settings.autonomy.weeklyThreshold')}
+                              <input
+                                type="number" min="1" max="100" step="1" value={usageWeekly}
+                                onChange={(e) => setUsageWeekly(e.target.value)}
+                                placeholder="98"
+                                style={{ ...slackInputStyle, width: 140 }}
+                              />
+                            </label>
                           </div>
                         </div>
                       </div>

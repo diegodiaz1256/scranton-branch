@@ -293,6 +293,10 @@
       "hardStopDesc": "Al saltar, MATA al agente en vez de solo limitarlo. Desactivado = reconducir primero (recomendado).",
       "killOnTrip": "matar al saltar",
       "steerFirst": "reconducir primero",
+      "usageWindows": "Ventanas de uso",
+      "usageWindowsDesc": "Cuando la ventana de 5 horas o la semanal de la suscripción pasa de estos porcentajes, cada agente de esa cuenta recibe un aviso en su bandeja para guardar su trabajo y cerrar, y al orquestador se le pide que deje de repartir trabajo hasta que se reinicie.",
+      "fiveHourThreshold": "aviso de la ventana de 5 horas (%)",
+      "weeklyThreshold": "aviso de la ventana semanal (%)",
       "saved": "guardado"
     },
     "memory": {
@@ -451,7 +455,7 @@
       "general": "actualizar version congelon registro carpeta idioma despierto dormir reiniciar borrar tema planta oficina rendimiento caminar tarjetas bateria cpu gpu",
       "prerequisites": "instalar claude codex gemini cli git node npm uv python fortress navegador requisitos",
       "agentsModels": "modelo opus sonnet haiku esfuerzo clave api anthropic openai openrouter groq certificado tls ca proxy",
-      "autonomyBudgets": "modo auto aprobar permiso presupuesto tokens cortacircuitos bucle contratar",
+      "autonomyBudgets": "modo auto aprobar permiso presupuesto tokens cortacircuitos bucle contratar uso límite ventana suscripción",
       "connections": "mcp servidor herramientas slack webhook disparador fetch github",
       "voice": "dictado whisper microfono hablar voz realtime groq",
       "memoryKnowledge": "memoria mempalace semantica embedding modelo grafo conocimiento"
@@ -1650,7 +1654,11 @@
     "weekSonnet": "Esta semana (Sonnet)",
     "fiveHourShort": "5h",
     "weekShort": "semana",
-    "resetsIn": "se reinicia en {{time}}"
+    "resetsIn": "se reinicia en {{time}}",
+    "alertNear": "{{window}} casi agotada",
+    "alertLimit": "{{window}} al límite",
+    "alertNearTip": "{{window}} casi agotada: se avisó a los agentes para que cierren (se reinicia en {{time}}).",
+    "alertLimitTip": "{{window}} al límite: se avisó a los agentes para que guarden su trabajo (se reinicia en {{time}})."
   },
   "titleBar": {
     "autoOn": "modo auto activado",

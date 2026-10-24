@@ -129,6 +129,28 @@ Be token-frugal: the floor has a budget and each agent can have its own limit. P
 over pasted content, and \`/compact\` your session when its context gets heavy.`
   },
   {
+    file: 'usage-windows.md',
+    title: 'Subscription usage windows',
+    who: 'everyone',
+    when: 'a "Usage window nearly spent" or "Usage limit reached" message reached you',
+    body: `A subscription (Claude Pro/Max) limits use per 5-hour window and per week. When a window passes the
+office's warning line (95% of the 5-hour window and 98% of the week by default; the human sets them in
+Settings), every live agent on that account gets ONE \`inform\` from \`usage\`: "Usage window nearly spent".
+A second one, "Usage limit reached", comes if it hits 100%. Each says which window, how much is used and
+when it resets. No reply is needed, and you will not hear again about that window until it resets.
+
+When one reaches you:
+- Finish the step you are on; don't start large new tasks.
+- Commit or save your work, and write partial results to files: past the limit your requests can fail
+  mid-task and anything only in your context is lost.
+- Write a short handoff note (memory.md or the task card): what is done, what is left, where the files are.
+- Prefer cheap actions until the reset: short replies, no broad searches, no re-reading large files.
+
+The orchestrator also gets it (whatever engine it runs on) and should stop dispatching new workers and
+temps on that account and pause non-urgent work until the window resets, telling the human if a deadline
+is at risk.`
+  },
+  {
     file: 'semantic-memory.md',
     title: 'Semantic memory',
     who: 'everyone',

@@ -169,6 +169,8 @@ export interface HarnessConfig {
   agentMcpAccess?: Record<string, Record<string, 'none' | 'read' | 'readwrite'>>;
   autoDeliveryPausedAgents?: string[];
   maxTurns?: number;
+  /** Usage-window warning thresholds, in percent (shared/usageWindowAlerts.ts). Unset → 95 / 98. */
+  usageWindowAlerts?: { fiveHourPct?: number; weeklyPct?: number };
   circuitBreaker?: CircuitBreakerConfig;
   /** Enterprise Knowledge Graph (multimodal context for agents). Default OFF. */
   knowledgeGraph?: KnowledgeGraphConfig;

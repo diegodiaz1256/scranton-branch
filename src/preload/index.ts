@@ -10,6 +10,7 @@ import type { FloorEntry } from '../main/floors';
 export type { FloorEntry } from '../main/floors';
 export type FortressStatusView = FortressStatus & { enabled: boolean; bytes: number };
 import type { RateLimits } from '../shared/rateLimits';
+import type { ActiveUsageAlert } from '../shared/usageWindowAlerts';
 export type { HireManifest } from '../shared/hire';
 import type { IntegrationRecord, IntegrationTemplate } from '../shared/integrations';
 export type { IntegrationRecord, IntegrationTemplate } from '../shared/integrations';
@@ -1111,6 +1112,13 @@ const api = {
     const listener = (_e: IpcRendererEvent, r: RateLimits) => cb(r);
     ipcRenderer.on('hive:rateLimits', listener);
     return () => ipcRenderer.removeListener('hive:rateLimits', listener);
+  },
+  /** Usage windows over their warning threshold, which agents were told about. */
+  usageAlerts: (): Promise<ActiveUsageAlert[]> => ipcRenderer.invoke('usage:alerts'),
+  onUsageAlerts: (cb: (a: ActiveUsageAlert[]) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, a: ActiveUsageAlert[]) => cb(a);
+    ipcRenderer.on('hive:usageAlerts', listener);
+    return () => ipcRenderer.removeListener('hive:usageAlerts', listener);
   },
   onHiveMessage: (cb: (e: HiveRouteEvent) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, payload: HiveRouteEvent) => cb(payload);
