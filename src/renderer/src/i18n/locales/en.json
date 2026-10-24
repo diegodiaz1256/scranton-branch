@@ -2128,7 +2128,7 @@
         "off": "Off",
         "on": "On",
         "turnOn": "Turn on",
-        "body": "Agents in a sandbox cannot read your ~/.ssh. With this on, when this agent runs git over SSH (fetch, pull, push), the app runs ssh for it outside its sandbox with your keys and passes only the git transfer back. Nothing else goes through: no shell on a server, no other commands. It applies at once.",
+        "body": "Agents in a sandbox cannot read your ~/.ssh. With this on, when this agent runs git over SSH (fetch, pull, push, and Git LFS files), the app runs ssh for it outside its sandbox with your keys and passes only the git transfer back. Nothing else goes through: no shell on a server, no other commands. It applies at once.",
         "warning": "The agent can then fetch from and push to any repository your key opens, as you. It never sees the key.",
         "confirm": "Let {{name}} use your SSH keys through the office?",
         "unavailable": "Not available on this floor: agents on a Windows floor run without an OS sandbox, so the office cannot keep your keys from them. Use HTTPS remotes there, or a WSL floor.",
@@ -2144,7 +2144,12 @@
         "auditEmpty": "Nothing yet.",
         "allowed": "allowed",
         "refused": "refused",
-        "exit": "exit {{code}}"
+        "exit": "exit {{code}}",
+        "sign": "Sign commits with my key",
+        "signBody": "Off by default. On, when git signs this agent's commits or tags with an SSH key (gpg.format=ssh), the office signs them for it outside its sandbox with your key, as you sign yours, and only as git objects (namespace \"git\"). \"Ask me before each use\" applies here too.",
+        "signConfirm": "Let {{name}} sign commits with your SSH key?",
+        "signWarning": "Its commits and tags will carry your verified signature. It never sees the key, and the office signs nothing but git objects.",
+        "signed": "signed"
       }
     },
     "skills": {

@@ -67,7 +67,7 @@ import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
 import { MD_BROWSE } from './browseCli';
 import { BROKER_CLIENT_JS } from './brokerClient';
-import { MD_SSH_CLI, sshWrapperScript } from './sshRelayClient';
+import { MD_SSH_CLI, MD_SSH_SIGN_CLI, sshWrapperScript } from './sshRelayClient';
 import { HOOK_OFFLINE_JS } from '../shared/hookOffline';
 import { MD_LISTS_MCP } from './listsMcp';
 import { liveNamesakes, similarLive, supersededArchived } from './namesakes';
@@ -727,7 +727,7 @@ export class HiveManager {
     const dir = this.sshWrapperDir();
     if (!w || !dir) return Promise.resolve();
     if (!this.sshWrapperReady) {
-      this.sshWrapperReady = runInDistroAsync(w.distro, 'chmod', ['755', this.forAgent(join(dir, 'ssh')).replace(/\\/g, '/')], '/')
+      this.sshWrapperReady = runInDistroAsync(w.distro, 'chmod', ['755', ...['ssh', 'md-ssh-sign'].map((f) => this.forAgent(join(dir, f)).replace(/\\/g, '/'))], '/')
         .then(() => undefined, (e) => { console.error('[hive] chmod of the office ssh failed:', e); this.sshWrapperReady = null; });
     }
     return this.sshWrapperReady;
@@ -1069,7 +1069,13 @@ export class HiveManager {
       // md-ssh: git over SSH through the office, never with the keys
       // (sshRelay.ts), and the `ssh` on a sandboxed agent's PATH that runs it.
       [join(root, 'bin', 'md-ssh.cjs'), MD_SSH_CLI],
-      ...(this.sshWrapperDir() ? [[join(this.sshWrapperDir()!, 'ssh'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh.cjs')))] as [string, string]] : [])
+      // md-ssh-sign: the agent's gpg.ssh.program, commits signed with the
+      // human's SSH key by the app (sshRelay.ts), never with the key here.
+      [join(root, 'bin', 'md-ssh-sign.cjs'), MD_SSH_SIGN_CLI],
+      ...(this.sshWrapperDir() ? [
+        [join(this.sshWrapperDir()!, 'ssh'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh.cjs')))] as [string, string],
+        [join(this.sshWrapperDir()!, 'md-ssh-sign'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh-sign.cjs')), 'commit signer: signed by the app with your SSH key (md-ssh-sign.cjs)')] as [string, string]
+      ] : [])
     ];
     if (this.sshWrapperDir()) mkdirSync(this.sshWrapperDir()!, { recursive: true });
     const stampPath = join(root, 'bin', '.generated');
@@ -1084,7 +1090,7 @@ export class HiveManager {
       this.sshWrapperReady = null;
     }
     const sshDir = this.sshWrapperDir();
-    if (sshDir && !this.wslRoot()) { try { chmodSync(join(sshDir, 'ssh'), 0o755); } catch { /* it then fails like a missing ssh */ } }
+    if (sshDir && !this.wslRoot()) for (const f of ['ssh', 'md-ssh-sign']) { try { chmodSync(join(sshDir, f), 0o755); } catch { /* it then fails like a missing ssh */ } }
     // The bundled-node launcher every shim above is invoked through — MUST be
     // written before any hook installer runs (they probe for it).
     this.writeNodeLauncher();
@@ -1397,6 +1403,15 @@ export class HiveManager {
         // floor would reach Windows' own agent). Claude Code's sandbox sets its
         // own `ssh -o …`, which finds the same one on PATH.
         env.GIT_SSH_COMMAND = 'ssh';
+        // Commits signed with an SSH key (gpg.format=ssh, in the user's or the
+        // repository's config): signed by the office's signer, which asks the
+        // app, instead of ssh-keygen, which would find no key here. As
+        // GIT_CONFIG_* (command-line scope, above every config file), never by
+        // editing the user's config. It only matters with gpg.format=ssh.
+        const n = Math.max(0, Number.parseInt(this.wslRoot() ? '' : process.env.GIT_CONFIG_COUNT ?? '', 10) || 0);
+        env[`GIT_CONFIG_KEY_${n}`] = 'gpg.ssh.program';
+        env[`GIT_CONFIG_VALUE_${n}`] = join(sshDir, 'md-ssh-sign');
+        env.GIT_CONFIG_COUNT = String(n + 1);
       }
     }
 

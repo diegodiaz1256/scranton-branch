@@ -50,6 +50,10 @@ export function SshRelaySection({ agent, config }: { agent: Agent; config: Harne
     const keysNext = cur.includes(fp) ? cur.filter((k) => k !== fp) : [...cur, fp];
     void save({ ...grant, keys: keysNext.length ? keysNext : undefined });
   };
+  const flipSign = async (next: boolean) => {
+    if (next && !(await window.cth.confirm(t('pro.caps.ssh.signConfirm', { name: agent.name }), { detail: t('pro.caps.ssh.signWarning'), ok: t('pro.caps.ssh.turnOn') }))) return;
+    void save({ ...grant, sign: next || undefined });
+  };
   const why = !available ? t('pro.caps.ssh.unavailable') : custodian ? t('pro.caps.ssh.custodian') : null;
 
   return (
@@ -86,6 +90,11 @@ export function SshRelaySection({ agent, config }: { agent: Agent; config: Harne
             <input type="checkbox" checked={!!grant?.ask} disabled={busy} onChange={(e) => void save({ ...grant, ask: e.target.checked || undefined })} />
             {t('pro.caps.ssh.ask')}
           </label>
+          <label className="pro-sub" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!grant?.sign} disabled={busy} onChange={(e) => void flipSign(e.target.checked)} />
+            {t('pro.caps.ssh.sign')}
+          </label>
+          <span className="pro-sub" style={{ fontSize: 11.5, paddingInlineStart: 22 }}>{t('pro.caps.ssh.signBody')}</span>
         </>
       )}
       <details onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) loadAudit(); }}>
@@ -97,7 +106,9 @@ export function SshRelaySection({ agent, config }: { agent: Agent; config: Harne
               <span className="pro-sub pro-mono" style={{ fontSize: 11 }}>{new Date(a.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
               <span className={`pro-chip${a.allowed ? ' pro-chip-on' : ' pro-chip-off'}`}>{a.allowed ? t('pro.caps.ssh.allowed') : t('pro.caps.ssh.refused')}</span>
               <span className="pro-mono" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {a.service ?? ''} {a.host ? `${a.user ? `${a.user}@` : ''}${a.host}:${a.path ?? ''}` : ''}
+                {a.service === 'sign'
+                  ? `${t('pro.caps.ssh.signed')} ${a.subject ?? ''}${a.path ? ` · ${a.path}` : ''}`
+                  : `${a.service ?? ''} ${a.host ? `${a.user ? `${a.user}@` : ''}${a.host}:${a.path ?? ''}` : ''}`}
               </span>
               {typeof a.exit === 'number' && <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.caps.ssh.exit', { code: a.exit })}</span>}
               {a.reason && <span className="pro-sub" style={{ fontSize: 11 }}>{a.reason}</span>}

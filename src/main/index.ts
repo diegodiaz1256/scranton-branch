@@ -87,7 +87,7 @@ import { fleetUsage } from '../shared/hookUsage';
 import { analytics, isRendererMessageSurface } from './analytics';
 import type { SpawnFailReason } from './analytics';
 import { IntegrationBroker } from './integrationBroker';
-import { SshRelay, listSshKeysRaw, parseSshKeys, spawnRelaySsh, type SshKeyInfo } from './sshRelay';
+import { SshRelay, listSshKeysRaw, parseSshKeys, spawnRelaySsh, parseSshSigner, readSshSignerRaw, runSshSign, sshKeyFingerprint, type SshKeyInfo } from './sshRelay';
 import { cleanSshRelayMap, type SshRelayAuditEntry } from '../shared/sshRelay';
 import * as integrations from './integrations';
 import { applyMissionRequest, type MissionLike } from '../shared/missionRequests';
@@ -781,6 +781,16 @@ function sshFloorInfo(fresh = false): Promise<{ sock: string; keys: SshKeyInfo[]
   }
   return sshFloorCache.info;
 }
+// How the human signs there (their global gpg.ssh.program and user.signingkey).
+let sshSignerCache: { key: string; at: number; info: Promise<{ program: string; signingKey: string }> } | null = null;
+function sshSignerInfo(): Promise<{ program: string; signingKey: string }> {
+  const distro = hive.enabled() ? hive.wslRoot()?.distro ?? null : null;
+  const key = distro ?? 'local';
+  if (!sshSignerCache || sshSignerCache.key !== key || Date.now() - sshSignerCache.at > 60_000) {
+    sshSignerCache = { key, at: Date.now(), info: readSshSignerRaw(distro).then(parseSshSigner) };
+  }
+  return sshSignerCache.info;
+}
 function sshAuditPath(): string { return join(app.getPath('userData'), 'ssh-relay-audit.jsonl'); }
 function readSshAudit(agentId?: string, limit = 50): SshRelayAuditEntry[] {
   let text = '';
@@ -822,7 +832,7 @@ const sshRelay = new SshRelay({
   },
   ask: async (agentName, r) => {
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-    const verb = r.service === 'git-receive-pack' ? 'push to' : 'fetch from';
+    const verb = r.service === 'git-receive-pack' || r.operation === 'upload' ? 'push to' : 'fetch from';
     const opts = {
       type: 'question' as const,
       buttons: ['Allow once', 'Deny'],
@@ -837,6 +847,33 @@ const sshRelay = new SshRelay({
   },
   audit: (e) => {
     try { appendFileSync(sshAuditPath(), JSON.stringify(e) + '\n', { encoding: 'utf8', mode: 0o600 }); } catch (err) { console.error('[ssh-relay] audit write failed:', err); }
+  },
+  // Signing: the keys where agents run, plus the human's own user.signingkey
+  // (a key only 1Password's op-ssh-sign may hold), signed with their own
+  // gpg.ssh.program from their global config.
+  signKeys: async () => {
+    const [{ keys }, signer] = await Promise.all([sshFloorInfo(), sshSignerInfo()]);
+    const fp = signer.signingKey ? sshKeyFingerprint(signer.signingKey) : null;
+    return fp && !keys.some((k) => k.fingerprint === fp) ? [...keys, { fingerprint: fp, label: 'user.signingkey', source: 'agent' as const, pub: signer.signingKey.replace(/^key::/, '') }] : keys;
+  },
+  sign: async (key, payload) => {
+    const distro = hive.enabled() ? hive.wslRoot()?.distro ?? null : null;
+    const [{ sock }, signer] = await Promise.all([sshFloorInfo(), sshSignerInfo()]);
+    return runSshSign(distro, signer.program, key, payload, sock);
+  },
+  askSign: async (agentName, w) => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const opts = {
+      type: 'question' as const,
+      buttons: ['Allow once', 'Deny'],
+      defaultId: 1, cancelId: 1, noLink: true,
+      title: 'Sign with your SSH key?',
+      message: `${agentName} wants to sign a ${w.kind} with your SSH key: ${w.subject || '(no message)'}`,
+      detail: `${w.repo ? `In ${w.repo}. ` : ''}Key ${w.fingerprint}. The office signs it for the agent (namespace "git" only); the agent never sees the key.`
+    };
+    const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+    refocusAfterDialog(win);
+    return response === 0;
   }
 });
 
@@ -863,7 +900,7 @@ ipcMain.handle('sshRelay:set', (_evt, agentId: unknown, grant: unknown) => {
     map[agentId] = clean;
   }
   writeConfig({ agentSshRelay: map });
-  try { hive.appendLog({ kind: 'ssh-relay', agentId, name: a.name, on: grant !== null, keys: map[agentId]?.keys ?? [], ask: !!map[agentId]?.ask, by: 'human' }); } catch { /* the config change stands */ }
+  try { hive.appendLog({ kind: 'ssh-relay', agentId, name: a.name, on: grant !== null, keys: map[agentId]?.keys ?? [], ask: !!map[agentId]?.ask, sign: !!map[agentId]?.sign, by: 'human' }); } catch { /* the config change stands */ }
   return { ok: true };
 });
 
