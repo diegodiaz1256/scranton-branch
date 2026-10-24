@@ -45,6 +45,7 @@ import { GENERATED_DOC_NOTICE, PROTOCOL_DIR, protocolFiles } from './protocolDoc
 import { connectionsPromptLine, envPromptLine, type PromptConnection } from '../shared/agentConnections';
 import type { Access } from '../shared/connectionAccess';
 import { confidentialityPromptLine, criticalAllows, heldIds, isCustodian, VAULT_ROOT, type CriticalMap } from '../shared/criticalConnections';
+import { custodianWriteRoots, signoffPromptLine } from '../shared/criticalSignoff';
 import { selectBroadcastTargets } from '../shared/broadcast';
 import { preferredAgentRole } from '../shared/agentRole';
 import { mergeTaskLedger, patchTaskInLedger } from '../shared/taskLedger';
@@ -1120,6 +1121,12 @@ export class HiveManager {
        *  vaults. Refused by the path guard, hidden by the OS sandbox
        *  (denyRead) and by Claude Code's permission rules. */
       denyDirs?: string[];
+      /** The custodian of a critical connection, locked down: it writes only
+       *  its own hive folder and its vaults (path guard and OS sandbox), its
+       *  shell reaches no network, its folder stays out of the hive's history,
+       *  and everything it sends out waits for the human's sign-off. `outgoing`
+       *  is where it puts files meant for research/. */
+      lockdown?: { outgoing: string };
       theme?: 'light' | 'dark';
       /** Consent state for the default-MCP bundle (W3). Threaded from the live
        *  HarnessConfig by the caller; undefined → catalog defaults apply. */
@@ -1268,10 +1275,12 @@ export class HiveManager {
       : [tmpdir(), '/tmp', join(homedir(), '.claude', 'projects')];
     this.guardPolicies.set(meta.id, {
       cwd: meta.cwd || dir,
-      roots: [...new Set([meta.cwd, ...this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), ...(opts.writableRoots ?? []),
-        ...agentPlaces].filter((d): d is string => typeof d === 'string' && d.length > 0))],
-      git: gitAllowed(opts.mcpDefaults, opts.mcpGrant),
-      contained: !opts.roam,
+      roots: opts.lockdown
+        ? custodianWriteRoots(dir, opts.vaults ?? [])
+        : [...new Set([meta.cwd, ...this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), ...(opts.writableRoots ?? []),
+          ...agentPlaces].filter((d): d is string => typeof d === 'string' && d.length > 0))],
+      git: opts.lockdown ? false : gitAllowed(opts.mcpDefaults, opts.mcpGrant),
+      contained: opts.lockdown ? true : !opts.roam,
       ...(opts.denyDirs?.length ? { deny: opts.denyDirs } : {}),
       ...(wslHome ? { home: wslHome } : {})
     });
@@ -1293,7 +1302,7 @@ export class HiveManager {
     if (!isHiveAwareProvider(meta.provider)) {
       const preset = providerPreset(meta.provider ?? 'claude');
       const flag = preset.initialPromptFlag;
-      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults);
+      const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults, opts.lockdown?.outgoing);
       // agy, codex, and grok expose a Claude-style lifecycle-hook surface, so each
       // gets the SAME live status + Stop→inbox-drain Claude does — selected by the
       // preset's `hookBridge`. agy needs a translating shim (its hook stdin/stdout
@@ -1456,6 +1465,7 @@ export class HiveManager {
     // grant used to reach no agent at all. --mcp-config is additive to the user's
     // own servers. It takes several values, so the option pushed right after it
     // ends the list and nothing positional can be swallowed as a config path.
+    if (opts.lockdown) this.keepOutOfHistory(meta.id, dir);
     const mcp = this.buildDefaultMcpServers(meta.cwd, opts.mcpDefaults, opts.mcpGrant, meta.id, opts.mcpScopes, opts.toolBlocks);
     const mcpPath = join(dir, 'mcp.json');
     // A custodian never loads servers of its own or the user's, whatever the setting.
@@ -1485,7 +1495,7 @@ export class HiveManager {
     // what each may do): no permission prompt per call, or an agent just waits.
     const allowedConnections = Object.keys(mcp.servers).filter((n) => mcp.env.MD_MCP_TOKEN && (mcp.servers[n] as { type?: string }).type === 'http');
     if (allowedConnections.length) args.push('--allowedTools', ...allowedConnections.map((n) => `mcp__${n}`));
-    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults));
+    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults, opts.lockdown?.outgoing));
 
     // Phase 1 — autonomy: attach lifecycle hooks via --settings (no edits to the
     // user's repo) so the agent reports activity and drains its inbox on Stop.
@@ -1495,7 +1505,7 @@ export class HiveManager {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
       const requireSandbox = await this.sandboxAvailable();
-      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox, opts.brokerUrl, opts.denyDirs)));
+      this.writeJson(settingsPath, this.forAgentJson(this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown)));
       args.push('--settings', settingsPath);
     }
     return { args, env };
@@ -1893,7 +1903,7 @@ export class HiveManager {
     return p;
   }
 
-  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = []): unknown {
+  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = [], onlyBroker = false): unknown {
     // The sandbox gives Bash its own network: the app's loopback broker is
     // reachable only through the sandbox proxy, and only where allowed. The
     // hive's commands (md-api, md-run, md-browse) go through that proxy
@@ -1946,11 +1956,15 @@ export class HiveManager {
             // (denyRead), and refused to the file tools by permission rules
             // (which bypass mode still honours; Read and Edit rules cover every
             // file tool) as well as by the path guard.
+            // A custodian's shell reaches the broker and no other host
+            // (strictAllowlist: nothing is asked, anything unlisted is refused).
             sandbox: {
               enabled: true,
               ...(requireSandbox ? { failIfUnavailable: true } : {}),
               filesystem: { allowWrite: writableDirs, ...(denyDirs.length ? { denyRead: denyDirs } : {}) },
-              ...(broker ? { network: { allowedDomains: [broker] } } : {})
+              ...(onlyBroker
+                ? { network: { allowedDomains: broker ? [broker] : [], strictAllowlist: true } }
+                : broker ? { network: { allowedDomains: [broker] } } : {})
             },
             permissions: {
               additionalDirectories: writableDirs,
@@ -2141,9 +2155,27 @@ export class HiveManager {
   /** What happens to a message an agent sends before it is routed: a
    *  custodian's is redacted (criticalConnections.ts). Injected by main; unset
    *  means as is. `note` set = changed. */
-  private outgoing: (msg: HiveMessage) => { msg: HiveMessage; note?: string } = (msg) => ({ msg });
-  setOutgoing(filter: (msg: HiveMessage) => { msg: HiveMessage; note?: string }): void {
+  private outgoing: (msg: HiveMessage) => { msg: HiveMessage; note?: string; hold?: boolean } = (msg) => ({ msg });
+  setOutgoing(filter: (msg: HiveMessage) => { msg: HiveMessage; note?: string; hold?: boolean }): void {
     this.outgoing = filter;
+  }
+
+  /** A custodian's hive folder (memory, notes, its mail) never enters the
+   *  hive's git history, which every agent can read: its own .gitignore
+   *  ignores everything, and anything already tracked is untracked. */
+  private keepOutOfHistory(id: string, dir: string): void {
+    try {
+      const gi = join(dir, '.gitignore');
+      const cur = existsSync(gi) ? readFileSync(gi, 'utf8') : '';
+      if (!cur.split(/\r?\n/).includes('*')) writeFileSync(gi, `*\n${cur}`, 'utf8');
+      const root = this.root();
+      if (root && existsSync(join(root, '.git'))) this.git(['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', `agents/${id}`], root);
+    } catch (e) { console.error('[hive] keepOutOfHistory', id, e); }
+  }
+
+  /** An agent's own hive folder (for a custodian, its working folder too). */
+  agentFolder(id: string): string {
+    return this.agentDir(id);
   }
 
   /** Critical connections and their custodians (criticalConnections.ts).
@@ -2409,7 +2441,8 @@ export class HiveManager {
     envNames?: string[],
     webOff = false,
     critical?: string[],
-    vaults?: string[]
+    vaults?: string[],
+    outgoing?: string
   ): string {
     // Native-separator path helpers — see the 🪟 note above.
     const inDir = (...parts: string[]): string => join(dir, ...parts);
@@ -2562,7 +2595,7 @@ export class HiveManager {
       deliverablesLine,
       integrationsLine,
       connectionsPromptLine(connections),
-      confidentialityPromptLine(critical, vaults?.map((v) => this.forAgent(v))),
+      confidentialityPromptLine(critical, vaults?.map((v) => this.forAgent(v))) + (critical?.length && outgoing ? `\n${signoffPromptLine(this.forAgent(outgoing))}` : ''),
       envPromptLine(envNames),
       runnersLine,
       listsLine,
@@ -2919,6 +2952,13 @@ export class HiveManager {
           // What leaves a custodian is redacted first (criticalConnections.ts);
           // the archived copy is the redacted one, never the raw text.
           const out = this.outgoing(msg);
+          // Held for the human's sign-off (a custodian's mail): main keeps the
+          // redacted copy; the raw file goes, and nothing is routed.
+          if (out.hold) {
+            rmSync(full, { force: true });
+            this.appendLog({ kind: 'outbox-held', from: id, id: msg.id, to: msg.to, ...(out.note ? { note: out.note } : {}) });
+            continue;
+          }
           if (out.note) {
             msg = out.msg;
             writeFileSync(join(outbox, '.sent', f), JSON.stringify(msg, null, 2), 'utf8');

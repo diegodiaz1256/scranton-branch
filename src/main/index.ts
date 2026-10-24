@@ -47,7 +47,7 @@ import { excludeOfficeFromRepo } from './gitExclude';
 import { openTerminalAt } from './openTerminal';
 import { agentKind, effortArgs } from '../shared/roleModels';
 import { formatList, parseList, type PersonalList } from '../shared/lists';
-import { HiveManager, type AgentMeta, type HiveMessage, type HiveTask, type TempHiring } from './hive';
+import { HiveManager, type AgentMeta, type HiveMessage, type HiveTask, type MessageAct, type TempHiring } from './hive';
 import { HookServer } from './hooks';
 import { CircuitBreaker, workTokensOf, type BreakerInput } from './breaker';
 import { capStage, capDispatchNote, capWarningBody, lastOutboxMessage, lastWords } from './workerCap';
@@ -98,6 +98,8 @@ import { effectiveApiAccess, explainConnection, isAccess, type Access } from '..
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
 import { redactConfidential, redactionTotal } from '../shared/confidentialRedact';
+import { cleanDeliverableName, decide, type Decision, type PendingItem } from '../shared/criticalSignoff';
+import { projectDir } from './transcript';
 import { BrowseCache, browseChars, browseMode, formatBrowsed, formatSearch } from '../shared/browsePage';
 
 /** Pages agents read, kept 10 minutes for their next pages (browsePage.ts). */
@@ -3754,6 +3756,15 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // below. Persist the resolved provider onto opts (+ hive meta) so the registry
   // record and downstream provider-aware steps agree on one value.
   const provider = inferAgentProvider(opts.command, opts.provider ?? opts.hive?.provider);
+  // A custodian works in its own hive folder, never in a project: nothing it
+  // writes can land in shared code, and its transcripts get a folder of their own.
+  if (opts.hive && hive.enabled() && canBeCustodian(provider) && isCustodian(criticalMap(), opts.hive.id)) {
+    const own = hive.agentFolder(opts.hive.id);
+    mkdirSync(own, { recursive: true });
+    opts.cwd = own;
+    opts.hive = { ...opts.hive, cwd: own };
+    opts.isolate = false;
+  }
   const claudeProvider = isClaudeProvider(provider);
   opts.provider = provider;
   if (opts.hive) opts.hive = { ...opts.hive, provider };
@@ -3993,6 +4004,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           critical: criticalLabelsFor(opts.hive.id, provider),
           vaults: spawnVaults.own,
           denyDirs: spawnVaults.deny,
+          lockdown: spawnVaults.custodian ? { outgoing: join(hive.agentFolder(opts.hive.id), 'outgoing') } : undefined,
           mcpScopes: readConfig().connectionScopes,
           mcpOnlyManaged: readConfig().mcpOnlyManaged !== false,
           skillsDir: skillsResourceDir(),
@@ -4339,7 +4351,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       }
       // Set on the app's own env for Windows agents; a WSL agent only gets what
       // its spawn carries (pty.ts), so hand it over here (as a /mnt path).
-      if (process.env.MD_SLACK_REPLY_CONFIG) opts.env = { ...(opts.env ?? {}), MD_SLACK_REPLY_CONFIG: process.env.MD_SLACK_REPLY_CONFIG };
+      if (process.env.MD_SLACK_REPLY_CONFIG && !(opts.hive && isCustodian(criticalMap(), opts.hive.id))) opts.env = { ...(opts.env ?? {}), MD_SLACK_REPLY_CONFIG: process.env.MD_SLACK_REPLY_CONFIG };
       // Claude's temp folder in the user's own cache, not /tmp (wsl.ts
       // AGENT_TMP_SCRIPT): made and repaired before every spawn.
       if (provider === 'claude' && !opts.env?.CLAUDE_CODE_TMPDIR) {
@@ -5343,16 +5355,27 @@ async function ensureVault(dir: string): Promise<void> {
 
 /** What an agent gets at spawn: the vaults it may write (its own, created
  *  now) and the folders it may not read. */
-async function prepareVaults(agentId: string, provider: string | undefined): Promise<{ own: string[]; deny: string[] }> {
+async function prepareVaults(agentId: string, provider: string | undefined): Promise<{ own: string[]; deny: string[]; custodian: boolean }> {
   const root = vaultRoot();
-  if (!root) return { own: [], deny: [] };
-  const access = vaultAccess(criticalMap(), canBeCustodian(provider) ? agentId : undefined);
+  const map = criticalMap();
+  const custodian = canBeCustodian(provider) && isCustodian(map, agentId);
+  // Every other custodian's own folder (its memory, notes, held mail) and its
+  // Claude Code transcripts are as confidential as its vault.
+  const others = hive.enabled() ? [...new Set(Object.values(map))].filter((id) => id && id !== agentId) : [];
+  const theirs = others.flatMap((id) => { const d = hive.agentFolder(id); return [d, projectDir(d)]; });
+  if (!root) return { own: [], deny: theirs, custodian };
+  const access = vaultAccess(map, custodian ? agentId : undefined);
   const own: string[] = [];
   for (const name of access.own) {
     const dir = join(root, name);
     try { await ensureVault(dir); own.push(dir); } catch (e) { console.error('[critical] vault', name, e); }
   }
-  return { own, deny: access.denyAll ? [root] : access.denyOthers.map((n) => join(root, n)) };
+  if (custodian) {
+    try { mkdirSync(join(hive.agentFolder(agentId), 'outgoing'), { recursive: true }); } catch { /* made on first use */ }
+  }
+  // A custodian never reads the Slack reply key (an agent posting to Slack is a way out).
+  const slackKey = custodian ? [slackReplyConfigPath()] : [];
+  return { own, deny: [...(access.denyAll ? [root] : access.denyOthers.map((n) => join(root, n))), ...theirs, ...slackKey], custodian };
 }
 
 /** Hosts of the critical connections an agent holds: links to them are redacted. */
@@ -5368,20 +5391,107 @@ function criticalHosts(agentId: string): string[] {
   return [...hosts];
 }
 
-// What a custodian sends is redacted before it is routed (the safety net
-// under its prompt); the redacted copy is the one archived and delivered.
+// What a custodian sends is redacted (the safety net under its prompt) and
+// then held: nothing leaves without the human's sign-off, whatever it says.
 hive.setOutgoing((msg) => {
   if (!isCustodian(criticalMap(), msg.from)) return { msg };
   const hosts = criticalHosts(msg.from);
   const subject = redactConfidential(msg.subject, { hosts });
   const body = redactConfidential(msg.body, { hosts });
   const total = redactionTotal(subject) + redactionTotal(body);
-  if (!total) return { msg };
-  const kinds = [...new Set([...Object.keys(subject.counts), ...Object.keys(body.counts)])].join(', ');
-  for (const k of custodianships(criticalMap(), msg.from)) {
-    criticalAudit({ ts: Date.now(), kind: k.slice(0, 3) as CriticalKind, id: k.slice(4), agentId: msg.from, call: `message ${msg.id} to ${msg.to}: ${total} redaction(s) (${kinds})`, allowed: true });
+  const counts: Record<string, number> = {};
+  for (const c of [subject.counts, body.counts]) for (const [k, v] of Object.entries(c)) counts[k] = (counts[k] ?? 0) + (v ?? 0);
+  const kinds = Object.keys(counts).join(', ');
+  holdForSignoff({
+    id: `msg-${msg.id}`, kind: 'message', from: msg.from, createdAt: Date.now(), to: msg.to, act: msg.act,
+    subject: subject.text, text: body.text, redactions: counts,
+    messageId: msg.id, conversation: msg.conversation, inReplyTo: msg.in_reply_to
+  });
+  return { msg, hold: true, note: total ? `${total} redaction(s): ${kinds}` : undefined };
+});
+
+// ─── Sign-off (shared/criticalSignoff.ts) ───────────────────────────────────
+// Everything a custodian sends out waits here, in the app's own folder (no
+// agent reads it), until the human approves, edits or rejects it. Nothing
+// times out into sending.
+
+function pendingPath(): string { return join(app.getPath('userData'), 'critical-pending.json'); }
+function readPending(): PendingItem[] {
+  try { const j = JSON.parse(readFileSync(pendingPath(), 'utf8')); return Array.isArray(j) ? j : []; } catch { return []; }
+}
+function writePending(items: PendingItem[]): void {
+  writeFileSync(pendingPath(), JSON.stringify(items, null, 2), { encoding: 'utf8', mode: 0o600 });
+}
+function auditFor(agentId: string, call: string, allowed: boolean): void {
+  for (const k of custodianships(criticalMap(), agentId)) criticalAudit({ ts: Date.now(), kind: k.slice(0, 3) as CriticalKind, id: k.slice(4), agentId, call, allowed });
+}
+function holdForSignoff(item: PendingItem): void {
+  const items = readPending().filter((x) => x.id !== item.id);
+  items.push(item);
+  writePending(items);
+  auditFor(item.from, `held for sign-off: ${item.kind === 'message' ? `message to ${item.to}` : `file ${item.file}`}`, true);
+  const name = hive.registry().agents?.[item.from]?.name ?? item.from;
+  try { liveWebContents()?.send('critical:pending', { count: items.length }); } catch { /* window gone */ }
+  try {
+    if (Notification.isSupported()) new Notification({ title: `${name} needs your sign-off`, body: item.kind === 'message' ? `A message to ${item.to}, held until you approve it (Inbox → For you).` : `A file for the deliverables, held until you approve it (Inbox → For you).` }).show();
+    const w = mainWindow; if (w && !w.isDestroyed()) w.flashFrame(true);
+  } catch { /* notifications are best effort */ }
+}
+
+/** Files a custodian puts in its outgoing/ folder for research/: taken in,
+ *  redacted and held for sign-off (the file itself is removed). */
+function scanCustodianOutgoing(): void {
+  if (!hive.enabled()) return;
+  for (const id of new Set(Object.values(criticalMap()))) {
+    if (!id) continue;
+    const dir = join(hive.agentFolder(id), 'outgoing');
+    let names: string[] = [];
+    try { names = readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      const file = cleanDeliverableName(n);
+      const abs = join(dir, n);
+      try {
+        const st = statSync(abs);
+        if (!st.isFile()) continue;
+        // A file still being written: wait a beat.
+        if (Date.now() - st.mtimeMs < 2000) continue;
+        if (!file || st.size > 2 * 1024 * 1024) { rmSync(abs, { force: true }); auditFor(id, `outgoing file refused: ${n}`, false); continue; }
+        const r = redactConfidential(readFileSync(abs, 'utf8'), { hosts: criticalHosts(id) });
+        rmSync(abs, { force: true });
+        holdForSignoff({ id: `file-${Date.now().toString(36)}-${file}`, kind: 'deliverable', from: id, createdAt: Date.now(), file, text: r.text, redactions: r.counts });
+      } catch (e) { console.error('[critical] outgoing', abs, e); }
+    }
   }
-  return { msg: { ...msg, subject: subject.text, body: body.text }, note: `${total} redaction(s): ${kinds}` };
+}
+setInterval(() => { try { scanCustodianOutgoing(); } catch (e) { console.error('[critical] scan', e); } }, 5000).unref?.();
+
+ipcMain.handle('critical:pendingList', () => readPending().map((p) => ({ ...p, fromName: (hive.enabled() ? hive.registry().agents?.[p.from]?.name : undefined) ?? p.from })));
+ipcMain.handle('critical:decide', (_evt, itemId: unknown, decision: unknown) => {
+  const items = readPending();
+  const item = items.find((x) => x.id === itemId);
+  if (!item || !decision || typeof decision !== 'object') return { ok: false, error: 'bad request' };
+  const out = decide(item, decision as Decision, Date.now(), (t) => createHash('sha256').update(t).digest('hex'));
+  if (out.deliver) {
+    if (item.kind === 'message') {
+      hive.send({ to: item.to, act: item.act as MessageAct, subject: out.deliver.subject ?? '', body: out.deliver.text, conversation: item.conversation, in_reply_to: item.inReplyTo ?? null }, item.from);
+    } else {
+      const root = hive.root();
+      if (!root) return { ok: false, error: 'no office' };
+      const research = join(root, DELIVERABLES_DIR);
+      mkdirSync(research, { recursive: true });
+      let target = join(research, item.file!);
+      for (let i = 2; existsSync(target); i++) target = join(research, item.file!.replace(/(\.[^.]*)?$/, `-${i}$1`));
+      writeFileSync(target, out.deliver.text, 'utf8');
+      queueDeliverableCommit(item.from, root, [target]);
+    }
+  } else if (out.bounce) {
+    hive.send({ to: item.from, act: 'inform', subject: out.bounce.subject, body: out.bounce.body }, 'human');
+  }
+  const a = out.audit;
+  auditFor(item.from, `${a.action} by the human: ${item.kind === 'message' ? `message to ${item.to}` : `file ${item.file}`}${a.sha256 ? ` sha256=${a.sha256}` : ''}`, a.action !== 'rejected');
+  writePending(items.filter((x) => x.id !== item.id));
+  try { liveWebContents()?.send('critical:pending', { count: items.length - 1 }); } catch { /* window gone */ }
+  return { ok: true };
 });
 
 function vaultFiles(dir: string): Array<{ rel: string; size: number; mtime: number }> {

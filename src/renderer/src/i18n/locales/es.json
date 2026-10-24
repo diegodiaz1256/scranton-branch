@@ -2197,6 +2197,27 @@
       "apiAccessBody": "Lo máximo que puede hacer cualquier agente con cada API, y qué agentes la tienen. Un rol puede bajarlo, nunca subirlo. La app comprueba cada petición.",
       "apiReadMeans": "Solo lectura: peticiones GET y búsquedas (JQL de Jira, búsqueda de Notion, consultas GraphQL). Se rechaza todo lo que cambiaría datos."
     },
+    "signoff": {
+      "title_one": "Esperando tu visto bueno ({{count}})",
+      "title_other": "Esperando tu visto bueno ({{count}})",
+      "body": "Los custodios de conexiones críticas no pueden enviar nada por su cuenta. Esto es lo que quieren enviar, ya redactado por la app: apruébalo, edítalo antes o recházalo con un motivo que leerán.",
+      "toAgent": "mensaje para {{to}}",
+      "toResearch": "archivo para los entregables: research/{{file}}",
+      "redacted": "La app ha redactado: {{what}}.",
+      "nothingRedacted": "La app no encontró nada que redactar.",
+      "approve": "Aprobar y enviar",
+      "approveEdited": "Enviar mi versión",
+      "edit": "Editar",
+      "reject": "Rechazar",
+      "rejectSend": "Rechazar con este motivo",
+      "reasonPlaceholder": "Por qué no (el custodio lo leerá)",
+      "kind_email": "correo(s)",
+      "kind_phone": "teléfono(s)",
+      "kind_secret": "credencial(es)",
+      "kind_url": "enlace(s)",
+      "kind_name": "nombre(s)",
+      "kind_quote": "cita(s) larga(s)"
+    },
     "env": {
       "step1": "Las variables normales llegan a todos los agentes",
       "step1Body": "NODE_ENV, API_BASE_URL… cualquier cosa que no sea secreta. Los agentes las ven en su entorno, como cualquier otra variable.",
