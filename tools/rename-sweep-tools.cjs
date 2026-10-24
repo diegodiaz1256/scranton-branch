@@ -30,7 +30,6 @@ const EXT = /\.(ts|tsx|cjs|js|json|md)$/;
 const KEEP = new Set([
   'src/main/agentBinAliases.ts', // the alias table
   'test/sb-agent-tools.test.cjs', // tests both names on purpose
-  'test/md-api.test.cjs', // keeps covering the md-api alias with MD_* env
   'tools/rename-sweep-tools.cjs',
 ]);
 
