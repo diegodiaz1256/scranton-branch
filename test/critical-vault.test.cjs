@@ -77,7 +77,8 @@ test('guard: another agent may not read, list, grep or write the vault, in any s
   for (const [tool, input] of refused) {
     const v = guardToolCall(tool, input, other, '/home/u');
     assert.ok(v && v.deny, `${tool} ${JSON.stringify(input)}`);
-    assert.match(v.reason, /confidential material/);
+    // No custodian named for the folder: it is the vaults', not for agents.
+    assert.match(v.reason, /reserved for the office's confidential vaults/);
   }
   assert.equal(guardToolCall('Read', { file_path: '/home/u/office/hive/research/a.md' }, other, '/home/u'), null);
   assert.equal(guardToolCall('Bash', { command: 'grep -r confidential src/' }, other, '/home/u'), null, 'the word alone is not the folder');

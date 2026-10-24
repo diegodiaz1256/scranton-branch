@@ -15,8 +15,10 @@
  *   `bash -c`, `cmd /c`, `powershell -Command` (encoded too) and `wsl`, and
  *   one-liners in python/node/perl/ruby/php (`-c`/`-e`, heredocs) that write
  *   to or delete a path outside, or start git when git is off.
- *   What it cannot read is a script in a file (`python build.py`) or a path
- *   built at run time: it is a fence, not a jail.
+ *   A path code builds from the agent's home, temp folder or a known
+ *   environment variable (`process.env.TMPDIR + "/x"`) is checked as the
+ *   place it is. What it cannot read is a script in a file (`python build.py`)
+ *   or a path built from anything else at run time: it is a fence, not a jail.
  */
 
 import { writtenPathsOf } from './agentSteps';
@@ -37,6 +39,19 @@ export interface GuardPolicy {
    *  another agent's confidential vault (criticalConnections.ts). Any tool
    *  call or command that names a path in one is refused. */
   deny?: string[];
+  /** Who holds each `deny` folder (keyed as spelled in `deny`): the custodian
+   *  agents a refused agent may ask. A folder with none (the vaults' folder
+   *  when no critical connection has a custodian) is not for agents at all. */
+  denyOwners?: Record<string, string[]>;
+  /** The WSL distro the agent runs in (a WSL floor), else absent. Refusals
+   *  name its folders as the agent sees them (/home/…), not by the share
+   *  path (\\wsl.localhost\…) the app records them with. */
+  distro?: string;
+  /** The agent's own values for the environment variables code builds a path
+   *  from (TMPDIR, TEMP, TMP, CLAUDE_CODE_TMPDIR), as its shell has them (on a
+   *  WSL floor, the distro's). `process.env.TMPDIR + "/x"` or `$TMPDIR/x` is
+   *  then checked as the place it is. HOME and USERPROFILE are `home`. */
+  vars?: Record<string, string>;
   /** Said instead of the usual "you work in…" when a write is refused (a
    *  custodian is told how its things leave: through the human's sign-off). */
   fenceHint?: string;
@@ -100,6 +115,25 @@ export function normPath(p: string): string {
   }
   const joined = (s.startsWith('//') ? '//' : '/') + out.join('/');
   return isDrive ? joined.toLowerCase() : joined;
+}
+
+/** A path as an agent in `distro` names it (the same mapping as main's
+ *  wsl.ts toLinuxPath): that distro's share path as its Linux path, a drive
+ *  path as /mnt/<drive>/…, anything else as given. No distro: as given. */
+export function pathForAgent(p: string, distro?: string): string {
+  if (!distro) return p;
+  const t = p.trim();
+  const unc = /^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/]([^\\/]+)([\\/].*)?$/i.exec(t);
+  if (unc) {
+    if (unc[1].toLowerCase() !== distro.toLowerCase()) return t;
+    return (unc[2] ?? '/').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/(.)\/$/, '$1');
+  }
+  const d = /^([A-Za-z]):[\\/]?(.*)$/.exec(t);
+  if (d) {
+    const rest = d[2].replace(/\\/g, '/').replace(/\/+$/, '');
+    return `/mnt/${d[1].toLowerCase()}${rest ? `/${rest}` : ''}`;
+  }
+  return t;
 }
 
 /** Absolute: /x, C:\x, C:/x, ~/x, \\server\x. */
@@ -277,7 +311,9 @@ function inlineCode(name: string, args: string[]): string | null {
 
 /** Calls that change files, across python/node/perl/ruby/php. */
 const CODE_WRITES = new RegExp([
-  String.raw`open\s*\([^)]*,\s*(?:mode\s*=\s*)?['"][^'"]*[wax+]`,
+  // The file argument may hold calls of its own (`open(os.path.expanduser('~')
+  // + '/x', 'w')`): up to two levels of parentheses before the mode.
+  String.raw`open\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*?,\s*(?:mode\s*=\s*)?['"][^'"]*[wax+]`,
   String.raw`\.(?:write_text|write_bytes|unlink|rmdir|mkdir|touch|rename|replace|symlink_to)\s*\(`,
   String.raw`\bos\.(?:remove|unlink|rename|replace|makedirs|mkdir|rmdir|removedirs|chmod|symlink|link)\b`,
   String.raw`\bshutil\.`,
@@ -296,12 +332,21 @@ const BACKTICK_RUNS = new Set(['perl', 'ruby', 'php']);
 /** "git" as a program name inside code: a string or argv item of its own. */
 const CODE_GIT = /(?:^|["'`\s[(,])git(?:\.exe)?(?=["'`\s,\])]|$)/;
 
-/** String literals in code that look like paths (absolute, ~, or climbing out). */
-function codePaths(code: string): string[] {
-  const out: string[] = [];
+/** String literals in code that look like paths (absolute, ~, or climbing out).
+ *  `built`: the literal is joined with `+` to something else
+ *  (`homedir()+'/x'`), so it is a piece of the path, not the path.
+ *  `start`: what the code before that `+` is, when it is one the guard knows
+ *  (see startOf); the path is then `start` + the literal. */
+function codePaths(code: string): Array<{ path: string; built: boolean; start?: CodeStart }> {
+  const out: Array<{ path: string; built: boolean; start?: CodeStart }> = [];
   for (const m of code.matchAll(/(["'`])((?:\\.|(?!\1)[^\\\n])*)\1/g)) {
     const s = m[2].replace(/\\\\/g, '\\');
-    if (/^(?:[a-zA-Z]:[\\/]|\/|~[\\/]|\.\.[\\/])/.test(s)) out.push(s);
+    if (!/^(?:[a-zA-Z]:[\\/]|\/|~[\\/]|\.\.[\\/])/.test(s)) continue;
+    const at = m.index ?? 0;
+    const before = /\+\s*$/.exec(code.slice(0, at));
+    const built = !!before || /^\s*\+/.test(code.slice(at + m[0].length));
+    const start = before ? startOf(code.slice(0, at - before[0].length)) : undefined;
+    out.push({ path: s, built, ...(start ? { start } : {}) });
   }
   return out;
 }
@@ -388,6 +433,41 @@ export function callWrittenFiles(tool: string | undefined, input: unknown, cwd?:
   return [...new Set(paths.map(abs).filter((f): f is string => !!f))].slice(0, 50);
 }
 
+/** Where a path built at run time starts: the agent's home, its temp folder,
+ *  or an environment variable by name. */
+type CodeStart = { home: true } | { tmp: true } | { env: string };
+const VAR = String.raw`([A-Za-z_][A-Za-z0-9_]*)`;
+const Q = `['"]`;
+/** Code reading an environment variable (one capture: its name), across
+ *  node/deno/bun, python, perl, ruby and php. */
+const ENV_READS = [
+  String.raw`process\.env\.${VAR}`,
+  String.raw`process\.env\[\s*${Q}${VAR}${Q}\s*\]`,
+  String.raw`Bun\.env\.${VAR}`,
+  String.raw`Deno\.env\.get\(\s*${Q}${VAR}${Q}\s*\)`,
+  String.raw`os\.environ\[\s*${Q}${VAR}${Q}\s*\]`,
+  String.raw`os\.(?:environ\.get|getenv)\(\s*${Q}${VAR}${Q}\s*(?:,\s*${Q}[^'"]*${Q}\s*)?\)`,
+  String.raw`\$ENV\{\s*${Q}?${VAR}${Q}?\s*\}`,
+  String.raw`ENV\[\s*${Q}${VAR}${Q}\s*\]`,
+  String.raw`ENV\.fetch\(\s*${Q}${VAR}${Q}\s*\)`,
+  String.raw`getenv\(\s*${Q}${VAR}${Q}\s*\)`
+].map((s) => new RegExp(String.raw`(?<![\w$])${s}\s*$`));
+/** Code naming the agent's home folder. */
+const HOME_READS = new RegExp(String.raw`(?<![\w$])(?:homedir\(\s*\)|expanduser\(\s*${Q}~${Q}\s*\)|Path\.home\(\s*\)|str\(\s*Path\.home\(\s*\)\s*\)|Dir\.home(?:\(\s*\))?|File\.expand_path\(\s*${Q}~${Q}\s*\))\s*$`);
+/** Code naming the temp folder. */
+const TMP_READS = new RegExp(String.raw`(?<![\w$])(?:tmpdir\(\s*\)|tempfile\.gettempdir\(\s*\)|Dir\.tmpdir(?:\(\s*\))?|sys_get_temp_dir\(\s*\))\s*$`);
+
+/** What the code just before a `+` starts a path from, if the guard knows it. */
+function startOf(before: string): CodeStart | undefined {
+  if (HOME_READS.test(before)) return { home: true };
+  if (TMP_READS.test(before)) return { tmp: true };
+  for (const re of ENV_READS) {
+    const m = re.exec(before);
+    if (m) return { env: m[1] };
+  }
+  return undefined;
+}
+
 /** Heredoc bodies fed to a program on the command line (`python - <<'EOF' … EOF`). */
 function heredocs(cmd: string): Array<{ program: string; body: string }> {
   const out: Array<{ program: string; body: string }> = [];
@@ -414,10 +494,34 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
   const inp = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
   /** Where `p` points from `base`, or null for a variable or substitution
    *  (cannot know where it points). */
+  /** The agent's value of an environment variable the guard knows, or null. */
+  const varValue = (name: string): string | null => {
+    const n = name.toUpperCase();
+    if (n === 'HOME' || n === 'USERPROFILE') return home || '~';
+    const vars = policy.vars ?? {};
+    const hit = Object.keys(vars).find((k) => k.toUpperCase() === n);
+    return hit && vars[hit] ? vars[hit] : null;
+  };
+  /** A value with a leading `$VAR`, `${VAR}`, `$env:VAR` or `%VAR%` the guard
+   *  knows spelled out; null when it starts with one it does not know. */
+  const expand = (raw: string): string | null => {
+    const m = /^(?:\$\{(\w+)\}|\$env:(\w+)|\$(\w+)|%(\w+)%)/i.exec(raw);
+    if (!m) return /%[A-Za-z_]+%|^\$/.test(raw) ? null : raw;
+    const v = varValue(m[1] ?? m[2] ?? m[3] ?? m[4]);
+    const rest = raw.slice(m[0].length);
+    return v === null || /%[A-Za-z_]+%|\$/.test(rest) ? null : v + rest;
+  };
   const resolve = (p: string, base: string): string | null => {
-    const raw = p.trim().replace(/^["']|["']$/g, '');
-    if (/^\$|%[A-Za-z_]+%/.test(raw) && !/^\$(?:HOME|env:USERPROFILE)\b/i.test(raw)) return null;
-    return resolveFor(raw.replace(/^\$(?:HOME|env:USERPROFILE)/i, '~'), base, home);
+    const raw = expand(p.trim().replace(/^["']|["']$/g, ''));
+    return raw === null ? null : resolveFor(raw, base, home);
+  };
+  /** Where a path built in code from `start` + `piece` lands, or null. */
+  const builtPath = (start: CodeStart, piece: string): string | null => {
+    const from = 'home' in start ? (home || null) : 'tmp' in start ? (varValue('TMPDIR') ?? varValue('TEMP')) : varValue(start.env);
+    if (!from) return null;
+    // Spelled with the base's separators, so a refusal reads as one path.
+    const tail = from.includes('\\') && !from.includes('/') ? piece.replace(/\//g, '\\') : piece;
+    return from.replace(/[\\/]+$/, '') + tail;
   };
   const outside = (p: string, base = start): boolean => {
     const raw = p.trim().replace(/^["']|["']$/g, '');
@@ -435,18 +539,33 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
   };
   /** Why writing `p` from `base` is refused, or null. */
   const writeRefusal = (p: string, base = start): GuardVerdict | null => {
-    if (isControl(p, base)) return { deny: true, reason: controlReason(p) };
+    if (isControl(p, base)) return { deny: true, reason: controlReason(shown(p)) };
     if (policy.contained && outside(p, base)) return { deny: true, reason: fenceReason(p) };
     return null;
   };
+  /** A path in a refusal, as the agent names it (Linux paths on a WSL floor). */
+  const shown = (p: string) => pathForAgent(p, policy.distro);
   // A denied folder (another agent's confidential vault): reading counts too.
   if (policy.deny?.length) {
-    const hit = deniedPath(tool, inp, policy, home);
-    if (hit) return { deny: true, reason: `Refused: ${hit} is confidential material only its custodian agent and the human may open. Ask the custodian through the hive (your outbox) for what you need.` };
+    const hit = deniedHit(tool, inp, policy, home);
+    if (hit) {
+      // The word as typed when it is a full path, else the folder it reached.
+      const named = shown(isAbsolute(hit.path.trim()) ? hit.path : hit.dir);
+      const owners = (policy.denyOwners?.[hit.dir] ?? []).filter(Boolean);
+      return {
+        deny: true,
+        reason: owners.length
+          ? `Refused: ${named} is confidential material only its custodian (${owners.join(', ')}) and the human may open. Ask ${owners.length === 1 ? owners[0] : 'its custodian'} through the hive (your outbox) for what you need.`
+          : `Refused: ${named} is reserved for the office's confidential vaults; it is not for agents. Leave it alone; if the job needs something in it, tell the human.`
+      };
+    }
   }
-  const fenceReason = (p: string) => (policy.fenceHint
-    ? `Refused: ${p} is outside your folders. ${policy.fenceHint}`
-    : `Refused: ${p} is outside your folders. You work in ${policy.cwd} (and your hive folder); if the job needs another place, say so to the orchestrator or the human.`);
+  const fenceTail = () => (policy.fenceHint
+    ? policy.fenceHint
+    : `You work in ${shown(policy.cwd)} (and your hive folder); if the job needs another place, say so to the orchestrator or the human.`);
+  const fenceReason = (p: string) => `Refused: ${shown(p)} is outside your folders. ${fenceTail()}`;
+  /** A path code builds at run time: the guard saw only a piece of it. */
+  const builtReason = (piece: string) => `Refused: this code writes to a path outside your folders (one it builds at run time with "${shown(piece)}"; the guard cannot tell the whole path). ${fenceTail()}`;
 
   // Files a tool writes, in every CLI's spelling (Write/Edit, write_to_file,
   // apply_patch...): the same reading the Deliverables use.
@@ -463,7 +582,13 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
     const runs = CODE_RUNS.test(code) || (BACKTICK_RUNS.has(program) && code.includes('`'));
     if (!policy.git && runs && CODE_GIT.test(code)) return gitOff;
     if (!(policy.contained || controls.length) || !CODE_WRITES.test(code)) return null;
-    for (const p of codePaths(code)) { const v = writeRefusal(p, base); if (v) return v; }
+    for (const p of codePaths(code)) {
+      // Built from a start the guard knows (TMPDIR, the home…): the whole path.
+      const whole = p.start ? builtPath(p.start, p.path) : null;
+      if (whole !== null) { const v = writeRefusal(whole, base); if (v) return v; continue; }
+      if (isControl(p.path, base)) return { deny: true, reason: controlReason(shown(p.path)) };
+      if (policy.contained && outside(p.path, base)) return { deny: true, reason: p.built ? builtReason(p.path) : fenceReason(p.path) };
+    }
     return null;
   }
 
@@ -516,7 +641,7 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
       const changed = prog.name === 'mv' || prog.name === 'move' || prog.name === 'move-item' || prog.name === 'mi' || prog.name === 'ln'
         ? pathArgs(prog.args) : writtenPaths(prog.name, prog.args);
       for (const a of writtenPaths(prog.name, prog.args)) { const v = writeRefusal(a, here); if (v) return v; }
-      for (const a of changed) if (isControl(a, here)) return { deny: true, reason: controlReason(a) };
+      for (const a of changed) if (isControl(a, here)) return { deny: true, reason: controlReason(shown(a)) };
     }
     for (const t of redirectTargets(words)) { const v = writeRefusal(t, here); if (v) return v; }
   }
@@ -533,13 +658,23 @@ const PATH_INPUT_KEYS = ['file_path', 'filePath', 'path', 'notebook_path', 'abso
  *  path glued to other text, is caught). A fence for the honest mistake and
  *  the obvious attempt; the OS sandbox's denyRead is the wall. */
 export function deniedPath(tool: string, input: Record<string, unknown>, policy: GuardPolicy, home = ''): string | null {
+  return deniedHit(tool, input, policy, home)?.path ?? null;
+}
+
+/** deniedPath, with the `deny` folder it falls in (as spelled in the policy). */
+function deniedHit(tool: string, input: Record<string, unknown>, policy: GuardPolicy, home = ''): { path: string; dir: string } | null {
   const deny = (policy.deny ?? []).filter(Boolean);
   if (!deny.length) return null;
-  const hits = (p: string): boolean => {
+  const folderOf = (p: string): string | undefined => {
     const raw = p.trim().replace(/^["']|["']$/g, '');
-    if (!raw || /^\$|%[A-Za-z_]+%/.test(raw)) return false;
+    if (!raw || /^\$|%[A-Za-z_]+%/.test(raw)) return undefined;
     const abs = resolveFor(raw, policy.cwd, home || policy.home || '');
-    return deny.some((d) => within(abs, d));
+    // The innermost folder: a vault inside the vaults' folder names its own custodian.
+    return deny.filter((d) => within(abs, d)).sort((a, b) => normPath(b).length - normPath(a).length)[0];
+  };
+  const hits = (p: string): { path: string; dir: string } | null => {
+    const dir = folderOf(p);
+    return dir ? { path: p, dir } : null;
   };
   const named: string[] = [];
   for (const k of PATH_INPUT_KEYS) {
@@ -549,16 +684,16 @@ export function deniedPath(tool: string, input: Record<string, unknown>, policy:
   }
   if (Array.isArray(input.paths)) for (const x of input.paths) if (typeof x === 'string') named.push(x);
   named.push(...writtenPathsOf(tool, input));
-  for (const p of named) if (hits(p)) return p;
+  for (const p of named) { const h = hits(p); if (h) return h; }
   const cmd = typeof input.command === 'string' ? input.command : Array.isArray(input.command) ? (input.command as unknown[]).join(' ') : typeof input.cmd === 'string' ? input.cmd : '';
   if (!cmd) return null;
-  for (const words of splitCommands(cmd)) for (const w of words) for (const part of w.split(/[=,;]/)) if (hits(part)) return part;
+  for (const words of splitCommands(cmd)) for (const w of words) for (const part of w.split(/[=,;]/)) { const h = hits(part); if (h) return h; }
   // The folder spelled inside the text (quotes, globs, another shell's syntax).
   const flat = cmd.replace(/\\/g, '/').toLowerCase();
-  for (const d of deny) {
+  for (const d of [...deny].sort((a, b) => normPath(b).length - normPath(a).length)) {
     const n = normPath(d).toLowerCase();
     const tail = n.split('/').slice(-2).join('/');
-    if (flat.includes(n) || (tail.includes('/') && flat.includes(tail))) return d;
+    if (flat.includes(n) || (tail.includes('/') && flat.includes(tail))) return { path: d, dir: d };
   }
   return null;
 }

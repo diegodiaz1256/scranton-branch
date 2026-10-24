@@ -1132,6 +1132,9 @@ export class HiveManager {
        *  vaults. Refused by the path guard, hidden by the OS sandbox
        *  (denyRead) and by Claude Code's permission rules. */
       denyDirs?: string[];
+      /** The custodian agents behind each denyDirs folder, named when the
+       *  guard refuses one (none: the folder is not for agents at all). */
+      denyOwners?: Record<string, string[]>;
       /** The custodian of a critical connection, locked down: it writes only
        *  its own hive folder and its vaults (path guard and OS sandbox), its
        *  shell reaches no network, its folder stays out of the hive's history,
@@ -1299,9 +1302,13 @@ export class HiveManager {
       git: opts.lockdown ? false : gitAllowed(opts.mcpDefaults, opts.mcpGrant),
       contained: opts.lockdown ? true : !opts.roam,
       ...(opts.lockdown ? { fenceHint: `As the custodian of a critical connection you write only in your own folder (${this.forAgent(dir)}) and your confidential vault. Mail goes through your outbox and files for research/ through ${this.forAgent(opts.lockdown.outgoing)}; the human signs both off before anything leaves.` } : {}),
-      ...(opts.denyDirs?.length ? { deny: opts.denyDirs } : {}),
+      ...(opts.denyDirs?.length ? { deny: opts.denyDirs, ...(opts.denyOwners ? { denyOwners: opts.denyOwners } : {}) } : {}),
       controls: this.controlPaths(root, meta.cwd),
-      ...(wslHome ? { home: wslHome } : {})
+      ...(wslHome ? { home: wslHome } : {}),
+      ...(wslFloor ? { distro: wslFloor.distro } : {}),
+      // The temp folder its code builds paths from (process.env.TMPDIR + "/x").
+      // In the distro: /tmp (Claude's sandboxed shell sets /tmp/claude-<uid>).
+      vars: wslFloor ? { TMPDIR: '/tmp' } : { TMPDIR: tmpdir(), TEMP: tmpdir(), TMP: tmpdir() }
     });
     // What its hook decides alone when the office does not answer
     // (hookOffline.ts): its folders, the controls, and whether an OS sandbox
@@ -1952,6 +1959,22 @@ export class HiveManager {
   /** The PreToolUse guard for an agent spawned in this run (undefined: none yet). */
   guardFor(agentId: string): GuardPolicy | undefined {
     return this.guardPolicies.get(agentId);
+  }
+
+  /** The temp folder an agent was handed at spawn (a WSL agent's
+   *  CLAUDE_CODE_TMPDIR, made by wsl.ts): one of its folders (Claude keeps its
+   *  scratchpad there). TMPDIR stays: Claude's sandboxed shell sets it to
+   *  /tmp/claude-<uid>, inside /tmp. */
+  noteAgentTmp(agentId: string, dir: string): void {
+    const g = this.guardPolicies.get(agentId);
+    if (!g || !dir) return;
+    // Only where the temp dir is already its own (a locked-down custodian's is not).
+    const tmpOk = g.roots.some((r) => r === '/tmp');
+    this.guardPolicies.set(agentId, {
+      ...g,
+      roots: tmpOk && !g.roots.includes(dir) ? [...g.roots, dir] : g.roots,
+      vars: { ...(g.vars ?? {}), CLAUDE_CODE_TMPDIR: dir }
+    });
   }
 
   /** Git and "outside its folders" changed in Capabilities: the running
