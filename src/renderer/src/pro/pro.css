@@ -221,6 +221,10 @@ button.pro-card:hover { border-color: var(--pro-line-strong); }
 .pro-switch button { font: 600 11px var(--cth-font-ui); padding: 4px 9px; border: none; background: var(--cth-paper-100); color: var(--cth-ink-700); cursor: pointer; }
 .pro-switch button[aria-pressed='true'] { background: var(--cth-lemon); color: var(--cth-ink-900); }
 :root[data-cth-theme='dark'] .pro-switch button[aria-pressed='true'] { color: #1A1320; }
+/* A long Markdown deliverable, rendered in pieces (DeliverablesView): one page, not one per piece. */
+.pro-md-pieces > .cth-md-preview { padding-top: 0; padding-bottom: 0; }
+.pro-md-pieces > .cth-md-preview:first-child { padding-top: 16px; }
+.pro-md-pieces > .cth-md-preview:last-of-type { padding-bottom: 32px; }
 
 @media (max-width: 900px) {
   .pro-board { grid-template-columns: repeat(2, minmax(140px, 1fr)); }

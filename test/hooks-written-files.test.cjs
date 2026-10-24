@@ -75,3 +75,25 @@ test('the history the Deliverables list reads carries them too; reads carry none
   assert.deepEqual(steps[1].files, ['/abs/y.md']);
   assert.equal(steps[1].detail, '/abs/y.md', 'the step says which file, not its content');
 });
+
+// Live on a WSL floor: Jim appended to a report with `echo … >> file` (Claude's
+// Bash), nothing recorded the write, and the app's batched commit took it in
+// as "App": the history and "edited by" kept naming the agent before him.
+test('a shell write counts: Claude Bash appending to a report (WSL Linux path)', async (t) => {
+  const { fire, seen } = await floor(t, 'claude');
+  await fire({ hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd: '/home/u/offices/x', tool_input: { command: 'echo "- Jim: final pass" >> /home/u/offices/x/hive/research/hist/notes.md' } });
+  assert.deepEqual(files(seen), ['/home/u/offices/x/hive/research/hist/notes.md']);
+});
+
+test('a WSL agent\'s relative writes stay Linux paths under its Linux folder', async (t) => {
+  const { fire, seen } = await floor(t, 'claude');
+  await fire({ hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd: '/home/u/offices/x', tool_input: { command: 'cd hive && cat > research/a.md <<\'EOF\'\n# A\nEOF' } });
+  await fire({ hook_event_name: 'PreToolUse', tool_name: 'apply_patch', cwd: '/home/u/offices/x', tool_input: { command: ['apply_patch', '*** Begin Patch\n*** Update File: hive/research/b.md\n@@\n-a\n+b\n*** End Patch'] } });
+  assert.deepEqual(files(seen), ['/home/u/offices/x/hive/research/a.md', '/home/u/offices/x/hive/research/b.md']);
+});
+
+test('shell commands that write nothing carry no files', async (t) => {
+  const { fire, seen } = await floor(t, 'claude');
+  await fire({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'od -c research/a.md | tail -5 2>/dev/null; mkdir -p research/new; ls > /dev/null 2>&1' } });
+  assert.deepEqual(files(seen), []);
+});

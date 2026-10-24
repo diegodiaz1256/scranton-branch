@@ -1078,10 +1078,14 @@ const api = {
 
   /** What an agent has done lately (hook events with what each tool was asked), oldest first. */
   /** Deliverables: the office's research/ folder (newest first) and what each agent wrote this session. */
-  deliverablesList: (): Promise<{ root: string | null; dir: string | null; distro: string | null; files: Array<{ rel: string; abs: string; size: number; mtime: number }>; written: Array<{ path: string; ts: number; created: boolean; agentId: string; name: string }>; links: Array<{ path: string; taskId: string; agentId: string; ts: number }>; hidden?: string[]; authors?: Record<string, { authors: string[]; last: string; lastTs: string }> }> =>
+  deliverablesList: (): Promise<{ root: string | null; dir: string | null; distro: string | null; files: Array<{ rel: string; abs: string; size: number; mtime: number }>; written: Array<{ path: string; ts: number; created: boolean; agentId: string; name: string }>; links: Array<{ path: string; taskId: string; agentId: string; ts: number }>; elsewhere?: Array<{ path: string; ts: number; created: boolean; agentId: string; name: string; size: number; mtime: number }>; total?: number; truncated?: boolean; hidden?: string[]; authors?: Record<string, { authors: string[]; last: string; lastTs: string }> }> =>
     ipcRenderer.invoke('deliverables:list'),
   /** Open a deliverable in its default program (document types only). */
   deliverablesOpenExternal: (path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('deliverables:openExternal', path),
+  /** Where an HTML deliverable renders from (a sandboxed md-dlv:// URL), or null. */
+  deliverablesFileUrl: (path: string): Promise<string | null> => ipcRenderer.invoke('deliverables:fileUrl', path),
+  /** A clicked terminal path as the deliverable it is (spelled as the list spells it), or null. */
+  deliverablesMatch: (path: string): Promise<string | null> => ipcRenderer.invoke('deliverables:match', path),
   /** A deliverable's committed versions, newest first (author = the agent). */
   deliverablesHistory: (path: string): Promise<Array<{ hash: string; ts: string; author: string; subject: string }>> => ipcRenderer.invoke('deliverables:history', path),
   /** A deliverable's text as it was in one of those versions. */

@@ -34,6 +34,9 @@ interface ProState {
   /** Deliverables opened from a task: show that task's only (null = all). Not persisted. */
   focusTask: string | null;
   setFocusTask: (taskId: string | null) => void;
+  /** A file to open in Deliverables (a path clicked in a terminal); the view clears it. Not persisted. */
+  focusDeliverable: string | null;
+  setFocusDeliverable: (path: string | null) => void;
 }
 
 export const useProStore = create<ProState>((set) => ({
@@ -48,5 +51,7 @@ export const useProStore = create<ProState>((set) => ({
     set({ view });
   },
   focusTask: null,
-  setFocusTask: (focusTask) => set({ focusTask })
+  setFocusTask: (focusTask) => set({ focusTask }),
+  focusDeliverable: null,
+  setFocusDeliverable: (focusDeliverable) => set({ focusDeliverable })
 }));

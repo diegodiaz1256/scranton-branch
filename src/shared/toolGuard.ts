@@ -306,6 +306,88 @@ function codePaths(code: string): string[] {
   return out;
 }
 
+/** Commands in WRITES that change no file's content (folders, permissions). */
+const NOT_CONTENT = new Set(['mkdir', 'md', 'rmdir', 'rd', 'chmod', 'chown']);
+
+/**
+ * The files a shell command line writes, as spelled (relative ones joined
+ * onto a `cd` before them): redirects, tee, copies and moves, touch, deletes,
+ * `sed -i`, and the same inside `bash -c` or a heredoc fed to a shell. For the
+ * Deliverables' history: a report appended with `echo … >> research/x.md` is
+ * that agent's change. Variables and sinks (/dev/null) are left out.
+ */
+export function shellWrittenPaths(cmd: string, depth = 0): string[] {
+  if (depth > 3 || !cmd) return [];
+  const out: string[] = [];
+  for (const h of heredocs(cmd)) {
+    if (SHELLS.has(h.program)) out.push(...shellWrittenPaths(h.body, depth + 1));
+    cmd = cmd.replace(h.body, '');
+  }
+  let dir = '';
+  const at = (p: string): string => {
+    const raw = p.trim().replace(/^["']|["']$/g, '');
+    if (!dir || /^(?:[A-Za-z]:[\\/]|[\\/]|~)/.test(raw)) return raw;
+    return `${dir.replace(/[\\/]+$/, '')}/${raw}`;
+  };
+  // A `cd` inside `( … )` moves only the rest of that subshell.
+  const outer: string[] = [];
+  let level = 0;
+  for (const { words, depth: sub } of splitShell(cmd)) {
+    for (; level < sub; level++) outer.push(dir);
+    for (; level > sub; level--) dir = outer.pop() ?? dir;
+    const prog = programOf(words);
+    if (!prog) continue;
+    if (MOVES.has(prog.name)) {
+      const t = prog.args.find((a) => !a.startsWith('-'));
+      dir = t ? at(t) : '~';
+      continue;
+    }
+    if (SHELLS.has(prog.name)) {
+      const inner = nestedCommand(prog.name, prog.args);
+      if (inner) out.push(...shellWrittenPaths(inner, depth + 1).map(at));
+    }
+    if (WRITES.has(prog.name) && !NOT_CONTENT.has(prog.name)) out.push(...writtenPaths(prog.name, prog.args).map(at));
+    // `sed -i 's/a/b/' f`, `perl -i -pe '…' f`: the script comes first.
+    if ((prog.name === 'sed' || prog.name === 'perl') && prog.args.some((a) => /^-[a-z]*i/.test(a) || a.startsWith('--in-place'))) {
+      out.push(...pathArgs(prog.args).slice(1).map(at));
+    }
+    out.push(...redirectTargets(words).map(at));
+  }
+  return [...new Set(out)].filter((p) => !!p && !p.startsWith('&') && !SINKS.has(p.toLowerCase()) && !/^\$|%[A-Za-z_]+%/.test(p));
+}
+
+/**
+ * Every file one tool call writes, made absolute against the folder it ran in:
+ * a write tool's path (any CLI) and, for a shell, what its command line writes.
+ * An agent inside WSL reports a Linux folder: its relative writes join with '/'
+ * and stay Linux paths (main maps them to \\wsl.localhost later); joined the
+ * Windows way they became `\home\…` and were lost. `~` and unknown folders drop.
+ */
+export function callWrittenFiles(tool: string | undefined, input: unknown, cwd?: string): string[] {
+  if (!tool || !input || typeof input !== 'object') return [];
+  const paths = writtenPathsOf(tool, input);
+  if (SHELL_TOOLS.has(tool)) {
+    const inp = input as Record<string, unknown>;
+    const cmd = typeof inp.command === 'string' ? inp.command : Array.isArray(inp.command) ? (inp.command as unknown[]).join(' ') : typeof inp.cmd === 'string' ? inp.cmd : '';
+    paths.push(...shellWrittenPaths(cmd));
+  }
+  const base = cwd?.trim().replace(/[\\/]+$/, '') ?? '';
+  const abs = (f: string): string | null => {
+    if (/^(?:[A-Za-z]:[\\/]|[\\/])/.test(f)) return f;
+    if (!base || f.startsWith('~')) return null;
+    const posix = base.startsWith('/');
+    const parts = [...base.split(posix ? '/' : /[\\/]/), ...f.split(/[\\/]/)];
+    const out: string[] = [];
+    for (const [i, part] of parts.entries()) {
+      if (part === '.' || (!part && i > 0 && !(base.startsWith('\\\\') && i < 2))) continue;
+      if (part === '..') { if (out.length > 1) out.pop(); continue; }
+      out.push(part);
+    }
+    return out.join(posix ? '/' : '\\');
+  };
+  return [...new Set(paths.map(abs).filter((f): f is string => !!f))].slice(0, 50);
+}
+
 /** Heredoc bodies fed to a program on the command line (`python - <<'EOF' … EOF`). */
 function heredocs(cmd: string): Array<{ program: string; body: string }> {
   const out: Array<{ program: string; body: string }> = [];

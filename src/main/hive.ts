@@ -104,6 +104,11 @@ export interface HiveMessage {
   requires_reply: boolean;
   needs_human: boolean;
   created_at: string;
+  /** The `id` the sending agent wrote in its outbox file, if any. The router
+   *  always assigns `id` itself (an agent-chosen one could collide with, and
+   *  overwrite, another message in the recipient's inbox); this keeps the
+   *  agent's own label for its threading. */
+  agent_id_hint?: string;
 }
 
 /** One hive message reshaped for the voice read-layer (`hive:messages`): the
@@ -2584,7 +2589,7 @@ export class HiveManager {
     // saying nothing, and COMMANDS.md documents it either way for the case where
     // the operator turns it on after god was already running.
     const spawnQueueLine = meta.isGod && this.orchestratorMaySpawn()
-      ? `SPAWNING A WORKER: you can start an ephemeral worker yourself by writing ONE JSON file into ${inRoot('spawn-requests')}/<id>.json. Required: \`objective\` (what the worker must do) and \`cwd\` (the repo it runs in). Optional: \`name\`, \`command\` (overrides the provider default; it must be an agent CLI — claude, codex, agy… — with no --settings/--mcp-config/--add-dir/-c/--config/--provider/--base-url flags, and \`cwd\` must be a registered repo, this office or an agent's folder, or the request is refused), \`provider\` (selects its default CLI when command is omitted), \`model\`, \`isolate\` (default true = its own git worktree), \`tokenCap\`, and \`slack\` ({channel, thread_ts}) to route its failures back to a thread. The harness polls that directory, spawns \`worker-<id>\`, and moves the request to \`spawn-requests/.done/\` on success or \`.failed/\` with a reason. This is the ONLY way you can spawn; a hire manifest under research/hires/ needs the human to confirm it in the UI, so it is not a route you can complete on your own. Reuse an existing agent first, as above — a worker is a fresh spend every time. A worker is archived when it sends its done; to let go of one you started that is no longer needed, write ${inRoot('archive-requests')}/<any-name>.json with {"id":"worker-<id>"} (only your own temps; the outcome comes back to your inbox).`
+      ? `SPAWNING A WORKER: you can start an ephemeral worker yourself by writing ONE JSON file into ${inRoot('spawn-requests')}/<id>.json. Required: \`objective\` (what the worker must do) and \`cwd\` (the repo it runs in). Optional: \`name\`, \`command\` (overrides the provider default; it must be an agent CLI — claude, codex, agy… — with no --settings/--mcp-config/--add-dir/-c/--config/--provider/--base-url flags, and \`cwd\` must be a registered repo, this office or an agent's folder, or the request is refused), \`provider\` (the engine: claude, codex, antigravity (agy), gemini, pi, opencode…; selects its default CLI when command is omitted), \`model\` (the engine's own id; pi and opencode take provider/model), \`isolate\` (default true = its own git worktree), \`tokenCap\`, and \`slack\` ({channel, thread_ts}) to route its failures back to a thread. Within seconds the harness spawns \`worker-<id>\`, puts the objective in its inbox, and moves the request to \`spawn-requests/.done/\` on success or \`.failed/\` with a reason; a refusal and the worker's done both reach your inbox, so do not sleep or poll for them. This is the ONLY way you can spawn; a hire manifest under research/hires/ needs the human to confirm it in the UI, so it is not a route you can complete on your own. Reuse an existing agent first, as above — a worker is a fresh spend every time. The app archives a worker when it sends its done (no archive request for that); to let go of one you started that is no longer needed and never sent its done, write ${inRoot('archive-requests')}/<any-name>.json with {"id":"worker-<id>"} (only your own temps; the outcome comes back to your inbox).`
       : '';
     const godLine = meta.isGod
       ? 'You are the GOD / ORCHESTRATOR of this hive — your job is to ORCHESTRATE, not to implement: maintain live situational awareness and delegate the work. (1) AWARENESS — always know what is going on: keep an accurate picture of every agent (active vs archived/idle), the task board, and all in-flight work; drain your inbox continually and triage every other agent\'s requests, answering clarifications so the team runs autonomously. (2) DELEGATE — decompose work and fan it out to the hive agents via their inboxes (route messages and assign owners; do not do their jobs); your own sub-agent tool is switched off — a helper started inside your session is invisible to the office, so "put an agent on it" always means an agent on the floor (an existing one, or a worker through spawn-requests); do NOT take on grunt implementation yourself. Stay aware of who is already on the floor and delegate OPPORTUNISTICALLY: BEFORE you spawn anything, CHECK THE LIVE ROSTER (active agents in registry.json + their state in fleet.json) and prefer routing to an EXISTING agent that fits — above all when the request names one ("ask Pam to…", "have Jim…"), route to that agent instead of reflexively creating a new one. Reuse an idle or already-running agent whose role matches; only spawn a fresh agent when no existing one is a sensible fit, and say that you checked. One capable owner beats a duplicate. (3) OWN ONLY THE IMPORTANT, high-leverage things — task decomposition, dispatch decisions, sign-offs, conflict resolution, branch integration, and final QA — and remain the sole scribe of board.md. You are otherwise fully autonomous — there is NO separate approval queue. For the genuinely critical (destructive actions, spending real money, scope changes, unresolvable conflicts), ask the human directly in your own session and let the tool-permission prompt gate the action; the human approves natively, including remotely from their phone via /remote-control. Keep the team unblocked. When you DISPATCH a task, write it as a 4-part contract so the agent can run autonomously: (1) OBJECTIVE — the concrete goal; (2) OUTPUT — the expected deliverable/format; (3) TOOLS — what to use or avoid, and any references to read instead of re-deriving; (4) BOUNDARIES — scope limits + the definition of done. Pass references (file paths, message ids, board sections), not pasted content — keep dispatches short.'
@@ -2998,6 +3003,23 @@ export class HiveManager {
     if (this.routerTimer) { clearInterval(this.routerTimer); this.routerTimer = null; }
   }
 
+  /** `${sender}\0${agent-chosen id}` → the id the router assigned, newest
+   *  last, so an `in_reply_to` naming an agent's own label still threads. */
+  private agentIds = new Map<string, string>();
+  private rememberAgentId(sender: string, hint: string, assigned: string): void {
+    const key = `${sender}\0${hint}`;
+    this.agentIds.delete(key);
+    this.agentIds.set(key, assigned);
+    if (this.agentIds.size > 2000) this.agentIds.delete(this.agentIds.keys().next().value as string);
+  }
+  /** The assigned id an `in_reply_to` means: the sender's own earlier label,
+   *  else a label the recipient used (seen as `agent_id_hint`), else as written
+   *  (normally already a router id, read from the agent's inbox). */
+  private threadRef(sender: string, to: string, ref: string): string {
+    const recipient = to === 'god' || to === 'human' ? (this.registry().godId ?? 'god') : to;
+    return this.agentIds.get(`${sender}\0${ref}`) ?? this.agentIds.get(`${recipient}\0${ref}`) ?? ref;
+  }
+
   routeOnce(): number {
     const root = this.root();
     if (!root) return 0;
@@ -3036,8 +3058,21 @@ export class HiveManager {
               repair: 'literal-line-break'
             });
           }
-          let msg = this.normalize(partial, id);
-          msg.from = id; // sender is authoritative — the owning directory
+          // id and from are the harness's (PROTOCOL.md): an agent-chosen id
+          // could collide with another message in the recipient's inbox and
+          // overwrite it, and an agent-chosen from could claim to be god or the
+          // human. The sender is the owner of the outbox; the id is minted here.
+          let msg = this.normalize({ ...partial, id: undefined }, id);
+          msg.from = id;
+          if (typeof partial.from === 'string' && partial.from !== id) {
+            this.appendLog({ kind: 'outbox-from-replaced', from: id, claimed: partial.from.slice(0, 128), id: msg.id });
+          }
+          if (msg.in_reply_to) msg.in_reply_to = this.threadRef(id, msg.to, msg.in_reply_to);
+          const hint = typeof partial.id === 'string' ? partial.id.trim().slice(0, 128) : '';
+          if (hint) {
+            msg.agent_id_hint = hint;
+            this.rememberAgentId(id, hint, msg.id);
+          }
           // What leaves a custodian is redacted first (criticalConnections.ts);
           // the archived copy is the redacted one, never the raw text.
           const out = this.outgoing(msg);
@@ -4052,8 +4087,8 @@ export class HiveManager {
             + 'them or spawn a replacement. The human flips it off when they are done. '
           : '')
         + (anyTemp
-          ? 'A `temp` is a worker you started through spawn-requests: it is archived when it sends its done; '
-            + `archive one whose job is over with ${join(root, 'archive-requests')}/<id>.json (see spawn.md). `
+          ? 'A `temp` is a worker you started through spawn-requests: the app archives it when it sends its done '
+            + `(nothing for you to do); only one you no longer need that never sent its done is yours to archive, with ${join(root, 'archive-requests')}/<id>.json (see spawn.md). `
           : '')
         + 'Route work to someone on this list before spawning anyone new.';
     } catch { return null; }

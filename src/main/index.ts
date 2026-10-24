@@ -12,7 +12,7 @@ import { claimOffice, officeHolder, releaseOffice } from './officeLock';
 // Headless (server) mode sets Chromium switches — must load before ready too.
 import { HEADLESS, HEADLESS_SETUP, SERVER } from './headless';
 import { APP_NAME } from '../shared/fork';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, protocol, screen, shell, Notification } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import * as http from 'node:http';
 import * as https from 'node:https';
@@ -36,6 +36,7 @@ import {
   modelForRole, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
 } from './config';
 import { listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde } from './fs';
+import { DELIVERABLE_SCHEME, DeliverableFiles } from './deliverableFiles';
 import { normalizeWeekly, weeklyDelayMs } from '../shared/weeklySchedule';
 import {
   getBranch, getStatus, getLog, getBranches, getAheadBehind, isRepo, getDiff, mainRepoRoot,
@@ -100,6 +101,7 @@ import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
 import { runsUnsandboxed, unsandboxedAgents, unsandboxRefusal } from '../shared/unsandboxed';
+import { ensureVaultRoot } from './vaultRoot';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
 import { redactConfidential, redactionTotal } from '../shared/confidentialRedact';
 import { cleanDeliverableName, decide, type Decision, type PendingItem } from '../shared/criticalSignoff';
@@ -119,7 +121,10 @@ import { PROVIDER_BACKENDS, backendForModel, providerKeyEnv } from '../shared/pr
 import { LIST_MODELS, SIGN_IN, authProviders, piOwnModels, cleanCustomProviders, effectiveModel, keyScope, piSettingsWithModel, customKeyEnv, modelsFromListing, opencodeProviders, parseModelList, piModelsJson, type ManagedEngine } from '../shared/engineModels';
 import { diffTasks, snapshotOf, type TaskEvent, type TaskSnapshot } from '../shared/taskHistory';
 import type { TaskEdit } from '../shared/taskEdit';
-import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, isInside, linkFor, writtenFiles, type DeliverableLink } from '../shared/deliverables';
+import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, deliverablePaths, isInside, linkFor, recordElsewhere, writtenFiles, type DeliverableLink, type ElsewhereWrite } from '../shared/deliverables';
+import { isDeliverableLike } from '../shared/deliverableOrganize';
+import { matchDeliverable } from '../shared/deliverableMatch';
+import { scanDeliverables } from './deliverableScan';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, hasPlaceholderHost, probeSpecFor } from '../shared/integrations';
 import { RosterStore } from './roster';
 import { buildWorkerLaunch, workerRequestProblem } from './workerLaunch';
@@ -161,7 +166,7 @@ import {
 import { makeSpawnGate } from './spawnGate';
 import { clearWorkerScratch } from './workerScratch';
 import { speak as speakAloud, stopSpeaking } from './speak';
-import { appendWorkLog, workLogLine, type WorkLogEntry } from './workLog';
+import { appendWorkLog, workerExitNotice, workLogLine, type WorkLogEntry } from './workLog';
 import { latestDone, archiveRequestProblem, legacyTemps } from './tempWorkers';
 import { FreezeMonitor, instrumentEvents, instrumentIpc, instrumentTimers, type FreezeEntry } from './freezeLog';
 
@@ -177,6 +182,18 @@ instrumentEvents(freezes);
 // Heartbeats from app-ready on: loading main's own code happens before any
 // window exists, so it is not a freeze anyone sees.
 void app.whenReady().then(() => freezes.start());
+
+// HTML deliverables render from md-dlv:// (deliverableFiles.ts). Standard, so a
+// page's relative links resolve beside it; registered before app-ready, as
+// Electron requires.
+protocol.registerSchemesAsPrivileged([{ scheme: DELIVERABLE_SCHEME, privileges: { standard: true, secure: true, stream: true } }]);
+const deliverableFiles = new DeliverableFiles();
+const servingSessions = new WeakSet<Electron.Session>();
+function serveDeliverables(ses: Electron.Session): void {
+  if (servingSessions.has(ses)) return;
+  servingSessions.add(ses);
+  ses.protocol.handle(DELIVERABLE_SCHEME, (req) => deliverableFiles.respond(req.url));
+}
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL;
 
@@ -1374,7 +1391,15 @@ ptyManager.setExitHandler((id, exitCode, info) => {
   { const owner = ptyToAgent.get(id); if (owner && hookServer.subagents.endFor(owner)) hookServer.onSubagentsChanged?.(); }
   // A temp whose process ended before it reported done (crash, refused start).
   const exitingWorker = workerByPty(id);
-  if (exitingWorker && !exitingWorker.releasing) logWork(exitingWorker, 'exited', { exitCode });
+  if (exitingWorker && !exitingWorker.releasing) {
+    logWork(exitingWorker, 'exited', { exitCode });
+    // Its job is nobody's now: the orchestrator hears it (unless the temp sent
+    // its done first and simply quit).
+    if (workerDoneAt(exitingWorker.workerId, exitingWorker.spawnedAt) === null) {
+      const notice = workerExitNotice(exitingWorker.workerId, exitCode, info?.tail);
+      informGod(notice.subject, notice.body, exitingWorker.slack);
+    }
+  }
   try {
     const dyingAgent = ptyToAgent.get(id);
     if (dyingAgent) {
@@ -3332,6 +3357,15 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
   // Capture the webContents once: after 'closed' the window is gone, but this
   // reference stays valid as the per-PTY ownership key.
   const wc = win.webContents;
+  // Each floor has its own session: each serves deliverables itself.
+  serveDeliverables(wc.session);
+  // A deliverable's page (an iframe in Deliverables) moves only inside its own
+  // folder; a web link in it opens in the browser instead of inside the app.
+  wc.on('will-frame-navigate', (e) => {
+    if (e.isMainFrame || !e.frame?.url.startsWith(`${DELIVERABLE_SCHEME}:`) || e.url.startsWith(`${DELIVERABLE_SCHEME}:`)) return;
+    e.preventDefault();
+    if (/^https?:\/\//i.test(e.url)) void shell.openExternal(e.url);
+  });
   // The title names the office, so floors tell apart in the taskbar and Task
   // Manager; the page's own <title> would overwrite it.
   win.on('page-title-updated', (e) => e.preventDefault());
@@ -5439,6 +5473,8 @@ async function prepareVaults(agentId: string, provider: string | undefined): Pro
   const others = hive.enabled() ? [...new Set(Object.values(map))].filter((id) => id && id !== agentId) : [];
   const theirs = others.flatMap((id) => { const d = hive.agentFolder(id); return [d, projectDir(d)]; });
   if (!root) return { own: [], deny: theirs, custodian };
+  // A real folder before anyone is denied it: see vaultRoot.ts.
+  try { if (!ensureVaultRoot(root)) console.error('[critical] vault root is not a folder:', root); } catch (e) { console.error('[critical] vault root', e); }
   const access = vaultAccess(map, custodian ? agentId : undefined);
   const own: string[] = [];
   for (const name of access.own) {
@@ -5688,6 +5724,20 @@ function readDeliverableLinks(): DeliverableLink[] {
     return Array.isArray(raw.links) ? raw.links.filter((l): l is DeliverableLink => !!l && typeof l.path === 'string' && typeof l.taskId === 'string') : [];
   } catch { return []; }
 }
+function readElsewhereWrites(root: string): ElsewhereWrite[] {
+  try {
+    const raw = JSON.parse(readFileSync(join(root, 'deliverableElsewhere.json'), 'utf8')) as { files?: unknown };
+    return Array.isArray(raw.files) ? raw.files.filter((f): f is ElsewhereWrite => !!f && typeof f.path === 'string' && typeof f.ts === 'number') : [];
+  } catch { return []; }
+}
+function recordElsewhereWrites(root: string, agentId: string, paths: string[], ts: number): void {
+  const before = readElsewhereWrites(root);
+  const name = hive.registry().agents?.[agentId]?.name ?? agentId;
+  const next = recordElsewhere(before, paths.map((path) => ({ path, agentId, name, ts, created: false })));
+  if (next === before) return;
+  try { writeFileSync(join(root, 'deliverableElsewhere.json'), JSON.stringify({ files: next }, null, 2)); }
+  catch (err) { console.error('[deliverables] could not record a file written elsewhere:', err); }
+}
 // Deliverables keep a history with an author: what an agent writes in
 // research/ is committed as that agent a few seconds later (several writes in
 // a row become one commit), so `git log` says who changed each file and when.
@@ -5717,7 +5767,12 @@ hookServer.onStep = (agentId, e) => {
   if (!root) return;
   const wsl = hive.wslRoot();
   const research = join(root, DELIVERABLES_DIR);
-  const paths = written.map((p) => (wsl ? fromLinuxPath(p, wsl.distro, () => distroHomeUnc(wsl.distro)) : p)).filter((p) => isInside(p, research));
+  const host = written.map((p) => (wsl ? fromLinuxPath(p, wsl.distro, () => distroHomeUnc(wsl.distro)) : p));
+  // Documents written anywhere else (the hive's own files aside) are kept too,
+  // so "written elsewhere" outlives the session.
+  const elsewhere = host.filter((p) => !isInside(p, root) && isDeliverableLike(p));
+  if (elsewhere.length) recordElsewhereWrites(root, agentId, elsewhere, e.ts ?? Date.now());
+  const paths = host.filter((p) => isInside(p, research));
   if (!paths.length) return;
   queueDeliverableCommit(agentId, root, paths);
   const taskId = currentTaskOf((hive.tasks() as { tasks?: Array<{ id: string; assignee?: string; status?: string; createdAt?: string }> }).tasks ?? [], agentId);
@@ -5731,31 +5786,18 @@ hookServer.onStep = (agentId, e) => {
 };
 
 // Deliverables (shared/deliverables.ts): the office's research/ folder, newest
-// first, and the files each agent wrote this session (from its tool calls).
+// first, the files each agent wrote this session (from its tool calls), and the
+// documents agents wrote elsewhere (kept in the hive across restarts).
 // Metadata only; the viewer reads a file through the root-confined fs IPC.
 ipcMain.handle('deliverables:list', async () => {
   const root = hive.enabled() ? hive.root() : null;
-  if (!root) return { root: null, dir: null, distro: null, files: [], written: [], links: [] };
+  if (!root) return { root: null, dir: null, distro: null, files: [], written: [], links: [], elsewhere: [], total: 0, truncated: false };
   // A WSL floor: agents write Linux paths; the app opens them through \\wsl.localhost.
   const wsl = hive.wslRoot();
   const toHost = (p: string): string => (wsl ? fromLinuxPath(p, wsl.distro, () => distroHomeUnc(wsl.distro)) : p);
-  const { readdir, stat } = await import('node:fs/promises');
+  const { stat } = await import('node:fs/promises');
   const dir = join(root, DELIVERABLES_DIR);
-  const files: Array<{ rel: string; abs: string; size: number; mtime: number }> = [];
-  const walk = async (abs: string, rel: string, depth: number): Promise<void> => {
-    if (depth > 4 || files.length >= 500) return;
-    let entries: import('node:fs').Dirent[] = [];
-    try { entries = await readdir(abs, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (e.name.startsWith('.') || (depth === 0 && e.name === 'hires')) continue;
-      const a = join(abs, e.name);
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) await walk(a, r, depth + 1);
-      else if (e.isFile()) { try { const s = await stat(a); files.push({ rel: r, abs: a, size: s.size, mtime: s.mtimeMs }); } catch { /* gone */ } }
-    }
-  };
-  await walk(dir, '', 0);
-  files.sort((a, b) => b.mtime - a.mtime);
+  const { files, total, truncated } = await scanDeliverables(dir, { skipTop: ['hires'] });
   // An agent's own hive folder (memory, inbox) is bookkeeping, not a deliverable.
   const agentsDir = join(root, 'agents');
   const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
@@ -5768,7 +5810,15 @@ ipcMain.handle('deliverables:list', async () => {
   // Who changed each research/ file, from its git history (agents only).
   let authors: Record<string, { authors: string[]; last: string; lastTs: string }> = {};
   try { authors = await hive.fileAuthorsAsync(DELIVERABLES_DIR); } catch { /* no history yet */ }
-  return { root, dir, distro: wsl?.distro ?? null, files, written, links: readDeliverableLinks(), hidden: readHiddenDeliverables(), authors };
+  // Written elsewhere: the kept list plus this session's, documents only; a
+  // file deleted since drops out.
+  const kept = recordElsewhere(readElsewhereWrites(root), written
+    .filter((w) => !isInside(w.path, root) && isDeliverableLike(w.path))
+    .map((w) => ({ path: w.path, agentId: w.agentId, name: w.name, ts: w.ts, created: w.created })));
+  const elsewhere = (await Promise.all(kept.slice(-200).map(async (w) => {
+    try { const s = await stat(w.path); return s.isFile() ? { ...w, size: s.size, mtime: s.mtimeMs } : null; } catch { return null; }
+  }))).filter((w): w is NonNullable<typeof w> => !!w).reverse();
+  return { root, dir, distro: wsl?.distro ?? null, files, total, truncated, written, elsewhere, links: readDeliverableLinks(), hidden: readHiddenDeliverables(), authors };
 });
 /** A deliverable path as the hive repo names it, or null when outside research/. */
 function deliverableRel(p: unknown): string | null {
@@ -5840,6 +5890,35 @@ ipcMain.handle('deliverables:openExternal', async (_evt, p: unknown) => {
   if (!st.exists || !st.isFile) return { ok: false, error: 'not found' };
   const err = await shell.openPath(st.path);
   return err ? { ok: false, error: err } : { ok: true };
+});
+// The URL an HTML deliverable renders from (deliverableFiles.ts): its links
+// resolve inside the research/ folder for a file there, else inside its own
+// folder. HTML only: everything else has its own viewer.
+ipcMain.handle('deliverables:fileUrl', async (_evt, p: unknown) => {
+  if (typeof p !== 'string' || !p.length || p.length > 4096 || p.includes('\0') || !/\.html?$/i.test(p)) return null;
+  const st = await statAbs(p);
+  if (!st.exists || !st.isFile) return null;
+  const root = hive.enabled() ? hive.root() : null;
+  const research = root ? resolve(root, DELIVERABLES_DIR) : null;
+  return deliverableFiles.urlFor(research && isInside(st.path, research) ? research : dirname(st.path), st.path);
+});
+// A path clicked in an agent's terminal: the deliverable it is (as the list
+// spells it), or null for any other file (the IDE opens those). The same files
+// deliverables:list shows: research/, task links and cards, written elsewhere.
+ipcMain.handle('deliverables:match', (_evt, p: unknown) => {
+  const root = hive.enabled() ? hive.root() : null;
+  if (!root || typeof p !== 'string' || !p.length || p.length > 4096 || p.includes('\0')) return null;
+  const distro = hive.wslRoot()?.distro ?? null;
+  const toHost = (x: string): string => (distro ? fromLinuxPath(x, distro, () => distroHomeUnc(distro)) : x);
+  const session = Object.values(hive.registry().agents).flatMap((a) => writtenFiles(hookServer.stepsFor(a.id)).map((f) => toHost(f.path)));
+  const cards = ((hive.tasks() as { tasks?: Array<{ deliverable?: unknown }> }).tasks ?? [])
+    .flatMap((x) => (typeof x?.deliverable === 'string' ? deliverablePaths(x.deliverable, root, distro) : []));
+  const known = [
+    ...readDeliverableLinks().map((l) => l.path),
+    ...cards,
+    ...[...readElsewhereWrites(root).map((w) => w.path), ...session].filter((x) => !isInside(x, root) && isDeliverableLike(x))
+  ];
+  return matchDeliverable(p, { researchDir: join(root, DELIVERABLES_DIR), distro, known });
 });
 // What the human typed straight into an agent's terminal, kept for the Inbox
 // (the renderer knows which prompts were typed by a person). Main-only file.
@@ -7968,8 +8047,11 @@ async function ephemeralWorkerTick(): Promise<void> {
 
 function startEphemeralWorkerWatcher(): void {
   if (workerWatchTimer || !hive.enabled()) return;
-  const dir = spawnRequestsDir();
-  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }
+  // Both queues exist up front: an orchestrator writing its first archive
+  // request into a missing folder got "No such file or directory".
+  for (const dir of [spawnRequestsDir(), archiveRequestsDir()]) {
+    if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }
+  }
   workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);
 }
 

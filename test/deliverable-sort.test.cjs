@@ -1,31 +1,19 @@
 'use strict';
-// Deliverables: sort by date, name, type, author or ticket, and a ticket key in
-// the search box finds exactly that ticket.
+// Deliverables: order by date, name or type, and a ticket key in the search box
+// finds exactly that ticket.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const loadTs = require('./load-ts.cjs');
-const { sortDeliverables, ticketQuery } = loadTs('src/shared/deliverableSort.ts');
+const { compareDeliverables, ticketQuery } = loadTs('src/shared/deliverableSort.ts');
 
-const groups = [
-  { kind: 'office', items: [{ name: 'z.md', ts: 50 }] },
-  { kind: 'task', ticket: 'dun-12', items: [{ name: 'b.csv', ts: 10, by: 'Pam' }, { name: 'a.md', ts: 30, by: 'Jim' }] },
-  { kind: 'task', ticket: 'dun-9', items: [{ name: 'c.wiki', ts: 40, by: 'Angela' }] }
-];
-const names = (gs) => gs.map((g) => g.items.map((i) => i.name).join(','));
+const items = [{ name: 'b.csv', ts: 10 }, { name: 'a.md', ts: 30 }, { name: 'c10.wiki', ts: 40 }, { name: 'c9.wiki', ts: 20 }];
+const order = (sort) => [...items].sort(compareDeliverables(sort)).map((i) => i.name).join(',');
 
-test('recent first: newest task on top, newest file first, folders after tasks', () => {
-  assert.deepEqual(names(sortDeliverables(groups, 'recent')), ['c.wiki', 'a.md,b.csv', 'z.md']);
-});
-
-test('oldest, name, type, author', () => {
-  assert.deepEqual(names(sortDeliverables(groups, 'oldest')), ['b.csv,a.md', 'c.wiki', 'z.md']);
-  assert.deepEqual(names(sortDeliverables(groups, 'name')), ['a.md,b.csv', 'c.wiki', 'z.md']);
-  assert.deepEqual(names(sortDeliverables(groups, 'type')), ['b.csv,a.md', 'c.wiki', 'z.md']);
-  assert.deepEqual(names(sortDeliverables(groups, 'author')), ['a.md,b.csv', 'c.wiki', 'z.md']);
-});
-
-test('ticket order is numeric and newest ticket first', () => {
-  assert.deepEqual(sortDeliverables(groups, 'ticket').map((g) => g.ticket ?? g.kind), ['dun-12', 'dun-9', 'office']);
+test('newest, oldest, name (numeric), type', () => {
+  assert.equal(order('recent'), 'c10.wiki,a.md,c9.wiki,b.csv');
+  assert.equal(order('oldest'), 'b.csv,c9.wiki,a.md,c10.wiki');
+  assert.equal(order('name'), 'a.md,b.csv,c9.wiki,c10.wiki');
+  assert.equal(order('type'), 'b.csv,a.md,c9.wiki,c10.wiki');
 });
 
 test('a ticket key in the search is an exact match', () => {
