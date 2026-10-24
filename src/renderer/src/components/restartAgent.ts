@@ -124,7 +124,9 @@ export async function restartAgent(a: Agent, model: string | undefined, opts: Re
     requireResume: resume
   });
   if (!res.ok) throw new Error(res.error ?? 'Restart failed.');
-  if (resume && res.resumed !== true) {
+  // freshStart: main started a new session on purpose (the old one ran in
+  // another folder or role, sessionResume.ts), which is not a refusal.
+  if (resume && res.resumed !== true && !res.freshStart) {
     throw new Error('Resume was refused; no replacement session was accepted.');
   }
   if (resume) {
@@ -137,7 +139,9 @@ export async function restartAgent(a: Agent, model: string | undefined, opts: Re
     // is why the resume path replaces it at all; the spawn answer beat the
     // CLI's first frame, so no startup output can be missed.
     disposeTerminal(a.ptyId);
-    acquireTerminal(a.ptyId);
+    const fresh = acquireTerminal(a.ptyId);
+    // Main's notice went to the terminal just thrown away: say it again here.
+    if (res.freshStart) fresh.term.write(`\x1b[33m  ${res.freshStart}\x1b[0m\r\n`);
     // Bump the key so React remounts only this agent's terminal card; the
     // remount's attach re-requests a PTY redraw for anything it raced.
     updateAgent(a.id, {
@@ -154,7 +158,7 @@ export async function restartAgent(a: Agent, model: string | undefined, opts: Re
     // while the selector and the persisted agent kept the old one, and the
     // next restore relaunched the old command. `command` is rebuilt from the
     // selected model above, so on a genuine no-change restart this is a no-op.
-    const patch = resume
+    const patch = resume && !res.freshStart
       ? {
           command: command.trim(),
           provider,

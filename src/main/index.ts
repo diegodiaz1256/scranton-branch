@@ -105,6 +105,7 @@ import { ensureVaultRoot } from './vaultRoot';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
 import { redactConfidential, redactionTotal } from '../shared/confidentialRedact';
 import { cleanDeliverableName, decide, type Decision, type PendingItem } from '../shared/criticalSignoff';
+import { freshSessionNotice, freshSessionReason } from '../shared/sessionResume';
 import { projectDir } from './transcript';
 import { BrowseCache, browseChars, browseMode, formatBrowsed, formatSearch } from '../shared/browsePage';
 
@@ -3805,7 +3806,7 @@ function spawnStepsDone(id: string): void {
  *  it can ALSO be invoked by the god-triggered ephemeral-worker watcher (which has
  *  no renderer `evt`). `owner` is the window that should receive this PTY's output
  *  (null → the primary window). Behavior-identical to the prior inline handler. */
-async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebContents | null): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string }> {
+async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebContents | null): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; freshStart?: string; seedPrompt?: string }> {
   // ── cwd INGESTION — expand `~` exactly once, here ───────────────────────────
   // This is the single door every agent spawn comes through (`pty:spawn` IPC and
   // the god-triggered ephemeral-worker watcher), so it is where a user-typed
@@ -4016,6 +4017,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // seedDelivery:'type-into-tui') rather than passed on argv. Surfaced in the spawn
   // result so the renderer types it through the per-pty write-chain. (ondev-b)
   let seedPrompt: string | undefined;
+  // Set when the agent's recorded session ran in another folder or role
+  // (sessionResume.ts): a restore then starts fresh instead of resuming it.
+  let freshReason: string | null = null;
   if (opts.hive && hive.enabled()) {
     // REST integrations for EVERY hive agent, not only god-hired temps: a broker
     // capability token keyed by this PTY id (teardownPty revokes it on exit),
@@ -4052,6 +4056,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     }
     // Confidential vaults: its own (a custodian), and the ones it may not read.
     const spawnVaults = await prepareVaults(opts.hive.id, provider);
+    // Read before ensureAgent records this spawn's folder and role.
+    freshReason = freshSessionReason(hive.sessionContext(opts.hive.id), { cwd: opts.cwd, custodian: !!spawnVaults.custodian });
     try {
       spawnStep(opts.id, 'preparing the agent in the hive');
       const inj = await hive.ensureAgent(
@@ -4130,6 +4136,22 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // Set when `--resume` was actually attached (explicit id or restore-on-restart),
   // so the renderer can skip re-orienting a god/assistant that resumed its thread.
   let didResume = false;
+  // Restoring this agent's OWN session (a restart, Restore team, a restart that
+  // names its recorded id) in another folder or role: start fresh, for every
+  // CLI. pi asks "Session found in different project… Fork?" and exits on the
+  // app's first typed prompt; a custodian's session must not follow it out of
+  // the role, nor an older one into it. An id the human typed in Add Agent for
+  // a session from elsewhere is still honoured.
+  let freshStart: string | undefined;
+  if (freshReason && opts.hive) {
+    const typed = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
+    const restoring = typed ? hive.recentSessions(opts.hive.id).includes(typed) : opts.resume === true;
+    if (restoring) {
+      freshStart = freshSessionNotice(freshReason);
+      opts.resume = false;
+      opts.resumeSessionId = undefined;
+    }
+  }
   // Claude-only — these are Claude Code flags; other CLIs carry their own flags
   // in the command string the renderer already built.
   if (opts.hive && claudeProvider) {
@@ -4259,7 +4281,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       }
     }
   }
-  if (opts.requireResume === true && !didResume) {
+  if (opts.requireResume === true && !didResume && !freshStart) {
     return {
       ok: false,
       error: 'Existing session could not be resumed; no replacement process was started.',
@@ -4450,6 +4472,13 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   spawnStep(opts.id, res.ok ? 'started' : `failed: ${res.error}`);
   if (res.ok) analytics.track('agent_spawned', { provider });
   else analytics.track('agent_spawn_failed', { provider, reason: spawnFailReason(res.error) });
+  // Said where the human looks (the agent's terminal) and kept in the log.
+  if (res.ok && freshStart && opts.hive) {
+    console.warn(`[resume] ${opts.hive.id}: ${freshStart}`);
+    try { hive.appendLog({ kind: 'session-fresh', agentId: opts.hive.id, reason: freshReason }); } catch { /* log is best-effort */ }
+    const wc = (owner && !owner.isDestroyed()) ? owner : liveWebContents();
+    try { wc?.send(`pty:data:${opts.id}`, `\r\n\x1b[33m  ${freshStart}\x1b[0m\r\n`); } catch { /* window gone */ }
+  }
   syncKeepAwake(); // arm the power-save blocker while ≥1 agent PTY is alive (#18)
   // Hand the resolved worktree path back to the renderer so it can persist it on
   // the agent (only set when isolation actually provisioned a worktree above).
@@ -4458,7 +4487,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   const worktreePath = worktreePaths.get(opts.id);
   // `cwd` echoes back the TILDE-EXPANDED absolute path so the renderer's agent
   // record matches what the registry and the PTY actually used.
-  return { ...res, cwd: opts.cwd, ...(worktreePath ? { worktreePath } : {}), ...(resumeNotFound ? { resumeNotFound: true } : {}), ...(didResume ? { resumed: true } : {}), ...(seedPrompt ? { seedPrompt } : {}) };
+  return { ...res, cwd: opts.cwd, ...(worktreePath ? { worktreePath } : {}), ...(resumeNotFound ? { resumeNotFound: true } : {}), ...(didResume ? { resumed: true } : {}), ...(freshStart ? { freshStart } : {}), ...(seedPrompt ? { seedPrompt } : {}) };
 }
 ipcMain.handle('pty:write', (_evt, id: string, data: string) => {
   if (typeof id !== 'string' || typeof data !== 'string') return { ok: false, error: 'invalid args' };
