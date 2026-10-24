@@ -1313,7 +1313,11 @@
     "installFailed": "install failed",
     "removeFailed": "could not remove it",
     "uninstallFailed": "uninstall failed",
-    "catalogUnreachable": "could not reach the catalog"
+    "catalogUnreachable": "could not reach the catalog",
+    "installFolder": "install from folder…",
+    "installFolderTitle": "Copy a skill folder from this computer (it must hold SKILL.md) into your agents’ skills",
+    "installedFrom": "Installed {{name}}.",
+    "linksSkipped": "{{count}} link(s) were skipped: skills are copied as plain files only."
   },
   "workersTab": {
     "stopping": "stopping",

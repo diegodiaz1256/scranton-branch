@@ -20,10 +20,14 @@
  * third-party skill means running someone else's instructions inside an agent
  * that has the user's tools, and that decision stays with the user.
  */
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join, basename, dirname, resolve, sep } from 'node:path';
-import { homedir } from 'node:os';
-import { getBytes, getText } from './fetchText';
+import { homedir, tmpdir } from 'node:os';
+import { downloadToFile, getText, TooLargeError } from './fetchText';
+import {
+  commitStaging, copyFolderSkill, discard, extractArchiveSkill, indexArchive, listArchiveDir,
+  overLimitMessage, planArchiveSkill, planFolderSkill, restoreExecBits, stagingDir, type SkillLimits
+} from './skillArchive';
 
 export interface LocalSkill {
   id: string;
@@ -260,11 +264,12 @@ export async function loadCatalog(
  * Every limit below exists to bound a specific abuse:
  *   - the destination name is sanitised, so `../../.claude/settings.json` cannot
  *     be a "skill name";
- *   - each downloaded path is re-checked to be inside the destination AFTER
- *     resolution, so a crafted API response cannot escape it;
- *   - file count, total bytes and depth are capped, so a repo cannot fill a disk;
- *   - only regular files are written — a `symlink` or `submodule` entry from the
- *     contents API is skipped, never followed.
+ *   - each archive path is refused if absolute or traversing, and re-checked
+ *     to be inside the destination AFTER resolution (skillArchive.ts);
+ *   - the skill's unpacked size and file count are capped before anything is
+ *     written, and the download itself is capped, so a repo cannot fill a disk;
+ *   - only regular files are written — symlinks, hardlinks and devices in the
+ *     archive (or a local folder) are skipped, never followed.
  *
  * Uninstall is the more dangerous verb and is treated as such: it deletes a
  * directory, so it refuses anything that is not INSIDE a known skills root and
@@ -272,12 +277,22 @@ export async function loadCatalog(
  * ships inside the app and would reappear on the next spawn anyway.
  */
 
-/** GitHub's per-directory listing. Only the fields we actually consume. */
+/** A directory listing entry (GitHub contents API shape; the archive index is
+ *  read into the same shape). Only the fields we actually consume. */
 interface GhEntry { name: string; path: string; type: string; size?: number; download_url?: string | null }
 
-const MAX_FILES = 60;
-const MAX_TOTAL_BYTES = 2 * 1024 * 1024;
-const MAX_DEPTH = 5;
+/** One skill, unpacked. Skills that ship data and scripts run to a few MB
+ *  (ui-ux-pro-max: 3 MB in 80 files); 50 MB leaves room without letting a
+ *  "skill" be a dataset. */
+export const SKILL_LIMITS: SkillLimits = { maxBytes: 50 * 1024 * 1024, maxFiles: 5000 };
+/** The compressed repository download the skill is taken from. Larger than the
+ *  skill limit because the rest of the repository comes along with it. */
+const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
+const MAX_FOLDER_DEPTH = 16;
+
+export type InstallResult =
+  | { ok: true; path: string; files?: number; bytes?: number; skipped?: number }
+  | { ok: false; error: string; unsupported?: boolean };
 
 /**
  * A GitHub source URL → the pieces the contents API needs.
@@ -316,10 +331,6 @@ export function safeSkillDirName(raw: string): string | null {
   return base;
 }
 
-function getJson<T>(url: string): Promise<T> {
-  return getText(url).then((t) => JSON.parse(t) as T);
-}
-
 /**
  * For a repo-ROOT source, find the directory that actually holds the skill
  * BEFORE anything is walked or downloaded (issue #385).
@@ -337,7 +348,7 @@ function getJson<T>(url: string): Promise<T> {
  *      outcome is fully determined by listings and no blind 404s are issued.
  *   3. Nothing holds a SKILL.md → a structured refusal, before any download.
  *
- * `listDir` is injected (the contents-API fetch in production) so this policy
+ * `listDir` is injected (the downloaded archive's index in production) so this policy
  * is testable without the network.
  */
 export async function resolveRepoRootSkillDir(
@@ -392,6 +403,12 @@ async function resolveSourceUrl(url: string): Promise<string | null> {
 /**
  * Download one skill folder into the user's Claude skills directory.
  *
+ * One request: the repository's tarball from codeload.github.com (the default
+ * branch when the source names no ref), streamed to a temp file, indexed, and
+ * only the skill's folder extracted (skillArchive.ts holds the safety rules).
+ * No GitHub API call at all for a folder URL, and none for a repo-root URL
+ * either: the root's SKILL.md is located in the archive's own index.
+ *
  * Returns a structured refusal rather than throwing, so the UI can say WHY —
  * "not installable" and "install failed" are different answers for the user.
  */
@@ -402,8 +419,9 @@ export async function installSkill(
   home: string = homedir(),
   /** Install into this folder instead of <home>/.claude/skills (the office
    *  skill store), under this folder name. */
-  into?: { root: string; dir: string }
-): Promise<{ ok: true; path: string } | { ok: false; error: string; unsupported?: boolean }> {
+  into?: { root: string; dir: string },
+  limits: SkillLimits = SKILL_LIMITS
+): Promise<InstallResult> {
   const source = await resolveSourceUrl(entryUrl);
   if (!source) {
     return { ok: false, unsupported: true, error: 'No downloadable source — open Learn more to install it by hand.' };
@@ -411,87 +429,104 @@ export async function installSkill(
   const gh = parseGitHubSourceUrl(source);
   if (!gh) return { ok: false, unsupported: true, error: 'Source is not a GitHub folder.' };
 
-  // An empty ref means "the repo's default branch" — omit the parameter entirely
-  // rather than guessing main vs master.
-  const api = (p: string) =>
-    `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${p ? encodeURI(p) : ''}`
-    + (gh.ref ? `?ref=${encodeURIComponent(gh.ref)}` : '');
-  const listDir = async (p: string): Promise<GhEntry[]> => {
-    const res = await getJson<GhEntry[] | GhEntry>(api(p));
-    return Array.isArray(res) ? res : [res];
-  };
+  let tmp: string | null = null;
+  let staging: string | null = null;
+  try {
+    tmp = mkdtempSync(join(tmpdir(), 'md-skill-'));
+    const archive = join(tmp, 'repo.tar.gz');
+    // HEAD is the default branch: no guessing between main and master.
+    const url = `https://codeload.github.com/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/tar.gz/${gh.ref ? encodeURIComponent(gh.ref) : 'HEAD'}`;
+    try {
+      await downloadToFile(url, archive, { timeoutMs: 5 * 60_000, maxBytes: MAX_ARCHIVE_BYTES });
+    } catch (e) {
+      if (e instanceof TooLargeError) {
+        return { ok: false, error: `the ${gh.owner}/${gh.repo} download is ${e.size ? `${Math.round(e.size / 1048576)} MB` : `over ${Math.round(e.limit / 1048576)} MB`}; the limit is ${Math.round(e.limit / 1048576)} MB` };
+      }
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: `could not download ${gh.owner}/${gh.repo}: ${msg}` };
+    }
+    const entries = await indexArchive(archive);
 
-  // A repo-root source names a repository, not necessarily a skill folder —
-  // locate the SKILL.md directory first so the size/file caps bound the skill,
-  // not the whole repo (issue #385). Tree URLs keep their explicit path.
-  let skillPath = gh.path;
-  if (!skillPath) {
-    const resolved = await resolveRepoRootSkillDir(listDir, entryName);
-    if ('error' in resolved) return { ok: false, error: resolved.error, unsupported: resolved.unsupported };
-    skillPath = resolved.path;
+    // A repo-root source names a repository, not necessarily a skill folder —
+    // locate the SKILL.md directory first so the limits bound the skill, not
+    // the whole repo (issue #385). Tree URLs keep their explicit path.
+    let skillPath = gh.path;
+    if (!skillPath) {
+      const resolved = await resolveRepoRootSkillDir(async (p) => listArchiveDir(entries, p), entryName);
+      if ('error' in resolved) return { ok: false, error: resolved.error, unsupported: resolved.unsupported };
+      skillPath = resolved.path;
+    }
+
+    const plan = planArchiveSkill(entries, skillPath);
+    if ('error' in plan) return { ok: false, error: plan.error };
+    const over = overLimitMessage(plan, limits);
+    if (over) return { ok: false, error: over };
+
+    const dirName = into ? safeSkillDirName(into.dir) : safeSkillDirName(skillPath || entryName);
+    if (!dirName) return { ok: false, error: 'That skill has a name this app will not create a folder for.' };
+    const root = into ? into.root : join(home, '.claude', 'skills');
+    const dest = join(root, dirName);
+    if (existsSync(dest)) return { ok: false, error: `Already installed at ${dest}` };
+
+    // Write into staging and move into place only when every file landed, so a
+    // mid-extraction failure cannot leave a half-installed skill an agent loads.
+    staging = stagingDir(root);
+    const { executables } = await extractArchiveSkill(archive, skillPath, staging, limits);
+    commitStaging(staging, dest);
+    staging = null;
+    await restoreExecBits(dest, executables).catch((e) => console.error('[skills] could not mark scripts executable:', e));
+    return { ok: true, path: dest, files: plan.files, bytes: plan.bytes, skipped: plan.skipped.length };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    discard(staging);
+    discard(tmp);
   }
+}
 
-  const dirName = into ? safeSkillDirName(into.dir) : safeSkillDirName(skillPath || entryName);
+/**
+ * Copy a skill from a folder on this machine (one holding SKILL.md) into the
+ * agents' skills directory, under the same rules as a download: regular files
+ * and folders only, safe names, the same size limit, staged then moved.
+ */
+export async function installSkillFromFolder(
+  folder: string,
+  home: string = homedir(),
+  limits: SkillLimits = SKILL_LIMITS
+): Promise<InstallResult> {
+  if (typeof folder !== 'string' || !folder.trim()) return { ok: false, error: 'no folder given' };
+  const src = resolve(folder);
+  try {
+    if (!statSync(src).isDirectory()) return { ok: false, error: 'That is not a folder.' };
+  } catch { return { ok: false, error: 'That folder could not be read.' }; }
+  const root = resolve(join(home, '.claude', 'skills'));
+  if (src === root || src.startsWith(root + sep)) return { ok: false, error: 'That skill is already in the skills folder.' };
+
+  const plan = planFolderSkill(src, { maxDepth: MAX_FOLDER_DEPTH });
+  if ('error' in plan) return { ok: false, error: plan.error };
+  const over = overLimitMessage(plan, limits);
+  if (over) return { ok: false, error: over };
+
+  let fm: { name?: string } = {};
+  try { fm = parseSkillFrontmatter(readFileSync(join(src, 'SKILL.md'), 'utf8')); } catch { /* folder name */ }
+  const dirName = (fm.name && safeSkillDirName(fm.name)) || safeSkillDirName(basename(src));
   if (!dirName) return { ok: false, error: 'That skill has a name this app will not create a folder for.' };
-
-  const root = into ? into.root : join(home, '.claude', 'skills');
   const dest = join(root, dirName);
   if (existsSync(dest)) return { ok: false, error: `Already installed at ${dest}` };
 
-  const files: { path: string; url: string; size: number }[] = [];
-  let total = 0;
-  const walk = async (path: string, depth: number): Promise<string | null> => {
-    if (depth > MAX_DEPTH) return 'the folder nests deeper than this installer will follow';
-    let listing: GhEntry[];
-    try {
-      const res = await getJson<GhEntry[] | GhEntry>(api(path));
-      listing = Array.isArray(res) ? res : [res];
-    } catch (e) {
-      return e instanceof Error ? e.message : String(e);
-    }
-    for (const it of listing) {
-      if (files.length >= MAX_FILES) return 'that skill has more files than this installer will fetch';
-      if (it.type === 'dir') {
-        const err = await walk(it.path, depth + 1);
-        if (err) return err;
-        continue;
-      }
-      // Only regular files. A symlink/submodule entry is skipped, never followed.
-      if (it.type !== 'file' || !it.download_url) continue;
-      const size = it.size ?? 0;
-      total += size;
-      if (total > MAX_TOTAL_BYTES) return 'that skill is larger than this installer will fetch';
-      const rel = skillPath ? it.path.slice(skillPath.length).replace(/^\/+/, '') : it.path;
-      files.push({ path: rel, url: it.download_url, size });
-    }
-    return null;
-  };
-
-  const walkErr = await walk(skillPath, 0);
-  if (walkErr) return { ok: false, error: walkErr };
-  if (files.length === 0) return { ok: false, error: 'No files found at that source.' };
-
-  // Write only after the whole tree resolved, so a mid-download failure cannot
-  // leave a half-installed skill that an agent would then load.
-  const written: string[] = [];
+  let staging: string | null = null;
   try {
-    for (const f of files) {
-      const target = resolve(dest, f.path);
-      // Post-resolution containment: the only check that survives a crafted path.
-      if (target !== dest && !target.startsWith(dest + sep)) {
-        throw new Error(`refusing to write outside the skill folder: ${f.path}`);
-      }
-      // Bytes, not text: a skill may ship images, fonts or office templates.
-      const body = await getBytes(f.url);
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, body);
-      written.push(target);
-    }
+    staging = stagingDir(root);
+    const { executables } = await copyFolderSkill(src, plan.list, staging);
+    commitStaging(staging, dest);
+    staging = null;
+    await restoreExecBits(dest, executables).catch((e) => console.error('[skills] could not mark scripts executable:', e));
+    return { ok: true, path: dest, files: plan.files, bytes: plan.bytes, skipped: plan.skipped.length };
   } catch (e) {
-    try { rmSync(dest, { recursive: true, force: true }); } catch { /* best effort */ }
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    discard(staging);
   }
-  return { ok: true, path: dest };
 }
 
 /**

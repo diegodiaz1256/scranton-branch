@@ -1313,7 +1313,11 @@
     "installFailed": "la instalación falló",
     "removeFailed": "no se pudo quitar",
     "uninstallFailed": "la desinstalación falló",
-    "catalogUnreachable": "no se pudo acceder al catálogo"
+    "catalogUnreachable": "no se pudo acceder al catálogo",
+    "installFolder": "instalar desde carpeta…",
+    "installFolderTitle": "Copia una carpeta de skill de este equipo (debe tener SKILL.md) a las skills de tus agentes",
+    "installedFrom": "Se instaló {{name}}.",
+    "linksSkipped": "Se omitieron {{count}} enlace(s): las skills se copian solo como archivos normales."
   },
   "workersTab": {
     "stopping": "parando",

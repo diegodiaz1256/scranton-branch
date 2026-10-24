@@ -133,7 +133,7 @@ import {
 import { buildMissingCliScript, chooseInstallRung } from './cliInstall';
 import { detectNodeVersion, nodeAtLeast, nodeIsUsable, resolveNodeInstaller } from './nodeInstall';
 import { toolCatalog, type ToolStatus } from '../shared/toolCatalog';
-import { listLocalSkills, loadCatalog, installSkill, uninstallSkill, type LocalSkill, type CatalogSkill } from './skills';
+import { listLocalSkills, loadCatalog, installSkill, installSkillFromFolder, uninstallSkill, type LocalSkill, type CatalogSkill } from './skills';
 import { cleanMarketplaces, loadMarketplace, loadMarketplaces, marketplaceProblem, mergeCatalog } from './skillMarketplaces';
 import { cleanSkillPolicy, planSkillRequest } from '../shared/skillRequests';
 import { loadHero } from './hero';
@@ -5577,6 +5577,16 @@ ipcMain.handle('skills:install', async (_evt, url: unknown, name: unknown) => {
     return { ok: false as const, error: 'bad request' };
   }
   return installSkill(url, name, agentsHome());
+});
+/** Pick a folder holding SKILL.md and copy it into the agents' skills
+ *  directory (the distro's on a WSL floor), under the download's rules. */
+ipcMain.handle('skills:installFolder', async (evt) => {
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  if (!win) return { ok: false as const, error: 'no window' };
+  const res = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Choose a skill folder (it holds SKILL.md)' });
+  refocusAfterDialog(win);
+  if (res.canceled || !res.filePaths[0]) return { ok: false as const, cancelled: true, error: 'cancelled' };
+  return installSkillFromFolder(res.filePaths[0], agentsHome());
 });
 /** Office skills (given by the orchestrator, or taken away here by the human). */
 ipcMain.handle('skills:office', () => hive.officeSkills());
