@@ -560,7 +560,9 @@ export class HookServer {
     // hook can refuse a call, before the operator gate below.
     if (event === 'PreToolUse' && agentId) {
       const policy = this.hive.guardFor?.(agentId);
-      const v = policy ? guardToolCall(p.tool_name, p.tool_input, policy, homedir()) : null;
+      // p.cwd: where its shell is now (relative paths resolve there, not in
+      // the folder it was started in).
+      const v = policy ? guardToolCall(p.tool_name, p.tool_input, policy, homedir(), typeof p.cwd === 'string' ? p.cwd : undefined) : null;
       if (v) {
         this.emitControl(agentId, p.tool_name, v.reason);
         this.emit(agentId, event, p, true);

@@ -108,13 +108,20 @@ const PREFIXES = new Set(['sudo', 'command', 'env', 'time', 'nohup', 'exec', 'bu
 /** Split a command line into simple commands (on && || ; | & and newlines),
  *  keeping quoted text together. Good enough to read what each one runs. */
 export function splitCommands(cmd: string): string[][] {
-  const out: string[][] = [];
+  return splitShell(cmd).map((c) => c.words);
+}
+
+/** splitCommands, with how deep in `( … )` / `$( … )` each command sits: a
+ *  `cd` inside a subshell does not move the commands after it. */
+function splitShell(cmd: string): Array<{ words: string[]; depth: number }> {
+  const out: Array<{ words: string[]; depth: number }> = [];
   let words: string[] = [];
   let cur = '';
   let quote: string | null = null;
   let hasWord = false;
+  let depth = 0;
   const endWord = () => { if (hasWord) words.push(cur); cur = ''; hasWord = false; };
-  const endCmd = () => { endWord(); if (words.length) out.push(words); words = []; };
+  const endCmd = () => { endWord(); if (words.length) out.push({ words, depth }); words = []; };
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i];
     if (quote) {
@@ -131,7 +138,9 @@ export function splitCommands(cmd: string): string[][] {
       if (cmd[i + 1] === ch) i++;
       continue;
     }
-    if (ch === '(' || ch === ')' || ch === '{' || ch === '}') { endWord(); continue; }
+    if (ch === '(') { endCmd(); depth++; continue; }
+    if (ch === ')') { endCmd(); depth = Math.max(0, depth - 1); continue; }
+    if (ch === '{' || ch === '}') { endWord(); continue; }
     if (/\s/.test(ch)) { endWord(); continue; }
     cur += ch; hasWord = true;
   }
@@ -239,8 +248,11 @@ const CODE_WRITES = new RegExp([
   String.raw`\b(?:unlink|rmtree)\b`,
   String.raw`\bopen\s*\(?\s*\w*\s*,\s*['"]?[>+]`
 ].join('|'));
-/** Code that starts a program. */
-const CODE_RUNS = /\b(?:subprocess|os\.system|os\.popen|popen|execSync|execFileSync|spawnSync|exec|execFile|spawn|system|Command|Bun\.spawn|shell_exec|passthru)\b|`/;
+/** Code that starts a program: a call (`system(`, `exec "…"`), not the word
+ *  in prose ("the system uses git" ran nothing and was refused). */
+const CODE_RUNS = /\b(?:subprocess|child_process)\b|\b(?:os\.system|os\.popen|popen|execSync|execFileSync|spawnSync|exec|execFile|spawn|system|Command|Bun\.spawn(?:Sync)?|shell_exec|passthru|proc_open|qx|%x)\s*[({]|\b(?:system|exec)\s+['"]/;
+/** Interpreters where a backtick string runs a command (in JS it is a template). */
+const BACKTICK_RUNS = new Set(['perl', 'ruby', 'php']);
 /** "git" as a program name inside code: a string or argv item of its own. */
 const CODE_GIT = /(?:^|["'`\s[(,])git(?:\.exe)?(?=["'`\s,\])]|$)/;
 
@@ -257,7 +269,8 @@ function codePaths(code: string): string[] {
 /** Heredoc bodies fed to a program on the command line (`python - <<'EOF' … EOF`). */
 function heredocs(cmd: string): Array<{ program: string; body: string }> {
   const out: Array<{ program: string; body: string }> = [];
-  const re = /(?:^|[\s;&|(])([\w./\\-]+)[^\n]*?<<-?\s*(['"]?)(\w+)\2[^\n]*\n([\s\S]*?)\n\s*\3\s*(?=\n|$)/g;
+  // The end marker may close a `$( … )` on its own line (`EOF)`).
+  const re = /(?:^|[\s;&|(])([\w./\\-]+)[^\n]*?<<-?\s*(['"]?)(\w+)\2[^\n]*\n([\s\S]*?)\n\s*\3\s*(?=\n|$|\))/g;
   for (const m of cmd.matchAll(re)) {
     const program = (m[1].replace(/\\/g, '/').split('/').pop() ?? '').toLowerCase().replace(/\.exe$/, '');
     out.push({ program, body: m[4] });
@@ -267,18 +280,28 @@ function heredocs(cmd: string): Array<{ program: string; body: string }> {
 
 const gitOff: GuardVerdict = { deny: true, reason: 'Refused: git is switched off for you (Capabilities). Leave git to an agent that has it, or tell the human.' };
 
-/** Why a call is refused, or null. `home` resolves `~` (the policy's own home wins). */
-export function guardToolCall(tool: string | undefined, input: unknown, policy: GuardPolicy, home = ''): GuardVerdict | null {
+/** Why a call is refused, or null. `home` resolves `~` (the policy's own home wins).
+ *  `cwd` is where the agent's shell is now, as its hook reports it (on a WSL
+ *  floor a Linux path in the distro): relative paths resolve against it, not
+ *  against the folder the agent was started in. From hive/agents/god/inbox,
+ *  `cd ../..` is hive/agents, inside its folders. */
+export function guardToolCall(tool: string | undefined, input: unknown, policy: GuardPolicy, home = '', cwd?: string): GuardVerdict | null {
   if (!tool) return null;
   if (policy.home) home = policy.home;
+  const start = cwd && isAbsolute(cwd.trim()) ? cwd.trim() : policy.cwd;
   const inp = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
-  const outside = (p: string): boolean => {
+  /** Where `p` points from `base`, or null for a variable or substitution
+   *  (cannot know where it points). */
+  const resolve = (p: string, base: string): string | null => {
+    const raw = p.trim().replace(/^["']|["']$/g, '');
+    if (/^\$|%[A-Za-z_]+%/.test(raw) && !/^\$(?:HOME|env:USERPROFILE)\b/i.test(raw)) return null;
+    return resolveFor(raw.replace(/^\$(?:HOME|env:USERPROFILE)/i, '~'), base, home);
+  };
+  const outside = (p: string, base = start): boolean => {
     const raw = p.trim().replace(/^["']|["']$/g, '');
     if (!raw || SINKS.has(raw.toLowerCase())) return false;
-    // A variable or command substitution: cannot know where it points.
-    if (/^\$|%[A-Za-z_]+%/.test(raw) && !/^\$(?:HOME|env:USERPROFILE)\b/i.test(raw)) return false;
-    const abs = resolveFor(raw.replace(/^\$(?:HOME|env:USERPROFILE)/i, '~'), policy.cwd, home);
-    return !policy.roots.some((r) => within(abs, r));
+    const abs = resolve(raw, base);
+    return abs !== null && !policy.roots.some((r) => within(abs, r));
   };
   const fenceReason = (p: string) =>
     `Refused: ${p} is outside your folders. You work in ${policy.cwd} (and your hive folder); if the job needs another place, say so to the orchestrator or the human.`;
@@ -290,49 +313,66 @@ export function guardToolCall(tool: string | undefined, input: unknown, policy: 
   if (!SHELL_TOOLS.has(tool)) return null;
   const cmd = typeof inp.command === 'string' ? inp.command : Array.isArray(inp.command) ? (inp.command as unknown[]).join(' ') : typeof inp.cmd === 'string' ? inp.cmd : '';
   if (!cmd) return null;
-  return checkShell(cmd, 0);
+  return checkShell(cmd, 0, start);
 
-  /** Inline code: git when git is off, or a write to a path outside. */
-  function checkCode(code: string): GuardVerdict | null {
-    if (!policy.git && CODE_RUNS.test(code) && CODE_GIT.test(code)) return gitOff;
+  /** Inline code run by `program`, from `base`: git when git is off, or a
+   *  write to a path outside. */
+  function checkCode(code: string, base: string, program: string): GuardVerdict | null {
+    const runs = CODE_RUNS.test(code) || (BACKTICK_RUNS.has(program) && code.includes('`'));
+    if (!policy.git && runs && CODE_GIT.test(code)) return gitOff;
     if (!policy.contained || !CODE_WRITES.test(code)) return null;
-    for (const p of codePaths(code)) if (outside(p)) return { deny: true, reason: fenceReason(p) };
+    for (const p of codePaths(code)) if (outside(p, base)) return { deny: true, reason: fenceReason(p) };
     return null;
   }
 
-  /** A command line, and whatever it hands to another shell or interpreter. */
-  function checkShell(line: string, depth: number): GuardVerdict | null {
+  /** A command line run from `base`, and whatever it hands to another shell or
+   *  interpreter. A `cd`/`pushd` moves the commands after it (`cd hive/research
+   *  && echo x >> ../board.md` writes hive/board.md), except out of a subshell. */
+  function checkShell(line: string, depth: number, base: string): GuardVerdict | null {
   if (depth > 3) return null;
   for (const h of heredocs(line)) {
-    const v = SHELLS.has(h.program) ? checkShell(h.body, depth + 1) : INLINE_FLAGS[h.program] ? checkCode(h.body) : null;
+    const v = SHELLS.has(h.program) ? checkShell(h.body, depth + 1, base) : INLINE_FLAGS[h.program] ? checkCode(h.body, base, h.program) : null;
     if (v) return v;
     // Its lines are code or input, not commands of this shell.
     line = line.replace(h.body, '');
   }
-  for (const words of splitCommands(line)) {
+  let here = base;
+  let level = 0;
+  const outer: string[] = [];
+  const pushed: string[] = [];
+  for (const { words, depth: sub } of splitShell(line)) {
+    for (; level < sub; level++) outer.push(here);
+    for (; level > sub; level--) here = outer.pop() ?? here;
     const prog = programOf(words);
     if (!prog) continue;
     if (!policy.git && prog.name === 'git') return gitOff;
     if (SHELLS.has(prog.name)) {
       const inner = nestedCommand(prog.name, prog.args);
-      const v = inner ? checkShell(inner, depth + 1) : null;
+      const v = inner ? checkShell(inner, depth + 1, here) : null;
       if (v) return v;
     }
     const code = inlineCode(prog.name, prog.args);
-    if (code !== null) { const v = checkCode(code); if (v) return v; }
+    if (code !== null) { const v = checkCode(code, here, prog.name); if (v) return v; }
     if (!policy.contained) continue;
     if (MOVES.has(prog.name)) {
-      const target = prog.args.find((a) => !/^-/.test(a));
-      if (target && target !== '-' && outside(target)) return { deny: true, reason: fenceReason(target) };
+      // cmd's `cd /d D:\x`: /d is a switch, not a folder.
+      const args = prog.args[0]?.toLowerCase() === '/d' ? prog.args.slice(1) : prog.args;
+      const target = args.find((a) => !/^-/.test(a));
+      if (target && target !== '-' && outside(target, here)) return { deny: true, reason: fenceReason(target) };
+      const to = target === undefined ? (home || null) : target === '-' ? null : resolve(target, here);
+      if (prog.name === 'pushd' || prog.name === 'push-location') pushed.push(here);
+      if (to) here = to;
+    } else if (prog.name === 'popd' || prog.name === 'pop-location') {
+      here = pushed.pop() ?? here;
     }
     if (prog.name === 'git') {
       const c = prog.args.indexOf('-C');
-      if (c >= 0 && prog.args[c + 1] && outside(prog.args[c + 1])) return { deny: true, reason: fenceReason(prog.args[c + 1]) };
+      if (c >= 0 && prog.args[c + 1] && outside(prog.args[c + 1], here)) return { deny: true, reason: fenceReason(prog.args[c + 1]) };
     }
     if (WRITES.has(prog.name)) {
-      for (const a of writtenPaths(prog.name, prog.args)) if (outside(a)) return { deny: true, reason: fenceReason(a) };
+      for (const a of writtenPaths(prog.name, prog.args)) if (outside(a, here)) return { deny: true, reason: fenceReason(a) };
     }
-    for (const t of redirectTargets(words)) if (outside(t)) return { deny: true, reason: fenceReason(t) };
+    for (const t of redirectTargets(words)) if (outside(t, here)) return { deny: true, reason: fenceReason(t) };
   }
   return null;
   }

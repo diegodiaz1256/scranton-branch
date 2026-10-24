@@ -67,6 +67,29 @@ test('git off: git started from a nested shell or from code is refused', () => {
   assert.ok(ps(`powershell -c "git commit -am x"`, NOGIT));
   assert.equal(bash(`python -c "print('git is great')"`, NOGIT), null, 'mentioning git is not running it');
   assert.equal(bash(`python -c "import subprocess; subprocess.run(['git', 'log'])"`), null, 'git on: allowed');
+  for (const c of [
+    `perl -e "system('git', 'push')"`,
+    `perl -e "print \`git status\`"`,
+    `ruby -e "system 'git status'"`,
+    `node -e "require('child_process').exec(\`git status\`)"`,
+    `python3 - <<'EOF'\nimport subprocess\nsubprocess.run(["git", "push"])\nEOF`
+  ]) assert.ok(bash(c, NOGIT), c);
+});
+
+// Notes that talk about git, written with git off (WSL report, v1.1.3): a JS
+// template string or the word "system" ran nothing, and the lines of a
+// heredoc closed by `EOF)` were read as commands.
+test('git off: prose about git is not running git', () => {
+  for (const c of [
+    "node -e \"require('fs').appendFileSync('n.md', `use git later`)\"",
+    `node -e "require('fs').appendFileSync('n.md', 'exec git later')"`,
+    `python3 -c "print('the system uses git')"`,
+    "msg=$(cat <<'EOF'\ngit is off for me\nEOF)",
+    "(cat <<'EOF'\ngit push once Jim has git\nEOF) >> notes.md",
+    "cat >> notes.md <<'EOF'\ngit later\nEOF"
+  ]) assert.equal(bash(c, NOGIT), null, c);
+  assert.ok(bash("msg=$(cat <<'EOF'\nnotes\nEOF)\ngit commit -m \"$msg\"", NOGIT), 'git after the heredoc still counts');
+  assert.ok(bash('echo $(git rev-parse HEAD)', NOGIT), 'git in a command substitution still counts');
 });
 
 test('let out of its folders: only the git rule still applies', () => {
