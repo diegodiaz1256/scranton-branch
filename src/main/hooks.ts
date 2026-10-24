@@ -11,6 +11,7 @@
  * Runs in the Electron main process.
  */
 import { SubagentTracker } from './subagents';
+import { HookUsageTracker } from '../shared/hookUsage';
 import { createServer, createConnection, type Server, type Socket } from 'node:net';
 import { existsSync, rmSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -125,6 +126,9 @@ export class HookServer {
   private lastPrompts = new Map<string, { text: string; ts: number }>();
   /** Subagents agents start (main/subagents.ts), listed in Temps. */
   readonly subagents = new SubagentTracker();
+  /** Usage and last activity agents report through their hook bridges, for
+   *  engines without Claude's OTel (fleet.json reads it). */
+  readonly usage = new HookUsageTracker();
   /** Called when that list changes. */
   onSubagentsChanged?: () => void;
   /** An agent's name and face for its desktop notifications (set by main). */
@@ -432,6 +436,7 @@ export class HookServer {
     const agentId = p.agent_id ?? undefined;
     const event = p.hook_event_name ?? 'Unknown';
     this.onEvent?.(agentId, event, p.message);
+    if (agentId) this.usage.noteEvent(agentId, event, p.tool_name);
     if (agentId && typeof p.transcript_path === 'string' && p.transcript_path) {
       this.transcriptPaths.set(agentId, p.transcript_path);
     }
@@ -489,16 +494,16 @@ export class HookServer {
     // OUT of the Claude-only OTel/breaker/drain paths below. `usd` is the fallback
     // per-model estimate (a local model normally costs ~$0, but the row keeps the
     // accounting schema uniform). Pure telemetry — never feeds the loop detector.
+    // Each sample is ONE response; the ledger row is the session's running total
+    // (the shape Claude's rows have and the lifetime fold expects), summed in
+    // `usage`, which is also where fleet.json reads these agents' tokens.
     if (event === 'CostSample') {
       if (agentId && p.session_id) {
         const input = p.input ?? 0;
         const output = p.output ?? 0;
         const cacheRead = p.cache_read ?? 0;
         const cacheCreation = p.cache_creation ?? 0;
-        this.hive.appendCostLedger({
-          agentId,
-          sessionId: p.session_id,
-          ts: Date.now(),
+        this.hive.appendCostLedger(this.usage.addCost(agentId, p.session_id, {
           input,
           output,
           cacheRead,
@@ -512,7 +517,7 @@ export class HookServer {
             cacheReadTokens: cacheRead,
             cacheWriteTokens: cacheCreation
           })
-        });
+        }));
       }
       return {};
     }

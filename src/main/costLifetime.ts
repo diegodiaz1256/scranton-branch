@@ -80,6 +80,11 @@ export class CostLedgerTotals {
     return this.totals.get(agentId) ?? 0;
   }
 
+  /** Does the ledger hold any row for this agent? (False until the first pass.) */
+  has(agentId: string): boolean {
+    return this.totals.has(agentId);
+  }
+
   /** Every agent's lifetime usd. Empty until the first pass completes. */
   all(): Map<string, number> {
     return new Map(this.totals);
