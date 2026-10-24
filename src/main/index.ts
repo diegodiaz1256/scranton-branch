@@ -99,6 +99,7 @@ import { addConnection, connectionAccessFor, setConnectionAccess, connectionKeyS
 import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
+import { ensureVaultRoot } from './vaultRoot';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
 import { redactConfidential, redactionTotal } from '../shared/confidentialRedact';
 import { cleanDeliverableName, decide, type Decision, type PendingItem } from '../shared/criticalSignoff';
@@ -5409,6 +5410,8 @@ async function prepareVaults(agentId: string, provider: string | undefined): Pro
   const others = hive.enabled() ? [...new Set(Object.values(map))].filter((id) => id && id !== agentId) : [];
   const theirs = others.flatMap((id) => { const d = hive.agentFolder(id); return [d, projectDir(d)]; });
   if (!root) return { own: [], deny: theirs, custodian };
+  // A real folder before anyone is denied it: see vaultRoot.ts.
+  try { if (!ensureVaultRoot(root)) console.error('[critical] vault root is not a folder:', root); } catch (e) { console.error('[critical] vault root', e); }
   const access = vaultAccess(map, custodian ? agentId : undefined);
   const own: string[] = [];
   for (const name of access.own) {
