@@ -279,9 +279,8 @@ same office. The top bar also has the theme switch (☾), full screen, and Setti
 - **Now** — what the office is doing, newest first. "Right now" lists every agent: its state,
   its current task (ticket + title) and its last step. Tabs: All, Messages, Steps, Problems.
 - **Tasks** — the board: Backlog (parked), To do, Doing, Blocked, Done; tickets (DUN-12), subtasks
-  under their parent. A card opens its detail, history, questions and deliverables; there the human
-  can **Edit** it (title, description, assignee, ticket, parent) or **Cancel task** (greyed in Done,
-  listed under the Cancelled filter; Reopen brings it back). The assignee is told by inbox message.
+  under their parent. A card opens its detail, history, questions and deliverables, with **Edit**
+  and **Cancel task** (greyed in Done, Cancelled filter, **Reopen**).
 - **Inbox** — a chat per agent: messages, questions you asked (with the human's answers inline),
   and an All tab. The human answers your questions here.
 - **Deliverables** — what the agents made (\`research/\`, files linked from tasks or written this
