@@ -205,6 +205,9 @@ function AgentTile({ agent, ticket, dir, asksYou, onOpen }: {
           <p className="pro-title">{agent.name}</p>
           <div className="pro-sub" style={{ fontSize: 12 }}>{agent.model ?? agent.provider ?? t('pro.agents.cliDefault')}</div>
         </div>
+        {dir?.osSandbox === 'none' && (
+          <span className="pro-badge" style={{ background: 'var(--cth-peach-light)', fontSize: 11 }} title={t('pro.agents.notSandboxedTip')}>{t('pro.agents.notSandboxed')}</span>
+        )}
         <StateBadge {...badge} />
       </div>
       {usage && usage.percent >= 50 && (

@@ -1707,6 +1707,8 @@
       "noCap": "sin límite"
     },
     "agents": {
+      "notSandboxed": "Sin sandbox",
+      "notSandboxedTip": "La CLI de este agente no tiene sandbox de sistema propio y la app no pudo crearle uno aquí (Windows nativo, o falta bubblewrap en Linux/WSL: mira Configuración). Solo el guardián de rutas de la app lo separa del resto del disco.",
       "title": "Agentes",
       "count": "{{count}} agentes",
       "search": "Buscar agentes",

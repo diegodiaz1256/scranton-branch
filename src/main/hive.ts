@@ -55,6 +55,7 @@ import { cleanServerList } from '../shared/roleBundles';
 import { detectProjectType, memoryInstruction, memoryTemplate, parseMemory, type ProjectType } from '../shared/memorySections';
 import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
+import { bwrapArgs, mountPoints } from '../shared/bwrapSandbox';
 import type { GuardPolicy } from '../shared/toolGuard';
 import { MD_SKILLS } from './skillsCli';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
@@ -259,6 +260,13 @@ export interface SpawnInjection {
    *  (today: the proxy-bridge sidecar never bound after retries, so a proxy-tier
    *  agent such as Crush runs without hive events). Human-readable, one line. */
   degraded?: string;
+  /** An OS sandbox the app wraps the CLI in (bubblewrap, for pi on Linux and
+   *  WSL floors): run `bwrap <wrap…> -- <command> <args…>` instead of the
+   *  command. Absent: the CLI runs as is. */
+  wrap?: string[];
+  /** Whether the agent runs in an OS sandbox: its CLI's own, the app's, or
+   *  none (pi on native Windows, or bubblewrap missing). */
+  osSandbox?: 'cli' | 'app' | 'none';
 }
 
 /** Longest path a Unix socket can be bound at, with room to spare (sun_path is
@@ -1281,6 +1289,7 @@ export class HiveManager {
       // configuration is never mutated. Both share the HIVE_SOCK wiring below.
       const preArgs: string[] = [];
       let degraded: string | undefined;
+      let piWrap: string[] | null | undefined;
       // Dispatch on the structured bridge descriptor (the foundation's `bridgeOf`
       // derives {kind:'hooks'} from the legacy `hookBridge` for agy/codex, and
       // returns the explicit {kind:'proxy'} for qwen). Two ways a hookless CLI
@@ -1322,6 +1331,9 @@ export class HiveManager {
               // PI_CODING_AGENT_DIR and posts the session id, tool calls, per-response
               // usage and agent_end. The renderer idle inbox-wake nudge stays the backstop.
               env.PI_CODING_AGENT_DIR = this.installPiHooks(dir);
+              // Pi has no sandbox of its own: where bubblewrap runs (Linux, a
+              // WSL floor's distro), the app builds one like Claude Code's.
+              piWrap = await this.piSandbox(meta, dir, root, opts, sock);
             }
             else if (desc.shim === 'opencode') {
               // OpenCode (anomalyco/opencode) has no Claude-shaped Stop hook, but its
@@ -1395,7 +1407,10 @@ export class HiveManager {
       // type-into-tui (Crush): the bare TUI reads a positional as a Cobra subcommand
       // → `Unknown command`. So DROP the positional and hand the protocol back as
       // seedPrompt; the renderer types it into the TUI after boot (ondev-b).
-      const deg = degraded ? { degraded } : {};
+      const deg = {
+        ...(degraded ? { degraded } : {}),
+        ...(piWrap !== undefined ? { osSandbox: piWrap ? 'app' as const : 'none' as const, ...(piWrap ? { wrap: piWrap } : {}) } : {})
+      };
       if (preset.seedDelivery === 'type-into-tui') return { args: [...preArgs], env, seedPrompt: prompt, ...deg };
       // Providers with no declared seed strategy intentionally spawn bare. Inbox-capable
       // non-hive-aware presets are guarded by the provider contract tests.
@@ -3441,6 +3456,43 @@ export class HiveManager {
         .map(([id, v]) => ({ id, kind: typeof (v as { type?: unknown }).type === 'string' ? String((v as { type?: unknown }).type) : 'key' }));
       return { file, providers };
     } catch { return { file, providers: [] }; }
+  }
+
+  /**
+   * The bubblewrap argv for a pi agent (shared/bwrapSandbox.ts), or null when
+   * bubblewrap cannot run here (native Windows, or not installed: the Setup row
+   * says so and the agent's card shows it is not sandboxed). Writable: the
+   * same folders Claude Code's sandbox gets (its hive folder, the hive, extra
+   * dirs), the project or worktree it works in, the hook socket's folder and
+   * the pi login it refreshes.
+   */
+  private async piSandbox(
+    meta: AgentMeta, dir: string, root: string,
+    opts: { extraWritableDirs?: string[]; writableRoots?: string[] },
+    sock: string | null
+  ): Promise<string[] | null> {
+    if (!(await this.sandboxAvailable())) return null;
+    const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
+    const userHome = lin(this.userHome());
+    const writable = [
+      ...this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs),
+      meta.cwd, ...(opts.writableRoots ?? []),
+      // The hook socket (native Linux: a Unix socket, maybe under /tmp).
+      ...(sock && !/^tcp:/.test(sock) && !/^\\\\/.test(sock) ? [dirname(sock)] : [])
+    ].filter((d): d is string => typeof d === 'string' && d.length > 0).map(lin);
+    // Inside the hive, the other agents' folders stay read-only (its own is reopened).
+    const profile = { writable, readOnly: [lin(join(root, 'agents'))], writableFiles: [`${userHome}/.pi/agent/auth.json`], home: userHome };
+    const present = new Set(await this.existingPaths(mountPoints(profile)));
+    return bwrapArgs(profile, (p) => present.has(p));
+  }
+
+  /** Which of these (agent-side) paths exist where the agent runs. */
+  private async existingPaths(paths: string[]): Promise<string[]> {
+    const w = this.wslRoot();
+    if (!w) return paths.filter((p) => existsSync(p));
+    const script = 'for p in "$@"; do [ -e "$p" ] && printf "%s\\n" "$p"; done; true';
+    try { return (await runInDistroAsync(w.distro, 'bash', ['-c', script, 'x', ...paths], '/')).split('\n').map((l) => l.trim()).filter(Boolean); }
+    catch { return []; }
   }
 
   /** Pi (earendil-works) bridge. Pi has a rich `pi.on(event, …)` lifecycle but no
