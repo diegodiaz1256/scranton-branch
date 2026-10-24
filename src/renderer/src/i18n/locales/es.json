@@ -999,7 +999,31 @@
     "piNotSignedIn": "Pi aún no tiene sesión iniciada en esta máquina.",
     "piSubscription": "suscripción",
     "piCheck": "Comprobar otra vez",
-    "piRestart": "Reinicia un agente Pi en marcha tras iniciar sesión. En una oficina WSL, ejecuta pi dentro de la distribución."
+    "piRestart": "Reinicia un agente Pi en marcha tras iniciar sesión. En una oficina WSL, ejecuta pi dentro de la distribución.",
+    "piSandbox": "PI: SANDBOX DEL SISTEMA Y RED",
+    "piRequireSandbox": "No arrancar agentes pi sin sandbox del sistema",
+    "piRequireSandboxDesc": "pi no tiene sandbox propio: la app le monta uno con bubblewrap en las plantas Linux y WSL. Donde no puede (Windows nativo, macOS o sin bubblewrap instalado), un agente pi funciona sin restricciones con la etiqueta «Sin sandbox». Actívalo para que allí no arranque: su terminal explica por qué y cómo instalar bubblewrap. Un custodio pi de una conexión crítica siempre necesita el sandbox.",
+    "piHosts": "Hosts de modelo a los que puede llegar un custodio pi",
+    "piHostsDesc": "Un custodio pi no tiene más red que los servicios de la propia app en este equipo y HTTPS a estos hosts. La app los saca de tu configuración de pi (su proveedor por defecto y las direcciones de models.json) y de tus propios proveedores de arriba; añade aquí los tuyos, por ejemplo una pasarela de empresa. Solo nombres de host, por HTTPS. Se aplica a los custodios que arranquen después.",
+    "piHostsLoading": "Mirando tu configuración de pi…",
+    "piHostsDetected": "Encontrados: {{list}}",
+    "piHostsNoneDetected": "No se ha encontrado ninguno (un modelo en este equipo no lo necesita).",
+    "piHostsModeAdd": "Añadir los míos a los encontrados",
+    "piHostsModeReplace": "Usar solo los míos",
+    "piHostPlaceholder": "llm.ejemplo.com o https://llm.ejemplo.com",
+    "piHostAdd": "Añadir",
+    "piHostRemove": "Quitar {{host}}",
+    "piHostsResolved": "Un custodio pi puede llegar a: {{list}}",
+    "piHostsResolvedNone": "Un custodio pi no puede llegar a ningún host fuera de este equipo.",
+    "piHostError": {
+      "empty": "Escribe un nombre de host.",
+      "notHttps": "Solo HTTPS: usa https:// o solo el nombre de host.",
+      "port": "Solo el puerto de HTTPS (443): no pongas puerto.",
+      "path": "Solo el nombre de host, sin ruta.",
+      "ip": "Un nombre de host, no una dirección IP.",
+      "loopback": "Este equipo no necesita entrada: sus servicios siempre están accesibles.",
+      "invalid": "No es un nombre de host válido (por ejemplo llm.ejemplo.com)."
+    }
   },
   "mcpDefaults": {
     "title": "Servidores MCP predeterminados",

@@ -127,3 +127,10 @@ export function piModelHosts(settingsJson: string | null, modelsJson: string | n
   } catch { /* unreadable: none */ }
   return [...hosts];
 }
+
+/** The remote hosts of the app's own model providers (AI providers → Local &
+ *  compatible), which the app adds to every pi agent's models.json after the
+ *  launch is built. */
+export function customProviderHosts(baseUrls: string[]): string[] {
+  return piModelHosts(null, JSON.stringify({ providers: Object.fromEntries(baseUrls.map((baseUrl, i) => [`p${i}`, { baseUrl }])) }));
+}

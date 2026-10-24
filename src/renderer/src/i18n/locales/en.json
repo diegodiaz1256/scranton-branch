@@ -999,7 +999,31 @@
     "piNotSignedIn": "Pi is not signed in on this machine yet.",
     "piSubscription": "subscription",
     "piCheck": "Check again",
-    "piRestart": "Restart a running Pi agent after signing in. On a WSL office, run pi inside the distribution."
+    "piRestart": "Restart a running Pi agent after signing in. On a WSL office, run pi inside the distribution.",
+    "piSandbox": "PI: OS SANDBOX AND NETWORK",
+    "piRequireSandbox": "Refuse pi agents without an OS sandbox",
+    "piRequireSandboxDesc": "pi has no sandbox of its own: the app builds one with bubblewrap on Linux and WSL floors. Where it cannot (native Windows, macOS, or bubblewrap not installed), a pi agent runs unconfined with a “Not sandboxed” badge. Turn this on to not start it there instead: its terminal says why and how to install bubblewrap. A pi custodian of a critical connection always needs the sandbox.",
+    "piHosts": "Model hosts a pi custodian may reach",
+    "piHostsDesc": "A pi custodian has no network except the app’s own services on this machine and HTTPS to these hosts. The app finds them in your pi settings (its default provider, and the addresses in models.json) and in your own providers above; add yours here, for example a company gateway. Hostnames only, reached over HTTPS. Applies to custodians started afterwards.",
+    "piHostsLoading": "Looking at your pi settings…",
+    "piHostsDetected": "Found: {{list}}",
+    "piHostsNoneDetected": "None found (a model on this machine needs none).",
+    "piHostsModeAdd": "Add mine to the ones found",
+    "piHostsModeReplace": "Use only mine",
+    "piHostPlaceholder": "llm.example.com or https://llm.example.com",
+    "piHostAdd": "Add",
+    "piHostRemove": "Remove {{host}}",
+    "piHostsResolved": "A pi custodian may reach: {{list}}",
+    "piHostsResolvedNone": "A pi custodian may reach no host outside this machine.",
+    "piHostError": {
+      "empty": "Type a hostname.",
+      "notHttps": "Only HTTPS: use https:// or just the hostname.",
+      "port": "Only the HTTPS port (443): leave the port out.",
+      "path": "Hostname only, without a path.",
+      "ip": "A hostname, not an IP address.",
+      "loopback": "This machine needs no entry: its services are always reachable.",
+      "invalid": "Not a valid hostname (for example llm.example.com)."
+    }
   },
   "mcpDefaults": {
     "title": "Default MCP servers",

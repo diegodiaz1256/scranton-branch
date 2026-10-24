@@ -59,7 +59,8 @@ import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
 import { bwrapArgs, cliStateMounts, mountPoints, type AppSandboxedCli } from '../shared/bwrapSandbox';
 import { AGENT_CONTROL_FILES, within, type GuardPolicy } from '../shared/toolGuard';
-import { MD_NETGATE, piModelHosts } from './netgate';
+import { customProviderHosts, MD_NETGATE, piModelHosts } from './netgate';
+import { resolvePiModelHosts } from '../shared/piModelHosts';
 import { MD_SKILLS } from './skillsCli';
 import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
@@ -1138,6 +1139,12 @@ export class HiveManager {
        *  and everything it sends out waits for the human's sign-off. `outgoing`
        *  is where it puts files meant for research/. */
       lockdown?: { outgoing: string };
+      /** config.piModelHosts: the human's hosts for a pi custodian's network
+       *  (shared/piModelHosts.ts), added to the detected ones or replacing them. */
+      modelHosts?: unknown;
+      /** Base URLs of the app's own model providers (config.customModelProviders),
+       *  which reach pi's models.json only after this: their hosts count as detected. */
+      piCustomBaseUrls?: string[];
       theme?: 'light' | 'dark';
       /** Consent state for the default-MCP bundle (W3). Threaded from the live
        *  HarnessConfig by the caller; undefined → catalog defaults apply. */
@@ -1399,7 +1406,7 @@ export class HiveManager {
                 env.HIVE_GUARD_STRICT = '1';
                 preArgs.push('--tools', 'read,bash,edit,write,grep,find,ls', '--exclude-tools', 'mcp__*');
                 if (appWrap) {
-                  const gate = this.custodianNetgate(dir, env.PI_CODING_AGENT_DIR, appWrap);
+                  const gate = this.custodianNetgate(dir, env.PI_CODING_AGENT_DIR, appWrap, opts.modelHosts, opts.piCustomBaseUrls);
                   appWrap = gate.args;
                   appWrapCommand = gate.command;
                 }
@@ -3742,19 +3749,31 @@ export class HiveManager {
   /** A pi custodian's launch: md-netgate (written fresh into its own folder)
    *  runs bubblewrap with no network, relaying only the app's loopback ports
    *  and HTTPS to its model provider's hosts (netgate.ts). */
-  private custodianNetgate(dir: string, piDir: string, bwrap: string[]): { command: string; args: string[] } {
+  private custodianNetgate(dir: string, piDir: string, bwrap: string[], modelHosts?: unknown, customBaseUrls: string[] = []): { command: string; args: string[] } {
     const gateDir = join(dir, '.netgate');
     mkdirSync(gateDir, { recursive: true });
     const script = join(gateDir, 'md-netgate.cjs');
     writeFileSync(script, MD_NETGATE, 'utf8');
     const read = (f: string): string | null => { try { return readFileSync(join(piDir, f), 'utf8'); } catch { return null; } };
-    const hosts = piModelHosts(read('settings.json'), read('models.json'));
+    const hosts = resolvePiModelHosts([...piModelHosts(read('settings.json'), read('models.json')), ...customProviderHosts(customBaseUrls)], modelHosts);
     const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
     const node = this.nodeCommand();
+    // No remote host (a model on loopback, or the human allowed none): ',' not
+    // '', since wsl.exe refuses an empty argument (Wsl/Service/E_INVALIDARG)
+    // and the custodian never started on a WSL floor. md-netgate reads it as none.
     return {
       command: node,
-      args: [lin(script), lin(gateDir), hosts.join(','), '--', 'bwrap', ...bwrap, '--', node, lin(script), '--inner', lin(gateDir)]
+      args: [lin(script), lin(gateDir), hosts.join(',') || ',', '--', 'bwrap', ...bwrap, '--', node, lin(script), '--inner', lin(gateDir)]
     };
+  }
+
+  /** The model hosts detected from the user's own pi settings (the ones a pi
+   *  custodian's copy carries) and the app's own model providers: Settings
+   *  shows them next to the human's. */
+  detectedPiModelHosts(customBaseUrls: string[] = []): string[] {
+    const userPiDir = join(this.userHome(), '.pi', 'agent');
+    const read = (f: string): string | null => { try { return readFileSync(join(userPiDir, f), 'utf8'); } catch { return null; } };
+    return [...new Set([...piModelHosts(read('settings.json'), read('models.json')), ...customProviderHosts(customBaseUrls)])];
   }
 
   /** Which of these (agent-side) paths exist where the agent runs. */
