@@ -175,6 +175,9 @@ button.pro-card:hover { border-color: var(--pro-line-strong); }
 .pro-col > * { min-width: 0; max-width: 100%; }
 .pro-task-card { min-width: 0; overflow: hidden; overflow-wrap: anywhere; }
 .pro-task-title { font-size: 13px; line-height: 18px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+/* Cancelled: kept on the board as history, greyed out. */
+.pro-task-cancelled { opacity: .55; filter: grayscale(1); }
+.pro-task-cancelled .pro-task-title { text-decoration: line-through; }
 .pro-task-group { display: flex; flex-direction: column; gap: 6px; }
 .pro-task-kids { display: flex; flex-direction: column; gap: 6px; padding-inline-start: 10px; margin-inline-start: 8px; border-inline-start: 2px solid var(--pro-line-strong); }
 .pro-col { background: var(--cth-cream-200); border-radius: var(--pro-radius); padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 120px; }

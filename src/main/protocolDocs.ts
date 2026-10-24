@@ -75,10 +75,18 @@ The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps.
     when: 'board.md vs tasks.json, and who may edit them',
     body: `Two shared surfaces, both in the hive root:
 - \`board.md\` — the freeform narrative plan. God is its sole scribe; others \`propose\` edits to god.
-- \`tasks.json\` — the task cards (a kanban: \`backlog / todo / doing / blocked / done\`, with title, assignee,
-  priority, deps, \`deliverable\`, and \`parent\` on a subtask: the id of the card it is a piece of).
+- \`tasks.json\` — the task cards (a kanban: \`backlog / todo / doing / blocked / done / cancelled\`, with title,
+  assignee, priority, deps, \`deliverable\`, \`parent\` on a subtask: the id of the card it is a piece of, and
+  \`ticket\` when the human gave the card its own ticket key, e.g. a Jira key: use it when you name the card).
   Keep the card you're working on in the right status. \`backlog\` is parked work nobody is on
-  right now: move a card there when it waits for later, and back to \`todo\`/\`doing\` when picked up.`
+  right now: move a card there when it waits for later, and back to \`todo\`/\`doing\` when picked up.
+- \`cancelled\` means the human stopped the task (\`cancelledAt\` says when). Nobody works on a cancelled
+  card: stop at once if it was yours, don't move it out of \`cancelled\`, don't dispatch it again, and keep
+  it in tasks.json (it is history, not something to delete). Only the human reopens it.
+- The human can also edit a card (title, description, assignee, ticket, parent) or give it to another
+  agent. Whoever was on it, and god, get an inbox message saying what changed: a card taken from you or
+  cancelled is no longer your work; a changed description is the new contract. God keeps the human's
+  changes when writing tasks.json.`
   },
   {
     file: 'services.md',
@@ -271,7 +279,8 @@ same office. The top bar also has the theme switch (☾), full screen, and Setti
 - **Now** — what the office is doing, newest first. "Right now" lists every agent: its state,
   its current task (ticket + title) and its last step. Tabs: All, Messages, Steps, Problems.
 - **Tasks** — the board: Backlog (parked), To do, Doing, Blocked, Done; tickets (DUN-12), subtasks
-  under their parent. A card opens its detail, history, questions and deliverables.
+  under their parent. A card opens its detail, history, questions and deliverables, with **Edit**
+  and **Cancel task** (greyed in Done, Cancelled filter, **Reopen**).
 - **Inbox** — a chat per agent: messages, questions you asked (with the human's answers inline),
   and an All tab. The human answers your questions here.
 - **Deliverables** — what the agents made (\`research/\`, files linked from tasks or written this

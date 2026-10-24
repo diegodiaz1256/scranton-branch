@@ -17,11 +17,13 @@ test('subtasks in the parent column hang under it; others stand alone', () => {
 
 test('backlog is a status the board, the parser and the agents know', () => {
   const kanban = fs.readFileSync(path.join(__dirname, '..', 'src/renderer/src/components/TasksKanban.tsx'), 'utf8');
-  assert.match(kanban, /\(\['backlog', 'todo', 'doing', 'blocked', 'done'\] as const\)\.includes/, 'the parser keeps it');
+  assert.match(kanban, /status: isTaskStatus\(t\.status\)/, 'the parser checks the shared status list');
+  const { TASK_STATUSES } = require('./load-ts.cjs')('src/shared/taskEdit.ts');
+  assert.ok(TASK_STATUSES.includes('backlog'), 'the parser keeps it');
   const view = fs.readFileSync(path.join(__dirname, '..', 'src/renderer/src/pro/TasksView.tsx'), 'utf8');
   assert.match(view, /status: 'backlog'/);
   const docs = fs.readFileSync(path.join(__dirname, '..', 'src/main/protocolDocs.ts'), 'utf8');
-  assert.match(docs, /backlog \/ todo \/ doing \/ blocked \/ done/);
+  assert.match(docs, /backlog \/ todo \/ doing \/ blocked \/ done \/ cancelled/);
 });
 
 test('every subtask under a card, at any depth, once even with a cycle', () => {

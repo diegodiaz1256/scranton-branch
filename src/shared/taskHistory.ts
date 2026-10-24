@@ -12,6 +12,11 @@ export interface TaskSnapshot {
   status?: string;
   assignee?: string;
   result?: string;
+  /** '' when the card has none: an old snapshot without the key compares as
+   *  unknown, so the upgrade itself doesn't read as every card edited. */
+  description?: string;
+  parent?: string;
+  ticket?: string;
   humanQA?: Array<{ q?: string; a?: string; dismissedAt?: string }>;
 }
 
@@ -23,6 +28,7 @@ export type TaskEvent = { ts: string; taskId: string; title: string } & (
   | { kind: 'answered'; q: string; a: string }
   | { kind: 'dismissed'; q: string }
   | { kind: 'result'; text: string }
+  | { kind: 'edited'; fields: string[] }
   | { kind: 'removed' }
 );
 
@@ -47,6 +53,9 @@ export function diffTasks(prev: readonly TaskSnapshot[] | null, next: readonly T
     }
     if ((p.assignee ?? '') !== (t.assignee ?? '')) out.push({ ts, taskId: t.id, title, kind: 'assigned', from: p.assignee, to: t.assignee });
     if ((p.status ?? '') !== (t.status ?? '')) out.push({ ts, taskId: t.id, title, kind: 'status', from: p.status, to: t.status });
+    const fields = (['title', 'description', 'ticket', 'parent'] as const)
+      .filter((k) => typeof p[k] === 'string' && typeof t[k] === 'string' && p[k] !== t[k]);
+    if (fields.length) out.push({ ts, taskId: t.id, title, kind: 'edited', fields });
     const oldQa = p.humanQA ?? [];
     (t.humanQA ?? []).forEach((qa, i) => pushQa(out, ts, t.id, title, oldQa.find((o) => o.q === qa.q) ?? oldQa[i], qa));
     if (t.result && t.result !== p.result) out.push({ ts, taskId: t.id, title, kind: 'result', text: clip(t.result) });
@@ -80,6 +89,9 @@ export function snapshotOf(raw: unknown): TaskSnapshot | null {
     status: str(t.status),
     assignee: str(t.assignee),
     result: str(t.result),
+    description: str(t.description) ?? '',
+    parent: str(t.parent) ?? '',
+    ticket: str(t.ticket) ?? '',
     humanQA: Array.isArray(t.humanQA)
       ? t.humanQA.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
         .map((e) => ({ q: str(e.q), a: str(e.a), dismissedAt: str(e.dismissedAt) }))
