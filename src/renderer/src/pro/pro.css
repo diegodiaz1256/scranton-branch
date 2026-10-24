@@ -110,7 +110,6 @@ button.pro-card:hover { border-color: var(--pro-line-strong); }
 }
 .pro-chip-on { border-color: var(--pro-green); color: var(--cth-ink-900); }
 .pro-chip-off { opacity: .5; }
-.pro-mkt { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--pro-line); }
 /* PDF deliverables (PdfPreview): the app's own toolbar over its own page backdrop. */
 .pro-pdf { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .pro-pdf-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

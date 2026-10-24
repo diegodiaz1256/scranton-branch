@@ -14,6 +14,7 @@ import { InboxView } from './InboxView';
 import { AutomationsView } from './AutomationsView';
 import { MemoryView } from './MemoryView';
 import { CapabilitiesView } from './CapabilitiesView';
+import { SkillsView } from './SkillsView';
 import { AgentsView } from './AgentsView';
 import { AgentView } from './AgentView';
 import { TempsView } from './TempsView';
@@ -36,6 +37,7 @@ const TOP: { id: ProSection; icon: ProIconName }[] = [
   { id: 'deliverables', icon: 'deliverables' },
   { id: 'automations', icon: 'automations' },
   { id: 'memory', icon: 'memory' },
+  { id: 'skills', icon: 'skills' },
   { id: 'capabilities', icon: 'capabilities' },
   { id: 'connections', icon: 'connections' },
   { id: 'environment', icon: 'environment' },
@@ -49,7 +51,7 @@ const TOP: { id: ProSection; icon: ProIconName }[] = [
  *  entries in a row read as clutter; settings-like pages are opened rarely. */
 const NAV_GROUPS: Array<{ id: string; label?: string; items: ProSection[] }> = [
   { id: 'main', items: ['now', 'tasks', 'inbox', 'deliverables'] },
-  { id: 'office', label: 'group_office', items: ['automations', 'memory', 'team', 'factories'] },
+  { id: 'office', label: 'group_office', items: ['automations', 'memory', 'skills', 'team', 'factories'] },
   { id: 'setup', label: 'group_setup', items: ['capabilities', 'connections', 'environment', 'providers', 'mcp'] }
 ];
 const LS_GROUPS = 'cth.proNavGroups';
@@ -113,6 +115,7 @@ export function ProShell({ config }: { config: HarnessConfig }) {
     case 'deliverables': page = <DeliverablesView tasks={tasks} roster={roster} />; break;
     case 'automations': page = <AutomationsView />; break;
     case 'memory': page = <MemoryView tasks={tasks} roster={roster} />; break;
+    case 'skills': page = <SkillsView roster={roster} config={config} />; break;
     case 'capabilities': page = <CapabilitiesView roster={roster} config={config} />; break;
     case 'temps': page = <TempsView roster={roster} />; break;
     case 'connections': page = <ConnectionsView roster={roster} config={config} />; break;
