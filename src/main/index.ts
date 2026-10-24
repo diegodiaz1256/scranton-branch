@@ -12,7 +12,7 @@ import { claimOffice, officeHolder, releaseOffice } from './officeLock';
 // Headless (server) mode sets Chromium switches — must load before ready too.
 import { HEADLESS, HEADLESS_SETUP, SERVER } from './headless';
 import { APP_NAME } from '../shared/fork';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, protocol, screen, shell, Notification } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import * as http from 'node:http';
 import * as https from 'node:https';
@@ -36,6 +36,7 @@ import {
   modelForRole, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
 } from './config';
 import { listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde } from './fs';
+import { DELIVERABLE_SCHEME, DeliverableFiles } from './deliverableFiles';
 import { normalizeWeekly, weeklyDelayMs } from '../shared/weeklySchedule';
 import {
   getBranch, getStatus, getLog, getBranches, getAheadBehind, isRepo, getDiff, mainRepoRoot,
@@ -178,6 +179,18 @@ instrumentEvents(freezes);
 // Heartbeats from app-ready on: loading main's own code happens before any
 // window exists, so it is not a freeze anyone sees.
 void app.whenReady().then(() => freezes.start());
+
+// HTML deliverables render from md-dlv:// (deliverableFiles.ts). Standard, so a
+// page's relative links resolve beside it; registered before app-ready, as
+// Electron requires.
+protocol.registerSchemesAsPrivileged([{ scheme: DELIVERABLE_SCHEME, privileges: { standard: true, secure: true, stream: true } }]);
+const deliverableFiles = new DeliverableFiles();
+const servingSessions = new WeakSet<Electron.Session>();
+function serveDeliverables(ses: Electron.Session): void {
+  if (servingSessions.has(ses)) return;
+  servingSessions.add(ses);
+  ses.protocol.handle(DELIVERABLE_SCHEME, (req) => deliverableFiles.respond(req.url));
+}
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL;
 
@@ -3333,6 +3346,15 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
   // Capture the webContents once: after 'closed' the window is gone, but this
   // reference stays valid as the per-PTY ownership key.
   const wc = win.webContents;
+  // Each floor has its own session: each serves deliverables itself.
+  serveDeliverables(wc.session);
+  // A deliverable's page (an iframe in Deliverables) moves only inside its own
+  // folder; a web link in it opens in the browser instead of inside the app.
+  wc.on('will-frame-navigate', (e) => {
+    if (e.isMainFrame || !e.frame?.url.startsWith(`${DELIVERABLE_SCHEME}:`) || e.url.startsWith(`${DELIVERABLE_SCHEME}:`)) return;
+    e.preventDefault();
+    if (/^https?:\/\//i.test(e.url)) void shell.openExternal(e.url);
+  });
   // The title names the office, so floors tell apart in the taskbar and Task
   // Manager; the page's own <title> would overwrite it.
   win.on('page-title-updated', (e) => e.preventDefault());
@@ -5826,6 +5848,17 @@ ipcMain.handle('deliverables:openExternal', async (_evt, p: unknown) => {
   if (!st.exists || !st.isFile) return { ok: false, error: 'not found' };
   const err = await shell.openPath(st.path);
   return err ? { ok: false, error: err } : { ok: true };
+});
+// The URL an HTML deliverable renders from (deliverableFiles.ts): its links
+// resolve inside the research/ folder for a file there, else inside its own
+// folder. HTML only: everything else has its own viewer.
+ipcMain.handle('deliverables:fileUrl', async (_evt, p: unknown) => {
+  if (typeof p !== 'string' || !p.length || p.length > 4096 || p.includes('\0') || !/\.html?$/i.test(p)) return null;
+  const st = await statAbs(p);
+  if (!st.exists || !st.isFile) return null;
+  const root = hive.enabled() ? hive.root() : null;
+  const research = root ? resolve(root, DELIVERABLES_DIR) : null;
+  return deliverableFiles.urlFor(research && isInside(st.path, research) ? research : dirname(st.path), st.path);
 });
 // What the human typed straight into an agent's terminal, kept for the Inbox
 // (the renderer knows which prompts were typed by a person). Main-only file.
