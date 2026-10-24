@@ -377,7 +377,7 @@ test('a real git clone and push run through md-ssh and the relay (large pack, bo
 test('main: only sshRelay:set turns it on or off; the generic config write drops it', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
   const update = src.slice(src.indexOf("ipcMain.handle('config:update'"), src.indexOf("ipcMain.handle('config:setAgentMcpGrant'"));
-  assert.match(update, /agentSshRelay: _sshRelay, \.\.\.safePatch \} = patch/);
+  assert.match(update, /agentSshRelay: _sshRelay,[^}]*\.\.\.safePatch \} = patch/);
   const set = src.slice(src.indexOf("ipcMain.handle('sshRelay:set'"));
   assert.match(set.slice(0, 1500), /isCustodian\(/);
   assert.match(set.slice(0, 1500), /appendLog\(\{ kind: 'ssh-relay'/);

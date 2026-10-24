@@ -2151,6 +2151,18 @@
         "signWarning": "Sus commits y tags llevarán tu firma verificada. Nunca ve la clave, y la oficina no firma nada que no sea un objeto de git.",
         "signed": "firmado",
         "signRequest": "petición de firma"
+      },
+      "creds": {
+        "title": "Credenciales de la nube: {{name}}",
+        "body": "Las sesiones de tus CLI de nube y de desarrollo (gh, aws, az, gcloud, kubectl, docker, npm, pip, ~/.netrc, el almacén de credenciales de git) están ocultas para los agentes en sandbox, como tus claves SSH: sus comandos funcionan como si no hubieras iniciado sesión, y al agente se le explica el motivo. Marca una sesión para que este agente pueda leerla. Se aplica cuando el agente se reinicia.",
+        "warning": "Un agente con una sesión puede hacer todo lo que esa sesión permite, en tu nombre: crear y borrar recursos en la nube, hacer push a repositorios, publicar paquetes. Permite solo lo que su tarea necesite.",
+        "confirm": "¿Dejar que {{name}} lea tu sesión de {{cli}}?",
+        "allow": "Permitir",
+        "unavailable": "No disponible en esta planta: los agentes de una planta Windows no tienen sandbox de sistema, así que la oficina no puede ocultarles estos archivos. Usa una planta WSL para mantenerlos ocultos.",
+        "custodian": "No para el custodio de una conexión crítica: nunca lee tus sesiones de la nube.",
+        "notFound": "(no existe donde se ejecutan los agentes)",
+        "none": "Ninguna permitida: todas las sesiones de arriba están ocultas para este agente.",
+        "restart": "Reinicia el agente para que el cambio se aplique."
       }
     },
     "skills": {

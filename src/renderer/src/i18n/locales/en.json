@@ -2151,6 +2151,18 @@
         "signWarning": "Its commits and tags will carry your verified signature. It never sees the key, and the office signs nothing but git objects.",
         "signed": "signed",
         "signRequest": "signature request"
+      },
+      "creds": {
+        "title": "Cloud credentials: {{name}}",
+        "body": "Your cloud and developer CLIs' logins (gh, aws, az, gcloud, kubectl, docker, npm, pip, ~/.netrc, git's credential store) are hidden from agents in a sandbox, like your SSH keys: their commands run as if logged out, and the agent is told why. Tick a login to let this agent read it. It applies when the agent is restarted.",
+        "warning": "An agent with a login can do anything that login can, as you: create and delete cloud resources, push to repositories, publish packages. Allow only what its task needs.",
+        "confirm": "Let {{name}} read your {{cli}} login?",
+        "allow": "Allow",
+        "unavailable": "Not available on this floor: agents on a Windows floor run without an OS sandbox, so the office cannot hide these files from them. Use a WSL floor to keep them hidden.",
+        "custodian": "Not for the custodian of a critical connection: it never reads your cloud logins.",
+        "notFound": "(not found where agents run)",
+        "none": "None allowed: every login above is hidden from this agent.",
+        "restart": "Restart the agent for a change to apply."
       }
     },
     "skills": {

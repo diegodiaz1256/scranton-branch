@@ -452,6 +452,9 @@ export interface HarnessConfig {
   /** SSH through the office (shared/sshRelay.ts): agent id → the keys it may use
    *  (fingerprints; none = any) and whether to ask first. Absent → off. */
   agentSshRelay?: Record<string, { keys?: string[]; ask?: boolean; sign?: boolean }>;
+  /** Cloud CLI logins (shared/cloudCredentials.ts) the human let each agent
+   *  read: agent id → set ids. Absent → all hidden. */
+  agentCloudCredentials?: Record<string, string[]>;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'mine' | 'catalog';
@@ -1588,6 +1591,12 @@ const api = {
   /** Turn it on (a grant: keys, ask, sign) or off (null) for one agent. */
   sshRelaySet: (agentId: string, grant: { keys?: string[]; ask?: boolean; sign?: boolean } | null): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('sshRelay:set', agentId, grant),
+  // Cloud CLI logins (Capabilities): which sets exist where agents run (ids,
+  // nothing read), and the ones one agent may read (empty: none).
+  cloudCredsStatus: (): Promise<{ available: boolean; present: string[] }> =>
+    ipcRenderer.invoke('cloudCreds:status'),
+  cloudCredsSet: (agentId: string, ids: string[]): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('cloudCreds:set', agentId, ids),
   // Manager → Connections (keyed MCP servers). WRITE-ONLY like the integrations:
   // `connectionsList` reports only whether each field is stored.
   /** Save the user's own role bundles; resolves to what was kept after validation. */
