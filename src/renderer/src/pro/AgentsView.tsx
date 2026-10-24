@@ -207,6 +207,10 @@ function AgentTile({ agent, ticket, dir, asksYou, onOpen }: {
         </div>
         <StateBadge {...badge} />
       </div>
+      {/* Its own line, as the usage badge: beside the state it squeezed the name. */}
+      {dir?.osSandbox === 'none' && (
+        <span className="pro-badge" style={{ alignSelf: 'flex-start', background: 'var(--cth-peach-light)', fontSize: 11 }} title={t('pro.agents.notSandboxedTip')}>{t('pro.agents.notSandboxed')}</span>
+      )}
       {usage && usage.percent >= 50 && (
         <span className="pro-badge" title={t('pro.agents.usageTip', { percent: usage.percent, window: usage.window })}
           style={{ alignSelf: 'flex-start', fontSize: 11, background: usage.percent >= 90 ? 'var(--cth-coral-light)' : 'var(--cth-lemon-light)' }}>

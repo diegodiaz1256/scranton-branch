@@ -521,6 +521,9 @@ function workerByPty(ptyId: string): WorkerRec | undefined {
   for (const rec of liveWorkers.values()) if (workerPty(rec) === ptyId) return rec;
   return undefined;
 }
+/** Whether each agent runs in an OS sandbox (its CLI's own, the app's bubblewrap,
+ *  or none), as of its last spawn. For its card. */
+const osSandboxes = new Map<string, 'cli' | 'app' | 'none'>();
 
 /** The loopback secret broker (Phase 2). Workers reach registered integrations through
  *  it without ever seeing a credential. getRecord/getSecret are injected so the broker
@@ -3986,6 +3989,14 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
+      // The app's OS sandbox for a CLI without one (pi): the CLI runs inside
+      // bubblewrap. If bubblewrap then fails to start, so does the agent: it
+      // never falls back to running unconfined.
+      if (inj.wrap) {
+        opts.args = [...inj.wrap, '--', opts.command, ...opts.args];
+        opts.command = 'bwrap';
+      }
+      if (inj.osSandbox) osSandboxes.set(opts.hive.id, inj.osSandbox);
       seedPrompt = inj.seedPrompt;
       // A degraded spawn (proxy bridge never bound) is told to the user the same
       // way breaker escalations are: a native toast, gated on the notifications
@@ -6202,6 +6213,7 @@ async function agentDirectory() {
       status: a.status ?? 'idle',
       cwd: a.cwd ?? null,
       cwdValid: a.cwdValid ?? null,
+      osSandbox: osSandboxes.get(id) ?? null,
       archived: !!a.archived,
       isGod: !!a.isGod,
       isAssistant: !!a.isAssistant,

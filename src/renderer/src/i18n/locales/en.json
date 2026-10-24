@@ -1735,6 +1735,8 @@
       "noCap": "no cap set"
     },
     "agents": {
+      "notSandboxed": "Not sandboxed",
+      "notSandboxedTip": "This agent's CLI has no OS sandbox of its own and the app could not build one here (native Windows, or bubblewrap missing on Linux/WSL: see Setup). Only the app's path guard stands between it and the rest of the disk.",
       "title": "Agents",
       "count": "{{count}} agents",
       "search": "Search agents",

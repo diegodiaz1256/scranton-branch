@@ -213,6 +213,9 @@ export interface AgentDirectoryEntry {
   cwd: string | null;
   /** Whether `cwd` is an absolute, existing directory (spawn-usable). */
   cwdValid: boolean | null;
+  /** The OS sandbox it runs in since its last spawn: its CLI's own, the app's
+   *  (bubblewrap, for pi), none, or null when not known. */
+  osSandbox: 'cli' | 'app' | 'none' | null;
   archived: boolean;
   isGod: boolean;
   isAssistant: boolean;
