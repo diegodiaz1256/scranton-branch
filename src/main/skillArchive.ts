@@ -23,7 +23,7 @@
  *
  * Electron-free, for tests.
  */
-import { createReadStream, existsSync, lstatSync, mkdirSync, readdirSync, readSync, openSync, closeSync, renameSync, rmSync } from 'node:fs';
+import { copyFileSync, createReadStream, existsSync, lstatSync, mkdirSync, readdirSync, readSync, openSync, closeSync, renameSync, rmSync } from 'node:fs';
 import { open as openFile, mkdir } from 'node:fs/promises';
 import { createGunzip } from 'node:zlib';
 import { Writable } from 'node:stream';
@@ -431,6 +431,32 @@ export async function copyFolderSkill(src: string, list: ReadonlyArray<{ rel: st
     if (f.exec) executables.push(f.rel);
   }
   return { executables };
+}
+
+/**
+ * Copy a skill folder as it is, synchronously: an agent's skills are refreshed
+ * while it spawns. Folders and regular files only (an empty folder is left out).
+ * Returns the files a Linux agent should be able to run, for restoreExecBits:
+ * a `#!` first line on Windows, as for Install from folder (on macOS/Linux
+ * copyFileSync already kept the mode).
+ */
+export function copySkillTreeSync(from: string, to: string): string[] {
+  const executables: string[] = [];
+  const walk = (src: string, dest: string, rel: string): void => {
+    const entries = readdirSync(src, { withFileTypes: true });
+    if (!entries.length) return;
+    mkdirSync(dest, { recursive: true });
+    for (const ent of entries) {
+      const childRel = rel ? `${rel}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) walk(join(src, ent.name), join(dest, ent.name), childRel);
+      else if (ent.isFile()) {
+        copyFileSync(join(src, ent.name), join(dest, ent.name));
+        if (process.platform === 'win32' && hasShebang(join(src, ent.name))) executables.push(childRel);
+      }
+    }
+  };
+  walk(from, to, '');
+  return executables;
 }
 
 /**
