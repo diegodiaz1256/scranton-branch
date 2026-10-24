@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import type { HarnessConfig } from '@/store/config';
 import type { Agent } from '@/store/store';
 import { Icon } from '@/components/Icon';
-import { SkillsTab } from '@/components/SkillsTab';
 import { MCP_CATALOG, mcpCatalogEntry } from '@shared/mcpCatalog';
 import type { Access } from '@shared/connectionAccess';
 import { BUNDLE_ICONS, allRoleBundles, mcpLabel, type BundleIcon, type RoleBundle } from '@shared/roleBundles';
@@ -31,8 +30,8 @@ const levelOf = (access: Record<string, Level> | undefined, id: string): Level =
 /**
  * Capabilities — what each agent can reach. Grant a role bundle (a set of MCP
  * servers) to an agent in one click, make your own bundles (or start from a
- * built-in one), adjust single servers per agent, or browse and install skills.
- * Grants apply when the agent next starts; a keyed server stays dimmed until it
+ * built-in one), or adjust single servers per agent. Skills have their own page
+ * (SkillsView). Grants apply when the agent next starts; a keyed server stays dimmed until it
  * is switched on with its key in Connections.
  */
 export function CapabilitiesView({ roster, config }: { roster: Agent[]; config: HarnessConfig }) {
@@ -40,7 +39,6 @@ export function CapabilitiesView({ roster, config }: { roster: Agent[]; config: 
   /** A built-in bundle's name in the app language; yours stay as you wrote them. */
   const bundleName = (b: RoleBundle) => (b.custom ? b.label : t(`pro.caps.bundle.${b.id}`, { defaultValue: b.label }));
   const setView = useProStore((s) => s.setView);
-  const [tab, setTab] = useState<'bundles' | 'skills'>('bundles');
   const [target, setTarget] = useState<string | null>(roster.find((a) => !a.isGod)?.id ?? roster[0]?.id ?? null);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -142,217 +140,125 @@ export function CapabilitiesView({ roster, config }: { roster: Agent[]; config: 
         <h2>{t('pro.nav.capabilities')}</h2>
         <span className="pro-sub">{t('pro.caps.sub')}</span>
         <div className="pro-head-end">
-          <div className="pro-tabs" role="tablist">
-            <button role="tab" aria-selected={tab === 'bundles'} onClick={() => setTab('bundles')}>{t('pro.caps.bundlesTab')}</button>
-            <button role="tab" aria-selected={tab === 'skills'} onClick={() => setTab('skills')}>{t('pro.caps.skillsTab')}</button>
-          </div>
+          <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.skills.openFromCaps')}</span>
+          <button className="pro-btn" onClick={() => setView({ kind: 'section', section: 'skills' })}>{t('pro.nav.skills')}</button>
         </div>
       </div>
 
-      {tab === 'skills' ? (
-        <>
-          <OfficeSkills config={config} roster={roster} />
-          <div className="pro-card pro-embed" style={{ padding: 0, minHeight: 420 }}><SkillsTab agentCwd={targetAgent?.cwd} /></div>
-        </>
-      ) : (
-        <>
-          <div className="pro-row">
-            <span className="pro-sub">{t('pro.caps.grantTo')}</span>
-            <select className="pro-input" value={target ?? ''} onChange={(e) => setTarget(e.target.value)}>
-              {roster.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
-            {note && <span className="pro-sub" style={{ fontSize: 12 }}>{note}</span>}
-          </div>
-
-          {draft && (
-            <BundleEditor draft={draft} config={config} saving={saving}
-              onChange={setDraft} onCancel={() => setDraft(null)} onSave={saveDraft}
-              onConnections={() => setView({ kind: 'section', section: 'connections' })} />
-          )}
-
-          <div className="pro-grid">
-            {bundles.map((b) => {
-              const current = target ? effectiveServers(config, target) : [];
-              const match = b.servers.length === current.length && b.servers.every((s) => current.includes(s));
-              return (
-                <article key={b.id} className="pro-card"
-                  style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 130, ...(match ? { background: 'var(--cth-lemon-light)', borderColor: 'var(--cth-lemon)' } : {}) }}>
-                  <span className="pro-row">
-                    <span style={{ display: 'inline-flex', padding: 8, borderRadius: 8, background: 'var(--cth-cream-200)' }}><Icon name={b.icon} /></span>
-                    <strong style={{ fontSize: 15, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{bundleName(b)}</strong>
-                    {b.custom && <span className="pro-chip" style={{ marginInlineStart: 'auto' }}>{t('pro.caps.yours')}</span>}
-                  </span>
-                  <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
-                    {b.servers.length === 0 && <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.caps.noServers')}</span>}
-                    {b.servers.map((s) => <span key={s} className={`pro-chip${consented(config, s) ? '' : ' pro-chip-off'}`}>{mcpLabel(s)}{isKeyed(s) ? ` · ${levelOf(b.access, s) === 'readwrite' ? t('pro.caps.accessWriteShort') : t('pro.caps.accessReadShort')}` : ''}</span>)}
-                  </span>
-                  <span className="pro-row" style={{ flexWrap: 'wrap', gap: 6 }}>
-                    <button className="pro-btn pro-btn-primary" disabled={!target || saving || match} onClick={() => target && void grant(target, b.servers, b.access)}>
-                      {match ? t('pro.caps.hasIt', { name: targetAgent?.name ?? t('pro.nav.agent') }) : t('pro.caps.grantBtn', { name: targetAgent?.name ?? '…' })}
-                    </button>
-                    {b.custom ? (
-                      <>
-                        <button className="pro-btn" disabled={saving} onClick={() => setDraft({ id: b.id, label: b.label, icon: b.icon, servers: b.servers, access: b.access })}>{t('pro.caps.edit')}</button>
-                        <button className="pro-btn" disabled={saving} onClick={() => remove(b)}>{t('pro.caps.delete')}</button>
-                      </>
-                    ) : (
-                      <button className="pro-btn" disabled={saving} title={t('pro.caps.duplicateTitle')}
-                        onClick={() => setDraft({ label: t('pro.caps.copyOf', { name: bundleName(b) }), icon: b.icon, servers: b.servers, access: b.access })}>{t('pro.caps.duplicate')}</button>
-                    )}
-                  </span>
-                </article>
-              );
-            })}
-            <button className="pro-card" disabled={saving}
-              style={{ borderStyle: 'dashed', minHeight: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--cth-ink-500)' }}
-              onClick={() => setDraft({ label: '', icon: 'mcp', servers: [] })}>
-              + {t('pro.caps.newBundle')}
-            </button>
-          </div>
-
-          <h3 style={{ margin: '6px 0 0', fontSize: 14 }}>{t('pro.caps.whoHasWhat')}</h3>
-          {roster.map((a) => {
-            const has = effectiveServers(config, a.id);
-            const ownGrant = !!config.agentMcpGrants?.[a.id];
-            return (
-              <div key={a.id} className="pro-card pro-row" style={{ flexWrap: 'wrap' }}>
-                <span className="pro-row" style={{ width: 150 }}><Avatar agent={a} /><strong style={{ fontSize: 13 }}>{a.name}</strong></span>
-                <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
-                  {NATIVE_TOOL_GROUPS.map((g) => {
-                    // The orchestrator delegates through the office: never Claude's sub-agents.
-                    const locked = g.id === 'subagents' && a.isGod;
-                    const on = !locked && !(config.agentToolBlocks?.[a.id] ?? []).includes(g.id);
-                    return (
-                      <button key={g.id}
-                        className={`pro-chip${on ? ' pro-chip-on' : ' pro-chip-off'}`}
-                        style={{ cursor: locked ? 'default' : 'pointer' }}
-                        title={locked ? t('pro.caps.lockedTitle') : `Claude Code: ${t(`pro.caps.tool.${g.id}Desc`, { defaultValue: g.description })}`}
-                        disabled={saving || locked}
-                        onClick={() => void toggleTools(a.id, g.id)}>
-                        {t(`pro.caps.tool.${g.id}`, { defaultValue: g.label })}
-                      </button>
-                    );
-                  })}
-                  {(() => {
-                    const on = (config.agentRoam ?? []).includes(a.id);
-                    return (
-                      <button className={`pro-chip${on ? ' pro-chip-on' : ' pro-chip-off'}`} style={{ cursor: 'pointer' }}
-                        title={t('pro.caps.tool.roamDesc')} disabled={saving} onClick={() => void toggleRoam(a.id)}>
-                        {t('pro.caps.tool.roam')}
-                      </button>
-                    );
-                  })()}
-                  <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--cth-ink-100)' }} />
-                  {MCP_CATALOG.map((e) => {
-                    const on = has.includes(e.id);
-                    const usable = consented(config, e.id);
-                    return (
-                      <button key={e.id}
-                        className={`pro-chip${on && usable ? ' pro-chip-on' : ''}${!on ? ' pro-chip-off' : ''}`}
-                        style={{ cursor: 'pointer', borderStyle: on && !usable ? 'dashed' : undefined }}
-                        title={on && !usable ? t('pro.caps.notSwitchedOn', { name: e.label }) : mcpDescription(t, e.id, e.description)}
-                        disabled={saving}
-                        onClick={() => toggle(a.id, e.id)}>
-                        {e.label}{on && isKeyed(e.id) ? ` · ${levelOf(config.agentMcpAccess?.[a.id] as Record<string, Level> | undefined, e.id) === 'readwrite' ? t('pro.caps.accessWriteShort') : t('pro.caps.accessReadShort')}` : ''}
-                      </button>
-                    );
-                  })}
-                </span>
-                {ownGrant
-                  ? <button className="pro-btn" disabled={saving} onClick={() => void grant(a.id, undefined)}>{t('pro.caps.useDefaults')}</button>
-                  : <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.caps.workspaceDefaults')}</span>}
-              </div>
-            );
-          })}
-          <p className="pro-sub" style={{ fontSize: 12 }}>
-            {t('pro.caps.footer')}{' '}
-            <button className="pro-btn" style={{ padding: '1px 6px' }} onClick={() => setView({ kind: 'section', section: 'connections' })}>{t('pro.nav.connections')}</button>
-          </p>
-          {/* What the folder and git rules can and cannot see (shared/toolGuard.ts). */}
-          <p className="pro-sub" style={{ fontSize: 12 }}>{t('pro.caps.guardLimits')}</p>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** What the orchestrator may add as skills, and what it has given whom. */
-function OfficeSkills({ config, roster }: { config: HarnessConfig; roster: Agent[] }) {
-  const { t } = useTranslation();
-  const [state, setState] = useState<Awaited<ReturnType<typeof window.cth.skillsOffice>> | null>(null);
-  const load = () => { void window.cth.skillsOffice?.().then(setState).catch(() => setState({ skills: {} })); };
-  useEffect(load, []);
-  const policy = config.orchestratorSkills ?? 'official';
-  const nameOf = (id: string) => (id === '*' ? t('pro.caps.skills.everyone') : roster.find((a) => a.id === id)?.name ?? id);
-  const rows = Object.entries(state?.skills ?? {});
-  return (
-    <div className="pro-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <span className="pro-row" style={{ flexWrap: 'wrap' }}>
-        <strong style={{ fontSize: 14 }}>{t('pro.caps.skills.title')}</strong>
-        <span className="pro-sub" style={{ fontSize: 12, flex: 1, minWidth: 200 }}>{t('pro.caps.skills.sub')}</span>
-        <select className="pro-input" value={policy} aria-label={t('pro.caps.skills.policy')}
-          onChange={(e) => void window.cth.updateConfig({ orchestratorSkills: e.target.value as 'off' | 'official' | 'mine' | 'catalog' })}>
-          <option value="off">{t('pro.caps.skills.policy_off')}</option>
-          <option value="official">{t('pro.caps.skills.policy_official')}</option>
-          <option value="mine">{t('pro.caps.skills.policy_mine')}</option>
-          <option value="catalog">{t('pro.caps.skills.policy_catalog')}</option>
+      <div className="pro-row">
+        <span className="pro-sub">{t('pro.caps.grantTo')}</span>
+        <select className="pro-input" value={target ?? ''} onChange={(e) => setTarget(e.target.value)}>
+          {roster.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
-      </span>
-      <SkillMarketplaces />
-      {rows.length === 0
-        ? <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.caps.skills.none')}</span>
-        : rows.map(([name, s]) => (
-          <span key={name} className="pro-row" style={{ flexWrap: 'wrap', gap: 8 }}>
-            <strong style={{ fontSize: 13 }}>{name}</strong>
-            <span className="pro-chip">{s.owner}</span>
-            <span className="pro-sub" style={{ fontSize: 12, flex: 1 }}>{s.agents.map(nameOf).join(', ')}</span>
-            <button className="pro-btn" onClick={() => void window.cth.skillsOfficeRemove(name).then(load)}>{t('pro.caps.skills.remove')}</button>
-          </span>
-        ))}
-    </div>
-  );
-}
+        {note && <span className="pro-sub" style={{ fontSize: 12 }}>{note}</span>}
+      </div>
 
-/** Your own skill marketplaces: GitHub repos whose skills join the catalog
- *  (main/skillMarketplaces.ts). The Skills browser and the orchestrator see them. */
-function SkillMarketplaces() {
-  const { t } = useTranslation();
-  const [list, setList] = useState<Awaited<ReturnType<typeof window.cth.skillMarketplaces>> | null>(null);
-  const [url, setUrl] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
-  const load = (force = false) => { void window.cth.skillMarketplaces(force).then(setList).catch(() => setList([])); };
-  useEffect(() => load(), []);
-  const add = async () => {
-    if (!url.trim()) return;
-    setBusy(true); setNote(null);
-    const r = await window.cth.addSkillMarketplace(url.trim());
-    setBusy(false);
-    if (r.ok) { setUrl(''); setNote({ ok: true, text: t('pro.caps.skills.mktAdded', { count: r.count ?? 0 }) }); load(); }
-    else setNote({ ok: false, text: r.error ?? t('pro.caps.skills.mktFailed') });
-  };
-  return (
-    <div className="pro-mkt">
-      <span className="pro-row" style={{ gap: 8 }}>
-        <span className="pro-side-label" style={{ padding: 0 }}>{t('pro.caps.skills.mktTitle')}</span>
-        <span className="pro-sub" style={{ fontSize: 12, flex: 1 }}>{t('pro.caps.skills.mktSub')}</span>
-        {!!list?.length && <button className="pro-btn" style={{ padding: '1px 8px' }} onClick={() => load(true)}>{t('pro.caps.skills.mktRefresh')}</button>}
-      </span>
-      {list?.map((m) => (
-        <span key={m.url} className="pro-row" style={{ gap: 8, flexWrap: 'wrap' }}>
-          <strong style={{ fontSize: 13 }}>{m.label}</strong>
-          <span className="pro-chip">{t('pro.caps.skills.mktCount', { count: m.count })}</span>
-          <span className="pro-sub pro-mono" style={{ fontSize: 11, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.url}>{m.url}</span>
-          {m.error && <span className="pro-sub" style={{ fontSize: 11, color: 'var(--cth-coral)' }} title={m.error}>{t('pro.caps.skills.mktStale')}</span>}
-          <button className="pro-btn" onClick={() => void window.cth.removeSkillMarketplace(m.url).then(() => load())}>{t('pro.caps.skills.remove')}</button>
-        </span>
-      ))}
-      <span className="pro-row" style={{ gap: 8 }}>
-        <input className="pro-input pro-mono" style={{ flex: 1, minWidth: 0 }} placeholder="https://github.com/your-org/skills" value={url}
-          onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void add(); }} />
-        <button className="pro-btn pro-btn-primary" disabled={busy || !url.trim()} onClick={() => void add()}>{busy ? t('pro.caps.skills.mktReading') : t('pro.caps.skills.mktAdd')}</button>
-      </span>
-      {note && <span className="pro-sub" style={{ fontSize: 12, color: note.ok ? 'var(--cth-mint)' : 'var(--cth-coral)' }}>{note.text}</span>}
+      {draft && (
+        <BundleEditor draft={draft} config={config} saving={saving}
+          onChange={setDraft} onCancel={() => setDraft(null)} onSave={saveDraft}
+          onConnections={() => setView({ kind: 'section', section: 'connections' })} />
+      )}
+
+      <div className="pro-grid">
+        {bundles.map((b) => {
+          const current = target ? effectiveServers(config, target) : [];
+          const match = b.servers.length === current.length && b.servers.every((s) => current.includes(s));
+          return (
+            <article key={b.id} className="pro-card"
+              style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 130, ...(match ? { background: 'var(--cth-lemon-light)', borderColor: 'var(--cth-lemon)' } : {}) }}>
+              <span className="pro-row">
+                <span style={{ display: 'inline-flex', padding: 8, borderRadius: 8, background: 'var(--cth-cream-200)' }}><Icon name={b.icon} /></span>
+                <strong style={{ fontSize: 15, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{bundleName(b)}</strong>
+                {b.custom && <span className="pro-chip" style={{ marginInlineStart: 'auto' }}>{t('pro.caps.yours')}</span>}
+              </span>
+              <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
+                {b.servers.length === 0 && <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.caps.noServers')}</span>}
+                {b.servers.map((s) => <span key={s} className={`pro-chip${consented(config, s) ? '' : ' pro-chip-off'}`}>{mcpLabel(s)}{isKeyed(s) ? ` · ${levelOf(b.access, s) === 'readwrite' ? t('pro.caps.accessWriteShort') : t('pro.caps.accessReadShort')}` : ''}</span>)}
+              </span>
+              <span className="pro-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                <button className="pro-btn pro-btn-primary" disabled={!target || saving || match} onClick={() => target && void grant(target, b.servers, b.access)}>
+                  {match ? t('pro.caps.hasIt', { name: targetAgent?.name ?? t('pro.nav.agent') }) : t('pro.caps.grantBtn', { name: targetAgent?.name ?? '…' })}
+                </button>
+                {b.custom ? (
+                  <>
+                    <button className="pro-btn" disabled={saving} onClick={() => setDraft({ id: b.id, label: b.label, icon: b.icon, servers: b.servers, access: b.access })}>{t('pro.caps.edit')}</button>
+                    <button className="pro-btn" disabled={saving} onClick={() => remove(b)}>{t('pro.caps.delete')}</button>
+                  </>
+                ) : (
+                  <button className="pro-btn" disabled={saving} title={t('pro.caps.duplicateTitle')}
+                    onClick={() => setDraft({ label: t('pro.caps.copyOf', { name: bundleName(b) }), icon: b.icon, servers: b.servers, access: b.access })}>{t('pro.caps.duplicate')}</button>
+                )}
+              </span>
+            </article>
+          );
+        })}
+        <button className="pro-card" disabled={saving}
+          style={{ borderStyle: 'dashed', minHeight: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--cth-ink-500)' }}
+          onClick={() => setDraft({ label: '', icon: 'mcp', servers: [] })}>
+          + {t('pro.caps.newBundle')}
+        </button>
+      </div>
+
+      <h3 style={{ margin: '6px 0 0', fontSize: 14 }}>{t('pro.caps.whoHasWhat')}</h3>
+      {roster.map((a) => {
+        const has = effectiveServers(config, a.id);
+        const ownGrant = !!config.agentMcpGrants?.[a.id];
+        return (
+          <div key={a.id} className="pro-card pro-row" style={{ flexWrap: 'wrap' }}>
+            <span className="pro-row" style={{ width: 150 }}><Avatar agent={a} /><strong style={{ fontSize: 13 }}>{a.name}</strong></span>
+            <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
+              {NATIVE_TOOL_GROUPS.map((g) => {
+                // The orchestrator delegates through the office: never Claude's sub-agents.
+                const locked = g.id === 'subagents' && a.isGod;
+                const on = !locked && !(config.agentToolBlocks?.[a.id] ?? []).includes(g.id);
+                return (
+                  <button key={g.id}
+                    className={`pro-chip${on ? ' pro-chip-on' : ' pro-chip-off'}`}
+                    style={{ cursor: locked ? 'default' : 'pointer' }}
+                    title={locked ? t('pro.caps.lockedTitle') : `Claude Code: ${t(`pro.caps.tool.${g.id}Desc`, { defaultValue: g.description })}`}
+                    disabled={saving || locked}
+                    onClick={() => void toggleTools(a.id, g.id)}>
+                    {t(`pro.caps.tool.${g.id}`, { defaultValue: g.label })}
+                  </button>
+                );
+              })}
+              {(() => {
+                const on = (config.agentRoam ?? []).includes(a.id);
+                return (
+                  <button className={`pro-chip${on ? ' pro-chip-on' : ' pro-chip-off'}`} style={{ cursor: 'pointer' }}
+                    title={t('pro.caps.tool.roamDesc')} disabled={saving} onClick={() => void toggleRoam(a.id)}>
+                    {t('pro.caps.tool.roam')}
+                  </button>
+                );
+              })()}
+              <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--cth-ink-100)' }} />
+              {MCP_CATALOG.map((e) => {
+                const on = has.includes(e.id);
+                const usable = consented(config, e.id);
+                return (
+                  <button key={e.id}
+                    className={`pro-chip${on && usable ? ' pro-chip-on' : ''}${!on ? ' pro-chip-off' : ''}`}
+                    style={{ cursor: 'pointer', borderStyle: on && !usable ? 'dashed' : undefined }}
+                    title={on && !usable ? t('pro.caps.notSwitchedOn', { name: e.label }) : mcpDescription(t, e.id, e.description)}
+                    disabled={saving}
+                    onClick={() => toggle(a.id, e.id)}>
+                    {e.label}{on && isKeyed(e.id) ? ` · ${levelOf(config.agentMcpAccess?.[a.id] as Record<string, Level> | undefined, e.id) === 'readwrite' ? t('pro.caps.accessWriteShort') : t('pro.caps.accessReadShort')}` : ''}
+                  </button>
+                );
+              })}
+            </span>
+            {ownGrant
+              ? <button className="pro-btn" disabled={saving} onClick={() => void grant(a.id, undefined)}>{t('pro.caps.useDefaults')}</button>
+              : <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.caps.workspaceDefaults')}</span>}
+          </div>
+        );
+      })}
+      <p className="pro-sub" style={{ fontSize: 12 }}>
+        {t('pro.caps.footer')}{' '}
+        <button className="pro-btn" style={{ padding: '1px 6px' }} onClick={() => setView({ kind: 'section', section: 'connections' })}>{t('pro.nav.connections')}</button>
+      </p>
+      {/* What the folder and git rules can and cannot see (shared/toolGuard.ts). */}
+      <p className="pro-sub" style={{ fontSize: 12 }}>{t('pro.caps.guardLimits')}</p>
     </div>
   );
 }

@@ -4,7 +4,7 @@
  * identity; next to Pro's hairline cards and system type it read as noise.
  */
 export type ProIconName =
-  | 'now' | 'tasks' | 'inbox' | 'deliverables' | 'automations' | 'memory' | 'capabilities' | 'connections' | 'environment' | 'providers' | 'mcp' | 'team' | 'factories' | 'agents' | 'temps';
+  | 'now' | 'tasks' | 'inbox' | 'deliverables' | 'automations' | 'memory' | 'skills' | 'capabilities' | 'connections' | 'environment' | 'providers' | 'mcp' | 'team' | 'factories' | 'agents' | 'temps';
 
 const PATHS: Record<ProIconName, string> = {
   // a pulse line
@@ -17,6 +17,8 @@ const PATHS: Record<ProIconName, string> = {
   automations: 'M9 1.8L3.8 9h3.9L7 14.2 12.2 7H8.3z',
   // a spark of four points and a small one
   memory: 'M7 2.5c.4 2.6 1.4 3.6 4 4-2.6.4-3.6 1.4-4 4-.4-2.6-1.4-3.6-4-4 2.6-.4 3.6-1.4 4-4z M12.2 10.5c.2 1 .6 1.4 1.6 1.6-1 .2-1.4.6-1.6 1.6-.2-1-.6-1.4-1.6-1.6 1-.2 1.4-.6 1.6-1.6z',
+  // an open book: instructions an agent reads when a task calls for them
+  skills: 'M8 4.2C6.6 3 4.7 2.7 2 3v9.5c2.7-.3 4.6 0 6 1.2 1.4-1.2 3.3-1.5 6-1.2V3c-2.7-.3-4.6 0-6 1.2z M8 4.2v9.5',
   // a puzzle piece
   capabilities: 'M3 5.5h2.2a1.3 1.3 0 1 1 2.6 0H10v2.3a1.3 1.3 0 1 1 0 2.6V13H3z M10 5.5h3v3',
   // two links of a chain

@@ -34,9 +34,20 @@ function Chip({ text, tone = 'quiet' }: { text: string; tone?: 'quiet' | 'accent
   );
 }
 
-export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
+export function SkillsTab({ agentCwd, mode: fixedMode, refreshKey, onInstalled, rowExtra }: {
+  agentCwd?: string;
+  /** Pin one half and hide the toggle (the Skills page shows both, one above the other). */
+  mode?: Mode;
+  /** Changing it rescans the installed skills (an install made by another SkillsTab). */
+  refreshKey?: number;
+  /** Called after a catalog install succeeds. */
+  onInstalled?: (c: CatalogSkill) => void;
+  /** Extra line under an installed skill's description. */
+  rowExtra?: (s: LocalSkill) => React.ReactNode;
+}) {
   const { t } = useTranslation();
-  const [mode, setMode] = useState<Mode>('installed');
+  const [chosenMode, setMode] = useState<Mode>('installed');
+  const mode = fixedMode ?? chosenMode;
   const [query, setQuery] = useState('');
   const [local, setLocal] = useState<LocalSkill[] | null>(null);
   const [catalog, setCatalog] = useState<CatalogSkill[] | null>(null);
@@ -67,7 +78,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
     } finally { setBusy(false); }
   }, [t]);
 
-  useEffect(() => { void loadLocal(); }, [loadLocal]);
+  useEffect(() => { void loadLocal(); }, [loadLocal, refreshKey]);
   // The catalog is fetched only when the user actually opens Browse — no network
   // call for someone who just wanted to see what is installed.
   useEffect(() => { if (mode === 'browse' && catalog === null) void loadCatalog(); }, [mode, catalog, loadCatalog]);
@@ -122,6 +133,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
       if (res.ok) {
         setAction((a) => ({ ...a, [c.url]: { done: t('skillsTab.installed') } }));
         void loadLocal(); // the installed pane must reflect it immediately
+        onInstalled?.(c);
       } else {
         setAction((a) => ({ ...a, [c.url]: { error: res.error } }));
       }
@@ -189,12 +201,16 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
         flexShrink: 0, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
         padding: 10, borderBottom: '1px solid var(--cth-ink-300)'
       }}>
-        <button onClick={() => setMode('installed')} style={tabBtn('installed', t('skillsTab.installed'))}>
-          {t('skillsTab.installed')}{local ? ` (${local.length})` : ''}
-        </button>
-        <button onClick={() => setMode('browse')} style={tabBtn('browse', t('skillsTab.browse'))}>
-          {t('skillsTab.browse')}{catalog ? ` (${catalog.length})` : ''}
-        </button>
+        {!fixedMode && (
+          <>
+            <button onClick={() => setMode('installed')} style={tabBtn('installed', t('skillsTab.installed'))}>
+              {t('skillsTab.installed')}{local ? ` (${local.length})` : ''}
+            </button>
+            <button onClick={() => setMode('browse')} style={tabBtn('browse', t('skillsTab.browse'))}>
+              {t('skillsTab.browse')}{catalog ? ` (${catalog.length})` : ''}
+            </button>
+          </>
+        )}
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -283,6 +299,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
                       {s.description.length > 220 ? `${s.description.slice(0, 220)}…` : s.description}
                     </div>
                   )}
+                  {rowExtra?.(s)}
                   <div style={{
                     fontFamily: 'var(--cth-font-mono)', fontSize: 10.5,
                     color: 'var(--cth-ink-500)', wordBreak: 'break-all'

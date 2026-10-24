@@ -6,7 +6,7 @@ import { create } from 'zustand';
  * origin partitioning) don't apply to two UI preferences.
  */
 
-export type ProSection = 'now' | 'tasks' | 'inbox' | 'deliverables' | 'automations' | 'memory' | 'capabilities' | 'connections' | 'environment' | 'providers' | 'mcp' | 'team' | 'factories' | 'agents' | 'temps';
+export type ProSection = 'now' | 'tasks' | 'inbox' | 'deliverables' | 'automations' | 'memory' | 'skills' | 'capabilities' | 'connections' | 'environment' | 'providers' | 'mcp' | 'team' | 'factories' | 'agents' | 'temps';
 export type ProView = { kind: 'section'; section: ProSection } | { kind: 'agent'; agentId: string };
 export type Layout = 'classic' | 'pro';
 
