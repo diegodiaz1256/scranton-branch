@@ -111,3 +111,17 @@ test('written files from any CLI: `files` on Pre or Post events', () => {
   ]);
   assert.deepEqual(w.map((f) => [f.path, f.created]), [['/w/oc/research/b.md', true], ['/w/jim/research/a.md', false], ['/w/jim/src/x.ts', false]]);
 });
+
+test('files written elsewhere are kept across restarts: one per path, newest wins, capped', () => {
+  const { recordElsewhere } = loadTs('src/shared/deliverables.ts');
+  const w = (path, ts, created = false, agentId = 'pam') => ({ path, agentId, name: agentId, ts, created });
+  let list = recordElsewhere([], [w('C:/p/out.html', 1, true)]);
+  list = recordElsewhere(list, [w('c:/P/OUT.html', 5)]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].ts, 5);
+  assert.equal(list[0].created, true);
+  // Nothing new: the same list back, so main does not rewrite the file.
+  assert.equal(recordElsewhere(list, [w('C:/p/out.html', 3)]), list);
+  const many = recordElsewhere([], Array.from({ length: 5 }, (_, i) => w(`/x/${i}.md`, i)), 3);
+  assert.deepEqual(many.map((x) => x.path), ['/x/2.md', '/x/3.md', '/x/4.md']);
+});

@@ -316,8 +316,9 @@ same office. The top bar also has the theme switch (☾), full screen, and Setti
   and **Cancel task** (greyed in Done, Cancelled filter, **Reopen**).
 - **Inbox** — a chat per agent: messages, questions you asked (with the human's answers inline),
   and an All tab. The human answers your questions here.
-- **Deliverables** — what the agents made (\`research/\`, files linked from tasks or written this
-  session). Search by ticket, filter, sort. Click a file to preview it (Markdown, wiki, Mermaid,
+- **Deliverables** — what the agents made (\`research/\`, files linked from tasks or written
+  elsewhere): recent, by task, by agent or folders; images sit under their main document.
+  Search by ticket. Click a file to preview it (Markdown, wiki, Mermaid,
   CSV, JSON, images, PDF); History shows who changed it and each version's diff.
 - **Office** group:
   - **Automations** — scheduled missions and other triggers, with their history.
