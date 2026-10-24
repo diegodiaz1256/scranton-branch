@@ -1066,7 +1066,7 @@ const api = {
 
   /** What an agent has done lately (hook events with what each tool was asked), oldest first. */
   /** Deliverables: the office's research/ folder (newest first) and what each agent wrote this session. */
-  deliverablesList: (): Promise<{ root: string | null; dir: string | null; distro: string | null; files: Array<{ rel: string; abs: string; size: number; mtime: number }>; written: Array<{ path: string; ts: number; created: boolean; agentId: string; name: string }>; links: Array<{ path: string; taskId: string; agentId: string; ts: number }>; hidden?: string[]; authors?: Record<string, { authors: string[]; last: string; lastTs: string }> }> =>
+  deliverablesList: (): Promise<{ root: string | null; dir: string | null; distro: string | null; files: Array<{ rel: string; abs: string; size: number; mtime: number }>; written: Array<{ path: string; ts: number; created: boolean; agentId: string; name: string }>; links: Array<{ path: string; taskId: string; agentId: string; ts: number }>; elsewhere?: Array<{ path: string; ts: number; created: boolean; agentId: string; name: string; size: number; mtime: number }>; total?: number; truncated?: boolean; hidden?: string[]; authors?: Record<string, { authors: string[]; last: string; lastTs: string }> }> =>
     ipcRenderer.invoke('deliverables:list'),
   /** Open a deliverable in its default program (document types only). */
   deliverablesOpenExternal: (path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('deliverables:openExternal', path),

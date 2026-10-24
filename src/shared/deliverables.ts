@@ -176,6 +176,25 @@ export function addLink(links: DeliverableLink[], link: DeliverableLink, max = 2
   return next.length > max ? next.slice(next.length - max) : next;
 }
 
+/** A file an agent wrote outside research/, kept in the hive so the list still
+ *  shows it after a restart (the session's tool calls are gone by then). */
+export interface ElsewhereWrite { path: string; agentId: string; name: string; ts: number; created: boolean }
+
+/** Record writes, one entry per path (newest wins; "created" sticks); the
+ *  newest `max` kept. Returns the same list when nothing changed. */
+export function recordElsewhere(list: ElsewhereWrite[], writes: ElsewhereWrite[], max = 300): ElsewhereWrite[] {
+  let next = list;
+  for (const w of writes) {
+    const key = normPath(w.path);
+    const prev = next.find((x) => normPath(x.path) === key);
+    if (prev && prev.ts >= w.ts && prev.agentId === w.agentId) continue;
+    next = [...next.filter((x) => x !== prev), { ...w, created: w.created || !!prev?.created }];
+  }
+  if (next === list) return list;
+  next.sort((a, b) => a.ts - b.ts);
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
 /** The task a file is linked to, if any. */
 export function linkFor(links: DeliverableLink[], path: string): DeliverableLink | undefined {
   const key = normPath(path);
