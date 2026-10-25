@@ -3379,14 +3379,22 @@ function deliverHire(manifest: HireManifest): void {
 const TASK_HISTORY_EVERY_MS = 5000;
 let taskHistoryAt = 0;
 let taskHistoryState: { root: string; snapshot: TaskSnapshot[] | null; raw: string } | null = null;
-function recordTaskHistory(): void {
+/** tasks.json's path, time and size at the last read, so a read forced before
+ *  an inbox nudge costs one stat when the board has not changed. */
+let taskHistoryStamp = '';
+function recordTaskHistory(force = false): void {
   const now = Date.now();
-  if (now - taskHistoryAt < TASK_HISTORY_EVERY_MS) return;
-  taskHistoryAt = now;
+  if (!force && now - taskHistoryAt < TASK_HISTORY_EVERY_MS) return;
+  if (!force) taskHistoryAt = now;
   const root = hive.enabled() ? hive.root() : null;
   if (!root) return;
+  const tasksPath = join(root, 'tasks.json');
+  let stamp = '';
+  try { const st = statSync(tasksPath); stamp = `${tasksPath}|${st.mtimeMs}|${st.size}`; } catch { return; }
+  if (force && stamp === taskHistoryStamp) return;
+  taskHistoryStamp = stamp;
   let raw = '';
-  try { raw = readFileSync(join(root, 'tasks.json'), 'utf8'); } catch { return; }
+  try { raw = readFileSync(tasksPath, 'utf8'); } catch { return; }
   const snapPath = join(root, 'taskHistory.snapshot.json');
   if (!taskHistoryState || taskHistoryState.root !== root) {
     let snapshot: TaskSnapshot[] | null = null;
@@ -3398,7 +3406,7 @@ function recordTaskHistory(): void {
   try {
     const parsed = JSON.parse(raw) as { tasks?: unknown } | unknown[];
     list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : [];
-  } catch { return; } // mid-write: try again next tick
+  } catch { taskHistoryStamp = ''; return; } // mid-write: try again next tick
   const next = list.map(snapshotOf).filter((t): t is TaskSnapshot => !!t);
   const events = diffTasks(taskHistoryState.snapshot, next, new Date(now).toISOString());
   try { noteLedgerForWorkSwitch(taskHistoryState.snapshot, next); } catch (e) { console.error('[work-switch] ledger:', e); }
@@ -3488,9 +3496,17 @@ const workSwitch = new WorkSwitchClearer({
   enqueue: (agentId, text) => { try { liveWebContents()?.send('workSwitch:queue', { agentId, text, op: 'enqueue' }); } catch { /* window gone */ } },
   withdraw: (agentId, text) => { try { liveWebContents()?.send('workSwitch:queue', { agentId, text, op: 'withdraw' }); } catch { /* window gone */ } },
   holdNudges: (agentId, on) => { try { liveWebContents()?.send('workSwitch:queue', { agentId, text: '', op: on ? 'hold' : 'release' }); } catch { /* window gone */ } },
+  refreshLedger: () => recordTaskHistory(true),
   log: (line) => console.log(line)
 });
 setInterval(() => { try { workSwitch.tick(); } catch (e) { console.error('[work-switch] tick:', e); } }, 5000).unref?.();
+// The renderer's drain asks right before it types an inbox nudge: true means
+// drop it (the agent is being asked for its handoff note, or was just cleared
+// and its resume points at the inbox).
+ipcMain.handle('workSwitch:beforeNudge', (_evt, agentId: unknown) => {
+  if (typeof agentId !== 'string' || !agentId) return false;
+  try { return workSwitch.beforeNudge(agentId); } catch (e) { console.error('[work-switch] before nudge:', e); return false; }
+});
 
 /** One new reading of the ledger: who moved to different work. */
 function noteLedgerForWorkSwitch(prev: TaskSnapshot[] | null, next: TaskSnapshot[]): void {
@@ -9241,6 +9257,9 @@ function runWorkerWakeBeat(): void {
     // is the exact staleness #187 exists to stop.
     const ids = hive.inbox(agentId).map((m) => m.id).filter(Boolean);
     if (!ids.length) { console.log(`[worker-wake] ${agentId} drained before delivery, skipping`); continue; }
+    // The card may have moved with this very mail: the board is read again now,
+    // and a switch about to clear the session takes this nudge's place.
+    if (workSwitch.beforeNudge(agentId)) { console.log(`[worker-wake] ${agentId} is switching work, nudge held`); continue; }
     console.log(`[worker-wake] nudging ${agentId} on ${ptyId} (${ids.length} pending)`);
     nudgeWorker(ptyId, reg.agents[agentId]?.provider ?? 'claude', ids);
   }

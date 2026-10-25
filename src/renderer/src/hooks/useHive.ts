@@ -923,6 +923,16 @@ export function useHive(config: HarnessConfig | null): void {
         removeQueuedMessage(srcId, next.id);
         return { sent: false };
       }
+      // The orchestrator moves the card and sends the work order together, and
+      // main reads the board only every few seconds: asked now, it reads it
+      // again, and a switch of work takes this nudge's place (main/workSwitch.ts)
+      // so the new work is read by the fresh session, not the one being cleared.
+      // Its ids are forgotten, so mail still there once the hold ends is nudged.
+      if (isInboxNudge(next.text) && await window.cth.workSwitchBeforeNudge?.(target.id).catch(() => false)) {
+        removeQueuedMessage(srcId, next.id);
+        delete nudged.current[target.id];
+        return { sent: false };
+      }
       const flightKey = `${srcId}:${next.id}`;
       if (inFlight.has(flightKey)) return { sent: false };
       inFlight.add(flightKey);

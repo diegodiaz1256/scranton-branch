@@ -1543,6 +1543,10 @@ const api = {
     ipcRenderer.on('workSwitch:queue', listener);
     return () => ipcRenderer.removeListener('workSwitch:queue', listener);
   },
+  /** Right before an inbox nudge is typed: main re-reads the task board, and
+   *  true means drop the nudge (the agent is switching work; its resume after
+   *  the clear sends it to the inbox). */
+  workSwitchBeforeNudge: (agentId: string): Promise<boolean> => ipcRenderer.invoke('workSwitch:beforeNudge', agentId),
 
   // ─── Triggers: webhook endpoints (many endpoints, one server + tunnel) ──────
   /** Every configured endpoint, enabled or not. */
