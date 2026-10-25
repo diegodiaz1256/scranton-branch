@@ -35,10 +35,12 @@ const SHIPPED = {
     ["claude-sonnet-5", "Sonnet 5"],
     ["claude-sonnet-4-6", "Sonnet 4.6"],
     ["claude-sonnet-4-6[1m]", "Sonnet 4.6 · 1M"],
+    ["claude-haiku-5-5", "Haiku 5.5"],
     ["claude-haiku-4-5-20251001", "Haiku 4.5"]
   ],
   antigravity: [
     [undefined, "CLI default"],
+    ["Gemini 4 Argon (High)", "Gemini 4 Argon · High (ultra plan)"],
     ["Gemini 3.1 Pro (High)", "Gemini 3.1 Pro · High"],
     ["Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro · Low"],
     ["Gemini 3.8 Flash (High)", "Gemini 3.8 Flash · High"],
@@ -103,6 +105,7 @@ const SHIPPED = {
     ["gpt-5.6-luna-high", "GPT-5.6 Luna 1M High (cheap)"],
     ["gpt-5.6-sol-medium", "GPT-5.6 Sol 1M"],
     ["gpt-5.6-sol-high", "GPT-5.6 Sol 1M High"],
+    ["gemini-4-argon-high", "Gemini 4 Argon High"],
     ["gemini-3.8-flash-high", "Gemini 3.8 Flash"],
     ["gemini-3.7-flash-high", "Gemini 3.7 Flash"],
     ["claude-fable-5-1-thinking-high", "Fable 5.1 1M Thinking (no ZDR)"],
