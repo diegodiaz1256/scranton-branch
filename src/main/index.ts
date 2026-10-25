@@ -87,6 +87,8 @@ import { fleetUsage } from '../shared/hookUsage';
 import { analytics, isRendererMessageSurface } from './analytics';
 import type { SpawnFailReason } from './analytics';
 import { IntegrationBroker } from './integrationBroker';
+import { SshRelay, listSshKeysRaw, parseSshKeys, spawnRelaySsh, parseSshSigner, readSshSignerRaw, runSshSign, sshKeyFingerprint, type SshKeyInfo } from './sshRelay';
+import { cleanSshRelayMap, type SshRelayAuditEntry } from '../shared/sshRelay';
 import * as integrations from './integrations';
 import { applyMissionRequest, type MissionLike } from '../shared/missionRequests';
 import { cleanCustomBundles } from '../shared/roleBundles';
@@ -101,6 +103,7 @@ import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
 import { runsUnsandboxed, unsandboxedAgents, unsandboxRefusal } from '../shared/unsandboxed';
+import { cleanCloudCredentialIds, cleanCloudCredentialMap } from '../shared/cloudCredentials';
 import { ensureVaultRoot } from './vaultRoot';
 import { piNoSandboxScript, refusePiWithoutSandbox, type PiSandboxPlace } from '../shared/piSandbox';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
@@ -763,7 +766,169 @@ It runs in the asking agent's own folder. The agent gets only the output, with e
   log: (m) => console.log('[env]', m)
 });
 
+// ─── SSH through the office (sshRelay.ts) ────────────────────────────────────
+// Where agents run (a WSL floor's distro, or this machine): its ssh-agent
+// socket and the keys the human can choose. Looked up again after a minute.
+let sshFloorCache: { key: string; at: number; info: Promise<{ sock: string; keys: SshKeyInfo[] }> } | null = null;
+function sshFloorInfo(fresh = false): Promise<{ sock: string; keys: SshKeyInfo[] }> {
+  const distro = hive.enabled() ? hive.wslRoot()?.distro ?? null : null;
+  const key = distro ?? 'local';
+  if (fresh || !sshFloorCache || sshFloorCache.key !== key || Date.now() - sshFloorCache.at > 60_000) {
+    sshFloorCache = { key, at: Date.now(), info: listSshKeysRaw(distro).then((out) => {
+      const r = parseSshKeys(out);
+      // Here (not a WSL floor) the app's own ssh-agent is the human's.
+      return { sock: r.sock || (distro ? '' : process.env.SSH_AUTH_SOCK ?? ''), keys: r.keys };
+    }) };
+  }
+  return sshFloorCache.info;
+}
+// How the human signs there (their global gpg.ssh.program and user.signingkey).
+let sshSignerCache: { key: string; at: number; info: Promise<{ program: string; signingKey: string }> } | null = null;
+function sshSignerInfo(): Promise<{ program: string; signingKey: string }> {
+  const distro = hive.enabled() ? hive.wslRoot()?.distro ?? null : null;
+  const key = distro ?? 'local';
+  if (!sshSignerCache || sshSignerCache.key !== key || Date.now() - sshSignerCache.at > 60_000) {
+    sshSignerCache = { key, at: Date.now(), info: readSshSignerRaw(distro).then(parseSshSigner) };
+  }
+  return sshSignerCache.info;
+}
+function sshAuditPath(): string { return join(app.getPath('userData'), 'ssh-relay-audit.jsonl'); }
+function readSshAudit(agentId?: string, limit = 50): SshRelayAuditEntry[] {
+  let text = '';
+  try { text = readFileSync(sshAuditPath(), 'utf8'); } catch { return []; }
+  const out: SshRelayAuditEntry[] = [];
+  for (const line of text.split('\n').reverse()) {
+    if (out.length >= limit) break;
+    try { const e = JSON.parse(line) as SshRelayAuditEntry; if (!agentId || e.agentId === agentId) out.push(e); } catch { /* partial line */ }
+  }
+  return out;
+}
+const sshRelay = new SshRelay({
+  grant: (agentId) => cleanSshRelayMap(readConfig().agentSshRelay)[agentId] ?? null,
+  custodian: (agentId) => isCustodian(criticalMap(), agentId),
+  sandboxed: (agentId) => hive.isOsSandboxed(agentId),
+  agentName: (agentId) => (hive.enabled() ? hive.registry().agents?.[agentId]?.name : undefined),
+  identities: async (fps) => {
+    const { keys } = await sshFloorInfo();
+    const out: string[] = [];
+    for (const fp of fps) {
+      const k = keys.find((x) => x.fingerprint === fp);
+      if (k?.file) out.push(k.file.replace(/\.pub$/, ''));
+      else if (k?.pub) {
+        // A key in the ssh-agent: ssh picks it by its public half, written
+        // where agents cannot change it (the office's controls).
+        const dir = hive.sshWrapperDir();
+        if (!dir) continue;
+        const f = join(dir, 'keys', `${createHash('sha256').update(fp).digest('hex').slice(0, 16)}.pub`);
+        try { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, `${k.pub}\n`, 'utf8'); } catch { continue; }
+        out.push(hive.forAgent(f).replace(/\\/g, '/'));
+      }
+    }
+    return out;
+  },
+  run: async (argv, env) => {
+    const distro = hive.enabled() ? hive.wslRoot()?.distro ?? null : null;
+    const { sock } = await sshFloorInfo();
+    return spawnRelaySsh(distro, argv, env, sock);
+  },
+  ask: async (agentName, r) => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const verb = r.service === 'git-receive-pack' || r.operation === 'upload' ? 'push to' : 'fetch from';
+    const opts = {
+      type: 'question' as const,
+      buttons: ['Allow once', 'Deny'],
+      defaultId: 1, cancelId: 1, noLink: true,
+      title: 'Use your SSH key?',
+      message: `${agentName} wants to ${verb} ${r.host}:${r.path} with your SSH key`,
+      detail: `The office runs ssh for it (${r.service}); the agent never sees the key. Only git transfers go through.`
+    };
+    const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+    refocusAfterDialog(win);
+    return response === 0;
+  },
+  audit: (e) => {
+    try { appendFileSync(sshAuditPath(), JSON.stringify(e) + '\n', { encoding: 'utf8', mode: 0o600 }); } catch (err) { console.error('[ssh-relay] audit write failed:', err); }
+  },
+  // Signing: the keys where agents run, plus the human's own user.signingkey
+  // (a key only 1Password's op-ssh-sign may hold), signed with their own
+  // gpg.ssh.program from their global config.
+  signKeys: async () => {
+    const [{ keys }, signer] = await Promise.all([sshFloorInfo(), sshSignerInfo()]);
+    const fp = signer.signingKey ? sshKeyFingerprint(signer.signingKey) : null;
+    return fp && !keys.some((k) => k.fingerprint === fp) ? [...keys, { fingerprint: fp, label: 'user.signingkey', source: 'agent' as const, pub: signer.signingKey.replace(/^key::/, '') }] : keys;
+  },
+  sign: async (key, payload) => {
+    const distro = hive.enabled() ? hive.wslRoot()?.distro ?? null : null;
+    const [{ sock }, signer] = await Promise.all([sshFloorInfo(), sshSignerInfo()]);
+    return runSshSign(distro, signer.program, key, payload, sock);
+  },
+  askSign: async (agentName, w) => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const opts = {
+      type: 'question' as const,
+      buttons: ['Allow once', 'Deny'],
+      defaultId: 1, cancelId: 1, noLink: true,
+      title: 'Sign with your SSH key?',
+      message: `${agentName} wants to sign a ${w.kind} with your SSH key: ${w.subject || '(no message)'}`,
+      detail: `${w.repo ? `In ${w.repo}. ` : ''}Key ${w.fingerprint}. The office signs it for the agent (namespace "git" only); the agent never sees the key.`
+    };
+    const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+    refocusAfterDialog(win);
+    return response === 0;
+  }
+});
+
+ipcMain.handle('sshRelay:keys', async () => {
+  // A Windows floor: agents have no OS sandbox, so nothing to relay to.
+  if (!hive.sshWrapperDir()) return { available: false, keys: [] };
+  const { keys, sock } = await sshFloorInfo(true);
+  return { available: true, agentSocket: !!sock, keys: keys.map(({ fingerprint, label, source }) => ({ fingerprint, label, source })) };
+});
+ipcMain.handle('sshRelay:audit', (_evt, agentId: unknown) => readSshAudit(typeof agentId === 'string' ? agentId : undefined));
+// The human's own switch, like "Run without sandbox": only this handler sets
+// agentSshRelay (the generic config write drops it), a custodian is refused,
+// and every change goes to the hive's log.
+// ─── Cloud CLI logins (shared/cloudCredentials.ts) ──────────────────────────
+// Hidden from every sandboxed agent; the human may expose some to one agent.
+// Like "Use my SSH keys": only cloudCreds:set writes agentCloudCredentials
+// (the generic config write drops it), never for a custodian, every change
+// in the hive's log. It applies at the agent's next start.
+ipcMain.handle('cloudCreds:status', async () => {
+  if (!hive.enabled() || !hive.sshWrapperDir()) return { available: false, present: [] };
+  return { available: true, present: await hive.credentialSetsPresent() };
+});
+ipcMain.handle('cloudCreds:set', (_evt, agentId: unknown, ids: unknown) => {
+  if (typeof agentId !== 'string' || !agentId || (ids !== null && !Array.isArray(ids))) return { ok: false, error: 'bad request' };
+  const a = hive.enabled() ? hive.registry().agents?.[agentId] : undefined;
+  if (!a) return { ok: false, error: 'unknown agent' };
+  const next = cleanCloudCredentialIds(ids);
+  if (next.length && isCustodian(criticalMap(), agentId)) return { ok: false, error: `${a.name ?? agentId} holds a critical connection: a custodian never reads your cloud logins.` };
+  const map = cleanCloudCredentialMap(readConfig().agentCloudCredentials);
+  if (next.length) map[agentId] = next; else delete map[agentId];
+  writeConfig({ agentCloudCredentials: map });
+  try { hive.appendLog({ kind: 'cloud-credentials', agentId, name: a.name, exposed: next, by: 'human' }); } catch { /* the config change stands */ }
+  return { ok: true };
+});
+
+ipcMain.handle('sshRelay:set', (_evt, agentId: unknown, grant: unknown) => {
+  if (typeof agentId !== 'string' || !agentId) return { ok: false, error: 'bad request' };
+  const a = hive.enabled() ? hive.registry().agents?.[agentId] : undefined;
+  if (!a) return { ok: false, error: 'unknown agent' };
+  const map = cleanSshRelayMap(readConfig().agentSshRelay);
+  if (grant === null) delete map[agentId];
+  else {
+    if (isCustodian(criticalMap(), agentId)) return { ok: false, error: `${a.name ?? agentId} holds a critical connection: a custodian never uses your SSH keys.` };
+    const clean = cleanSshRelayMap({ [agentId]: grant })[agentId];
+    if (!clean) return { ok: false, error: 'bad request' };
+    map[agentId] = clean;
+  }
+  writeConfig({ agentSshRelay: map });
+  try { hive.appendLog({ kind: 'ssh-relay', agentId, name: a.name, on: grant !== null, keys: map[agentId]?.keys ?? [], ask: !!map[agentId]?.ask, sign: !!map[agentId]?.sign, by: 'human' }); } catch { /* the config change stands */ }
+  return { ok: true };
+});
+
 const integrationBroker = new IntegrationBroker({
+  ssh: { upgrade: (agentId, req, socket, head) => sshRelay.upgrade(agentId, req, socket, head) },
   getRecord: integrations.getRecord,
   getSecret: integrations.getSecret,
   // Looked up on every request: an API switched on (or its key saved) after an
@@ -4118,7 +4283,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           // The human's "Run without sandbox" (never for a custodian).
           unsandboxed: runsUnsandboxed(readConfig().agentUnsandboxed, readConfig().criticalCustodians, opts.hive.id),
           // Its sandboxed shell may reach this broker port (md-api, md-run…).
-          brokerUrl: opts.env?.MD_BROKER_URL
+          brokerUrl: opts.env?.MD_BROKER_URL,
+          // Cloud CLI logins the human exposed to it (never a custodian's).
+          exposeCredentials: isCustodian(criticalMap(), opts.hive.id) ? [] : cleanCloudCredentialMap(readConfig().agentCloudCredentials)[opts.hive.id] ?? []
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
@@ -4787,8 +4954,10 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   const hiveWasEnabled = hive.enabled();
   const wasOnboarded = readConfig().onboardingComplete;
   // "Run without sandbox" is set only by agent:setUnsandboxed (its typed
-  // confirmation, custodian check and audit line); never through here.
-  const { agentUnsandboxed: _unsandboxed, ...safePatch } = patch ?? {};
+  // confirmation, custodian check and audit line); never through here. Nor is
+  // "Use my SSH keys through the office" (sshRelay:set), nor the cloud logins
+  // an agent may read (cloudCreds:set).
+  const { agentUnsandboxed: _unsandboxed, agentSshRelay: _sshRelay, agentCloudCredentials: _cloudCreds, ...safePatch } = patch ?? {};
   const next = writeConfig(safePatch);
   // Live opt-in/out from Settings → Privacy (TELEMETRY.md).
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);

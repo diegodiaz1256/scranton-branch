@@ -18,6 +18,7 @@ require.cache[electron] = { id: electron, filename: electron, loaded: true, expo
 
 const { bwrapArgs, mountPoints, SECRET_HOME_DIRS } = loadTs('src/shared/bwrapSandbox.ts');
 const { HiveManager } = loadTs('src/main/hive.ts');
+const { CLOUD_CREDENTIALS } = loadTs('src/shared/cloudCredentials.ts');
 
 const pairs = (args, flag) => { const out = []; args.forEach((a, i) => { if (a === flag) out.push(args[i + 1]); }); return out; };
 
@@ -42,7 +43,12 @@ test('folders it may not read are hidden; no network when asked; nonsense paths 
 test('mount points to check: the credential folders, the hidden ones and the writable files', () => {
   const m = mountPoints({ writable: [], hide: ['/x'], writableFiles: ['/home/u/.pi/agent/auth.json'], home: '/home/u/' });
   assert.ok(m.includes('/home/u/.ssh') && m.includes('/x') && m.includes('/home/u/.pi/agent/auth.json'));
-  assert.equal(m.length, SECRET_HOME_DIRS.length + 2);
+  // + WSL's interop sockets (/run/WSL).
+  assert.ok(m.includes('/run/WSL'));
+  // + the cloud CLIs' logins (cloudCredentials.ts), folders and files.
+  assert.ok(m.includes('/home/u/.aws') && m.includes('/home/u/.netrc'));
+  const creds = CLOUD_CREDENTIALS.reduce((n, s) => n + s.dirs.length + s.files.length, 0);
+  assert.equal(m.length, SECRET_HOME_DIRS.length + creds + 3);
 });
 
 function tmpHome(t) { const h = fs.mkdtempSync(path.join(os.tmpdir(), 'md-pisbx-')); t.after(() => fs.rmSync(h, { recursive: true, force: true })); return h; }

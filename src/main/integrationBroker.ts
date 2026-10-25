@@ -25,7 +25,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, type Duplex } from 'node:stream';
 import { isReadRequest, type Access } from '../shared/connectionAccess';
 import {
   type IntegrationRecord,
@@ -99,6 +99,11 @@ export interface IntegrationBrokerDeps {
     browse: (url: string, opts: { links: boolean; maxChars: number; page?: number; mode?: string }) => Promise<string>;
     search: (query: string) => Promise<string>;
   };
+  /** SSH through the office (sshRelay.ts): `GET /ssh` with `Upgrade: md-ssh`,
+   *  handed over once the caller's token is checked. */
+  ssh?: {
+    upgrade: (agentId: string | undefined, req: IncomingMessage, socket: Duplex, head: Buffer) => void;
+  };
 }
 
 export interface BrokerRequestRecord {
@@ -137,6 +142,7 @@ export class IntegrationBroker {
     return new Promise((resolve) => {
       if (this.server) { resolve({ ok: true, port: this.port }); return; }
       const server = createServer((req, res) => this.handle(req, res));
+      server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => this.upgrade(req, socket, head));
       const onError = (e: Error): void => { server.off('listening', onListening); resolve({ ok: false, error: e.message }); };
       const onListening = (): void => {
         server.off('error', onError);
@@ -227,6 +233,20 @@ export class IntegrationBroker {
       if (m) return m[1].trim();
     }
     return undefined;
+  }
+
+  /** An upgrade: only `GET /ssh` with `Upgrade: md-ssh` and a live token. */
+  private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    socket.on('error', () => { /* the caller went away */ });
+    const no = (status: number, message: string): void => {
+      const body = JSON.stringify({ error: message });
+      try { socket.end(`HTTP/1.1 ${status} Refused\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`); } catch { /* gone */ }
+    };
+    if (!isLoopback(req.socket.remoteAddress ?? '')) return no(403, 'loopback callers only');
+    const cap = this.resolveCapability(IntegrationBroker.tokenFrom(req));
+    if (!cap) return no(401, 'missing or invalid capability token');
+    if (!/^\/ssh\/?$/.test(req.url ?? '') || String(req.headers.upgrade ?? '').toLowerCase() !== 'md-ssh' || !this.deps.ssh) return no(404, 'not found');
+    this.deps.ssh.upgrade(cap.agentId, req, socket, head);
   }
 
   private handle(req: IncomingMessage, res: ServerResponse): void {

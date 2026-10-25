@@ -58,7 +58,8 @@ import { cleanServerList } from '../shared/roleBundles';
 import { detectProjectType, memoryInstruction, memoryTemplate, parseMemory, type ProjectType } from '../shared/memorySections';
 import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
-import { bwrapArgs, cliStateMounts, mountPoints, type AppSandboxedCli } from '../shared/bwrapSandbox';
+import { bwrapArgs, cliStateMounts, mountPoints, KEY_HOME_DIRS, type AppSandboxedCli } from '../shared/bwrapSandbox';
+import { CLOUD_CREDENTIALS, credentialPromptLine, hiddenCredentialPaths } from '../shared/cloudCredentials';
 import { AGENT_CONTROL_FILES, within, type GuardPolicy } from '../shared/toolGuard';
 import { customProviderHosts, MD_NETGATE, piModelHosts } from './netgate';
 import { resolvePiModelHosts } from '../shared/piModelHosts';
@@ -67,6 +68,7 @@ import { copySkillTreeSync, restoreExecBits } from './skillArchive';
 import { readOfficeSkills, skillReaches, type OfficeSkills, type SkillPolicy } from '../shared/skillRequests';
 import { MD_BROWSE } from './browseCli';
 import { BROKER_CLIENT_JS } from './brokerClient';
+import { MD_SSH_CLI, MD_SSH_SIGN_CLI, sshWrapperScript } from './sshRelayClient';
 import { HOOK_OFFLINE_JS } from '../shared/hookOffline';
 import { MD_LISTS_MCP } from './listsMcp';
 import { liveNamesakes, similarLive, supersededArchived } from './namesakes';
@@ -704,6 +706,34 @@ export class HiveManager {
     return join(root, 'bin', process.platform === 'win32' ? 'hive-node.cmd' : 'hive-node');
   }
 
+  /** `<root>/bin/ssh`: holds the `ssh` a sandboxed agent finds first on its
+   *  PATH (md-ssh, sshRelay.ts). Null on a Windows floor, where agents have no
+   *  OS sandbox and git uses Windows' own ssh. */
+  sshWrapperDir(): string | null {
+    const root = this.root();
+    if (!root || (process.platform === 'win32' && !this.wslRoot())) return null;
+    return join(root, 'bin', 'ssh');
+  }
+
+  /** Whether each agent's shell was put in an OS sandbox at its last start. */
+  private osSandboxed = new Map<string, boolean>();
+  isOsSandboxed(agentId: string): boolean {
+    return this.osSandboxed.get(agentId) === true;
+  }
+
+  /** The wrapper made executable inside a WSL floor's distro (once per write). */
+  private sshWrapperReady: Promise<void> | null = null;
+  private ensureSshWrapper(): Promise<void> {
+    const w = this.wslRoot();
+    const dir = this.sshWrapperDir();
+    if (!w || !dir) return Promise.resolve();
+    if (!this.sshWrapperReady) {
+      this.sshWrapperReady = runInDistroAsync(w.distro, 'chmod', ['755', ...['ssh', 'md-ssh-sign'].map((f) => this.forAgent(join(dir, f)).replace(/\\/g, '/'))], '/')
+        .then(() => undefined, (e) => { console.error('[hive] chmod of the office ssh failed:', e); this.sshWrapperReady = null; });
+    }
+    return this.sshWrapperReady;
+  }
+
   /** Write the launcher described above. Best-effort: on failure callers fall
    *  back to bare `node`, i.e. exactly the pre-fix behavior. */
   private writeNodeLauncher(): void {
@@ -874,6 +904,40 @@ export class HiveManager {
     return toWslUnc(w.distro, h);
   }
 
+  /** The human's key folders (~/.ssh, ~/.gnupg…) where agents run, hidden
+   *  from a sandboxed Claude Code shell (denyRead) and its file tools. None on
+   *  a Windows floor: no OS sandbox there to hide them with. */
+  private keyHomeDirs(): string[] {
+    if (!this.sshWrapperDir()) return [];
+    const home = this.userHome();
+    return KEY_HOME_DIRS.map((d) => join(home, ...d.split('/')));
+  }
+
+  /** The cloud CLIs' logins where agents run that stay hidden from this
+   *  agent's sandboxed shell and file tools (shared/cloudCredentials.ts):
+   *  folders and single files. None on a Windows floor, like keyHomeDirs. */
+  private credentialHomePaths(exposed: string[] = []): { dirs: string[]; files: string[] } {
+    if (!this.sshWrapperDir()) return { dirs: [], files: [] };
+    const home = this.userHome();
+    const h = hiddenCredentialPaths(exposed);
+    const at = (d: string): string => join(home, ...d.split('/'));
+    return { dirs: h.dirs.map(at), files: h.files.map(at) };
+  }
+
+  /** Which credential sets exist where agents run (for Capabilities): ids
+   *  only, nothing read. Empty on a Windows floor. */
+  async credentialSetsPresent(): Promise<string[]> {
+    if (!this.sshWrapperDir()) return [];
+    const home = this.forAgent(this.userHome()).replace(/\\/g, '/').replace(/\/+$/, '');
+    const all = CLOUD_CREDENTIALS.flatMap((s) => [...s.dirs, ...s.files].map((p) => ({ id: s.id, path: `${home}/${p}` })));
+    const present = new Set(await this.existingPaths(all.map((x) => x.path)));
+    return [...new Set(all.filter((x) => present.has(x.path)).map((x) => x.id))];
+  }
+
+  /** Each agent's line about its hidden logins (credentialPromptLine), set at
+   *  spawn where its sandbox hides them. */
+  private credentialLines = new Map<string, string>();
+
   /** A hook command for a CLI that runs it through cmd.exe on Windows (agy,
    *  Gemini, Codex). Those CLIs cannot be handed quotes: they escape embedded
    *  quotes the C-runtime way (`\"`), which cmd.exe does not understand (#350).
@@ -1027,8 +1091,19 @@ export class HiveManager {
       // md-browse: the office browser (browser.ts), as a command and an MCP server.
       [join(root, 'bin', 'md-browse.cjs'), MD_BROWSE],
       // md-skills: the orchestrator's search of the skills catalog (skillsCli.ts).
-      [join(root, 'bin', 'md-skills.cjs'), MD_SKILLS]
+      [join(root, 'bin', 'md-skills.cjs'), MD_SKILLS],
+      // md-ssh: git over SSH through the office, never with the keys
+      // (sshRelay.ts), and the `ssh` on a sandboxed agent's PATH that runs it.
+      [join(root, 'bin', 'md-ssh.cjs'), MD_SSH_CLI],
+      // md-ssh-sign: the agent's gpg.ssh.program, commits signed with the
+      // human's SSH key by the app (sshRelay.ts), never with the key here.
+      [join(root, 'bin', 'md-ssh-sign.cjs'), MD_SSH_SIGN_CLI],
+      ...(this.sshWrapperDir() ? [
+        [join(this.sshWrapperDir()!, 'ssh'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh.cjs')))] as [string, string],
+        [join(this.sshWrapperDir()!, 'md-ssh-sign'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh-sign.cjs')), 'commit signer: signed by the app with your SSH key (md-ssh-sign.cjs)')] as [string, string]
+      ] : [])
     ];
+    if (this.sshWrapperDir()) mkdirSync(this.sshWrapperDir()!, { recursive: true });
     const stampPath = join(root, 'bin', '.generated');
     const stamp = createHash('sha1').update(binFiles.map(([p, c]) => `${p}\0${c}`).join('\0')).digest('hex');
     let current = '';
@@ -1036,7 +1111,12 @@ export class HiveManager {
     if (current !== stamp || binFiles.some(([p]) => !existsSync(p))) {
       for (const [p, c] of binFiles) writeFileSync(p, c, 'utf8');
       try { writeFileSync(stampPath, stamp, 'utf8'); } catch { /* next launch rewrites */ }
+      // A WSL floor's copy is made executable inside the distro, at the first
+      // agent start (ensureSshWrapper): chmod from Windows cannot.
+      this.sshWrapperReady = null;
     }
+    const sshDir = this.sshWrapperDir();
+    if (sshDir && !this.wslRoot()) for (const f of ['ssh', 'md-ssh-sign']) { try { chmodSync(join(sshDir, f), 0o755); } catch { /* it then fails like a missing ssh */ } }
     // The bundled-node launcher every shim above is invoked through — MUST be
     // written before any hook installer runs (they probe for it).
     this.writeNodeLauncher();
@@ -1189,6 +1269,9 @@ export class HiveManager {
       roam?: boolean;
       /** The human let this agent run without its OS sandbox (unsandboxed.ts). */
       unsandboxed?: boolean;
+      /** Cloud CLI logins the human let it read (shared/cloudCredentials.ts);
+       *  the rest stay hidden. Never for a custodian. */
+      exposeCredentials?: string[];
       /** The key broker this agent was handed (MD_BROKER_URL): its sandbox may
        *  reach that one loopback port (hookSettings). */
       brokerUrl?: string;
@@ -1335,6 +1418,33 @@ export class HiveManager {
       const osSandbox = await this.sandboxAvailable();
       const sandboxed = !unsandboxed && (claudeProvider ? (osSandbox || process.platform === 'darwin') : (meta.provider === 'pi' || meta.provider === 'antigravity') && osSandbox);
       env.HIVE_GUARD = JSON.stringify({ roots: g.roots.map((r) => this.forAgent(r)), controls: (g.controls ?? []).map((c) => this.forAgent(c)), contained: g.contained, sandboxed });
+      // The human's SSH keys: hidden from a sandboxed shell (hookSettings,
+      // bwrapSandbox.ts), and so is their ssh-agent. The `ssh` it finds first
+      // on its PATH is the office's (md-ssh): git over SSH through the app when
+      // the human allows it, else a line saying how (sshRelay.ts).
+      this.osSandboxed.set(meta.id, sandboxed);
+      const sshDir = this.sshWrapperDir();
+      if (sandboxed && sshDir) {
+        await this.ensureSshWrapper();
+        env.MD_PATH_PREPEND = sshDir;
+        env.SSH_AUTH_SOCK = '';
+        // Git too, whatever the user's core.sshCommand says (ssh.exe on a WSL
+        // floor would reach Windows' own agent). Claude Code's sandbox sets its
+        // own `ssh -o …`, which finds the same one on PATH.
+        env.GIT_SSH_COMMAND = 'ssh';
+        // Commits signed with an SSH key (gpg.format=ssh, in the user's or the
+        // repository's config): signed by the office's signer, which asks the
+        // app, instead of ssh-keygen, which would find no key here. As
+        // GIT_CONFIG_* (command-line scope, above every config file), never by
+        // editing the user's config. It only matters with gpg.format=ssh.
+        const n = Math.max(0, Number.parseInt(this.wslRoot() ? '' : process.env.GIT_CONFIG_COUNT ?? '', 10) || 0);
+        env[`GIT_CONFIG_KEY_${n}`] = 'gpg.ssh.program';
+        env[`GIT_CONFIG_VALUE_${n}`] = join(sshDir, 'md-ssh-sign');
+        env.GIT_CONFIG_COUNT = String(n + 1);
+      }
+      // The cloud CLIs' logins it may not read, said in its prompt so a
+      // logged-out `gh` is not a puzzle to work around.
+      this.credentialLines.set(meta.id, sandboxed && sshDir ? credentialPromptLine(opts.lockdown ? [] : opts.exposeCredentials) : '');
     }
 
     // Non-hive-aware providers (for example Antigravity, Codex, Grok and Pi) don't
@@ -1575,8 +1685,9 @@ export class HiveManager {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
       const requireSandbox = await this.sandboxAvailable();
-      const settings = this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, opts.denyDirs, !!opts.lockdown,
-        { now: this.controlPathsNow(root, meta.cwd), patterns: this.controlPaths(root, meta.cwd) }) as { sandbox?: unknown };
+      const creds = this.credentialHomePaths(opts.lockdown ? [] : opts.exposeCredentials);
+      const settings = this.hookSettings(shim, opts.theme, opts.lockdown ? custodianWriteRoots(dir, opts.vaults ?? []) : this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs), requireSandbox || !!opts.lockdown, opts.brokerUrl, [...(opts.denyDirs ?? []), ...this.keyHomeDirs(), ...creds.dirs], !!opts.lockdown,
+        { now: this.controlPathsNow(root, meta.cwd), patterns: this.controlPaths(root, meta.cwd) }, creds.files) as { sandbox?: unknown };
       // Run without sandbox: off, said outright (a project's settings cannot
       // turn it back on for it either). Its permission rules stay.
       if (unsandboxed) settings.sandbox = { enabled: false };
@@ -2035,7 +2146,7 @@ export class HiveManager {
     return p;
   }
 
-  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = [], onlyBroker = false, controls: { now: string[]; patterns: string[] } = { now: [], patterns: [] }): unknown {
+  private hookSettings(shim: string, theme?: 'light' | 'dark', writableDirs: string[] = [], requireSandbox = false, brokerUrl?: string, denyDirs: string[] = [], onlyBroker = false, controls: { now: string[]; patterns: string[] } = { now: [], patterns: [] }, denyFiles: string[] = []): unknown {
     // The office's controls (controlPaths): read-only for the sandboxed shell
     // (real paths: denyWrite takes no `*`), and Edit/Write refused by rule
     // (patterns, so an agent hired later is covered; the rule also follows a
@@ -2106,7 +2217,7 @@ export class HiveManager {
               filesystem: {
                 allowWrite: writableDirs,
                 ...(controls.now.length ? { denyWrite: controls.now } : {}),
-                ...(denyDirs.length ? { denyRead: denyDirs } : {})
+                ...(denyDirs.length || denyFiles.length ? { denyRead: [...denyDirs, ...denyFiles] } : {})
               },
               ...(onlyBroker
                 ? { network: { allowedDomains: broker ? [broker] : [], strictAllowlist: true } }
@@ -2114,8 +2225,9 @@ export class HiveManager {
             },
             permissions: {
               additionalDirectories: writableDirs,
-              ...(denyDirs.length || controlDeny.length
-                ? { deny: [...denyDirs.flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(/${d.replace(/\\/g, '/')}/**)`)), ...controlDeny] }
+              // Single files (~/.netrc, ~/.npmrc…) by their own path.
+              ...(denyDirs.length || denyFiles.length || controlDeny.length
+                ? { deny: [...denyDirs.flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(/${d.replace(/\\/g, '/')}/**)`)), ...denyFiles.flatMap((f) => ['Read', 'Edit'].map((t) => `${t}(/${f.replace(/\\/g, '/')})`)), ...controlDeny] }
                 : {})
             }
           }
@@ -2759,6 +2871,7 @@ export class HiveManager {
       // Only the orchestrator routes work; the line meant nothing to a worker.
       meta.isGod ? ctxLine : '',
       fenceLine(this.guardPolicies.get(meta.id)),
+      this.credentialLines.get(meta.id) ?? '',
       `Env vars available to you: AGENT_ID, AGENT_NAME, HIVE_ROOT, AGENT_DIR.`
     ].filter(Boolean).join('\n');
   }
@@ -3758,7 +3871,7 @@ export class HiveManager {
    */
   private async appSandbox(
     cli: AppSandboxedCli, meta: AgentMeta, dir: string, root: string,
-    opts: { extraWritableDirs?: string[]; writableRoots?: string[]; vaults?: string[]; denyDirs?: string[]; lockdown?: { outgoing: string } },
+    opts: { extraWritableDirs?: string[]; writableRoots?: string[]; vaults?: string[]; denyDirs?: string[]; lockdown?: { outgoing: string }; exposeCredentials?: string[] },
     sock: string | null
   ): Promise<string[] | null> {
     if (!(await this.sandboxAvailable())) return null;
@@ -3788,7 +3901,12 @@ export class HiveManager {
       ...sockDir
     ].filter((d): d is string => typeof d === 'string' && d.length > 0).map(lin);
     // Inside the hive, the other agents' folders stay read-only (its own is reopened).
-    const profile = { writable: [...writable, ...state.writable], readOnly: [lin(join(root, 'agents'))], writableFiles: state.writableFiles, home: userHome, hide: (opts.denyDirs ?? []).map(lin), controls };
+    // The human's ssh-agent socket (native Linux: /run/user/<uid>/keyring…):
+    // its folder hidden when it is one of its own, so the agent cannot ask it
+    // to sign. Its env no longer names it either.
+    const agentSock = !this.wslRoot() && process.env.SSH_AUTH_SOCK ? dirname(process.env.SSH_AUTH_SOCK) : '';
+    const sockHide = agentSock && !['/', '/tmp', '/run', '/var/run', homedir()].includes(agentSock) && !/^\/run\/user\/\d+$/.test(agentSock) ? [agentSock] : [];
+    const profile = { writable: [...writable, ...state.writable], readOnly: [lin(join(root, 'agents'))], writableFiles: state.writableFiles, home: userHome, hide: [...(opts.denyDirs ?? []).map(lin), ...sockHide], controls, exposeCredentials: opts.exposeCredentials };
     const present = new Set(await this.existingPaths(mountPoints(profile)));
     return bwrapArgs(profile, (p) => present.has(p));
   }
