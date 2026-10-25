@@ -11,7 +11,7 @@ const loadTs = require('./load-ts.cjs');
 const { linkWorktreeDeps, unlinkWorktreeDeps } = loadTs('src/main/worktreeDeps.ts');
 const { removeWorktree } = loadTs('src/main/git.ts');
 
-const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' }).trim();
 
 function makeHarness() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-worktree-deps-'));
