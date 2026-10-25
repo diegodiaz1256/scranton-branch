@@ -22,5 +22,5 @@ test('the server shim exports protocol, and a window session has one', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src/server/electronShim.ts'), 'utf8');
   assert.match(src, /export const protocol = \{/);
   assert.match(src, /registerSchemesAsPrivileged\(\): void \{\}/);
-  assert.match(src, /readonly session = \{[^}]*protocol \};/);
+  assert.match(src, /readonly session = \{.*, protocol \};/);
 });
