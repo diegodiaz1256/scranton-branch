@@ -185,7 +185,7 @@ export class FakeWebContents extends EventEmitter {
   readonly id = nextId++;
   /** Messages from main to "the renderer" — the engine listens here. */
   readonly bus = new EventEmitter();
-  readonly session = { setPermissionRequestHandler: (): void => {}, setPermissionCheckHandler: (): void => {} };
+  readonly session = { setPermissionRequestHandler: (): void => {}, setPermissionCheckHandler: (): void => {}, protocol };
   private destroyed = false;
   constructor() { super(); this.bus.setMaxListeners(0); }
   send(channel: string, ...args: unknown[]): void {
@@ -335,6 +335,12 @@ export const contextBridge = {
   }
 };
 export const webUtils = { getPathForFile: (): string => '' };
+/** No Chromium here, so no web pages: the deliverables' md-dlv:// scheme is
+ *  registered and handled by nobody (the server has no HTML preview). */
+export const protocol = {
+  registerSchemesAsPrivileged(): void {},
+  handle(): void {}
+};
 /** No Chromium here: the office browser (main/browser.ts) says so instead of crashing. */
 export const session = {
   fromPartition(): never { throw new Error('The office browser needs the desktop app: the server edition has no Chromium.'); }
@@ -346,7 +352,7 @@ export function bindIpcRenderer(wc: FakeWebContents): void { ipcRenderer = rende
 
 export default {
   app, ipcMain, BrowserWindow, safeStorage, Notification, dialog, shell, clipboard, nativeImage,
-  Menu, powerMonitor, powerSaveBlocker, screen, contextBridge, webUtils, session, get ipcRenderer() { return ipcRenderer; }
+  Menu, powerMonitor, powerSaveBlocker, screen, contextBridge, webUtils, session, protocol, get ipcRenderer() { return ipcRenderer; }
 };
 
 // A first boot writes nothing here; keeps the data dir obviously ours.

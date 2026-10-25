@@ -9,6 +9,7 @@
  */
 import { Terminal } from '@xterm/headless';
 import { normalizePtyChunk } from '@/components/terminalRecovery';
+import { inputAreaHas, inputAreaText, showsUsageLimit } from '@shared/ptySubmit';
 
 export interface TerminalEntry {
   ptyId: string;
@@ -18,6 +19,12 @@ export interface TerminalEntry {
   exited: boolean;
   unsub: Array<() => void>;
   onData?: (chunk: string) => void;
+  /** Text the app typed that did not go through (markSubmitStuck). */
+  stuckProbe?: string;
+  /** When a human last sent this terminal a message (noteHumanMessage). */
+  humanActedAt: number;
+  /** When a usage-limit notice first showed at the bottom of the screen; 0: none. */
+  limitSeenAt: number;
 }
 
 const COLS = 120;
@@ -28,7 +35,7 @@ export function acquireTerminal(ptyId: string): TerminalEntry {
   const existing = pool.get(ptyId);
   if (existing) return existing;
   const term = new Terminal({ cols: COLS, rows: ROWS, scrollback: 5000, allowProposedApi: true });
-  const entry: TerminalEntry = { ptyId, term, fit: { fit: () => {} }, exited: false, unsub: [] };
+  const entry: TerminalEntry = { ptyId, term, fit: { fit: () => {} }, exited: false, unsub: [], humanActedAt: 0, limitSeenAt: 0 };
   entry.unsub.push(window.cth.onPtyData(ptyId, (raw: string) => {
     const chunk = normalizePtyChunk(raw);
     if (!chunk) return;
@@ -101,3 +108,57 @@ export function takeHumanInput(_ptyId: string | undefined, _withinMs?: number): 
 
 /** No terminal screen to read on the server. */
 export function terminalUsage(_ptyId: string | undefined): { percent: number; window: string } | null { return null; }
+
+/** Is `probe` in the TUI's input area right now? null when the screen cannot
+ *  tell. Same reading as the desktop's pool, on the headless buffer. */
+export function terminalInputHas(ptyId: string, probe: string): boolean | null {
+  const entry = pool.get(ptyId);
+  if (!entry || entry.exited) return null;
+  try {
+    const buf = entry.term.buffer.active;
+    const cursor = buf.baseY + buf.cursorY;
+    const from = Math.max(0, cursor - 20);
+    const rows: string[] = [];
+    for (let y = from; y <= cursor; y++) rows.push(buf.getLine(y)?.translateToString(true) ?? '');
+    return inputAreaHas(inputAreaText(rows, cursor - from), probe);
+  } catch {
+    return null;
+  }
+}
+
+/** Text the app typed did not go through: latch the terminal so nothing more
+ *  is typed onto that line. */
+export function markSubmitStuck(ptyId: string, probe: string): void {
+  const entry = pool.get(ptyId);
+  if (entry && probe) entry.stuckProbe = probe;
+}
+
+/** Is the app's stuck text still on this terminal's prompt? Clears the latch
+ *  once the screen shows it gone. */
+export function terminalSubmitStuck(ptyId: string): boolean {
+  const entry = pool.get(ptyId);
+  if (!entry || !entry.stuckProbe) return false;
+  if (terminalInputHas(ptyId, entry.stuckProbe) === false) entry.stuckProbe = undefined;
+  return !!entry.stuckProbe;
+}
+
+/** Is this terminal stopped on a usage limit nobody has acted on since? Read
+ *  from the bottom of the headless screen when asked (no view refreshes it). */
+export function terminalShowsUsageLimit(ptyId: string | undefined): boolean {
+  const entry = ptyId ? pool.get(ptyId) : undefined;
+  if (!entry || entry.exited) return false;
+  try {
+    const buf = entry.term.buffer.active;
+    const lines: string[] = [];
+    for (let i = Math.max(0, buf.length - 24); i < buf.length; i++) lines.push(buf.getLine(i)?.translateToString(true) ?? '');
+    if (!showsUsageLimit(lines.join('\n'))) entry.limitSeenAt = 0;
+    else if (!entry.limitSeenAt) entry.limitSeenAt = Date.now();
+  } catch { /* keep the last reading */ }
+  return !!entry.limitSeenAt && entry.humanActedAt < entry.limitSeenAt;
+}
+
+/** A human sent this terminal a message (Team, a Slack reply): that is acting on it. */
+export function noteHumanMessage(ptyId: string): void {
+  const entry = pool.get(ptyId);
+  if (entry) entry.humanActedAt = Date.now();
+}
