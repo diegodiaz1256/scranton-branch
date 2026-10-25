@@ -342,6 +342,9 @@ function codePaths(code: string): Array<{ path: string; built: boolean; start?: 
   for (const m of code.matchAll(/(["'`])((?:\\.|(?!\1)[^\\\n])*)\1/g)) {
     const s = m[2].replace(/\\\\/g, '\\');
     if (!/^(?:[a-zA-Z]:[\\/]|\/|~[\\/]|\.\.[\\/])/.test(s)) continue;
+    // A comment written as content (`'// placeholder\n'`, `'/* reset */'`),
+    // not a path; `//server/share` still is one.
+    if (/^(?:\/\/(?:\s|$)|\/\*\s)/.test(s)) continue;
     const at = m.index ?? 0;
     const before = /\+\s*$/.exec(code.slice(0, at));
     const built = !!before || /^\s*\+/.test(code.slice(at + m[0].length));
