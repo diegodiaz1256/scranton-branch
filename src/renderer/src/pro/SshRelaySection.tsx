@@ -107,7 +107,7 @@ export function SshRelaySection({ agent, config }: { agent: Agent; config: Harne
               <span className={`pro-chip${a.allowed ? ' pro-chip-on' : ' pro-chip-off'}`}>{a.allowed ? t('pro.caps.ssh.allowed') : t('pro.caps.ssh.refused')}</span>
               <span className="pro-mono" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {a.service === 'sign'
-                  ? `${t('pro.caps.ssh.signed')} ${a.subject ?? ''}${a.path ? ` · ${a.path}` : ''}`
+                  ? `${a.allowed && a.exit === 0 ? t('pro.caps.ssh.signed') : t('pro.caps.ssh.signRequest')} ${a.subject ?? ''}${a.path ? ` · ${a.path}` : ''}`
                   : `${a.service ?? ''} ${a.host ? `${a.user ? `${a.user}@` : ''}${a.host}:${a.path ?? ''}` : ''}`}
               </span>
               {typeof a.exit === 'number' && <span className="pro-sub" style={{ fontSize: 11 }}>{t('pro.caps.ssh.exit', { code: a.exit })}</span>}

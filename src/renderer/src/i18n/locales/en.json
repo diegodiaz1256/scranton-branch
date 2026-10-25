@@ -2149,7 +2149,8 @@
         "signBody": "Off by default. On, when git signs this agent's commits or tags with an SSH key (gpg.format=ssh), the office signs them for it outside its sandbox with your key, as you sign yours, and only as git objects (namespace \"git\"). \"Ask me before each use\" applies here too.",
         "signConfirm": "Let {{name}} sign commits with your SSH key?",
         "signWarning": "Its commits and tags will carry your verified signature. It never sees the key, and the office signs nothing but git objects.",
-        "signed": "signed"
+        "signed": "signed",
+        "signRequest": "signature request"
       }
     },
     "skills": {

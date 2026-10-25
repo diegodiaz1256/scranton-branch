@@ -2149,7 +2149,8 @@
         "signBody": "Desactivado por defecto. Activado, cuando git firme los commits o tags de este agente con una clave SSH (gpg.format=ssh), la oficina los firma por él fuera de su sandbox con tu clave, como firmas los tuyos, y solo como objetos de git (espacio de nombres \"git\"). «Preguntarme antes de cada uso» también se aplica aquí.",
         "signConfirm": "¿Dejar que {{name}} firme commits con tu clave SSH?",
         "signWarning": "Sus commits y tags llevarán tu firma verificada. Nunca ve la clave, y la oficina no firma nada que no sea un objeto de git.",
-        "signed": "firmado"
+        "signed": "firmado",
+        "signRequest": "petición de firma"
       }
     },
     "skills": {
