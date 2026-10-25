@@ -32,7 +32,7 @@ export const criticalKey = (kind: CriticalKind, id: string): string => `${kind}:
  *  - pi: its extension waits for the app's answer on every tool call and is
  *    refused when the app cannot answer, its tools are pi's built-ins only, and
  *    the app runs it in bubblewrap with no network but the app's services and
- *    its model provider (md-netgate). That OS sandbox exists only on Linux and
+ *    its model provider (sb-netgate). That OS sandbox exists only on Linux and
  *    WSL floors, so a pi custodian needs one (`osSandbox`).
  *  Any other engine would hold the data with nothing but the prompt. */
 export const CUSTODIAN_PROVIDERS: readonly string[] = ['claude', 'pi'];

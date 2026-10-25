@@ -116,7 +116,7 @@ export function planSkillRequest(
   // A plugin-qualified name ("anthropic-skills:xlsx", as Claude Code lists
   // skills) means the catalog's "xlsx".
   const name = typeof r.skill === 'string' ? r.skill.trim().replace(/^[\w.-]+:/, '') : '';
-  if (!name) return { ok: false, message: 'skill is required (a catalog name; search with md-skills).' };
+  if (!name) return { ok: false, message: 'skill is required (a catalog name; search with sb-skills).' };
   const list = Array.isArray(r.agents) ? r.agents.filter((a): a is string => typeof a === 'string' && !!a.trim()).map((a) => a.trim()) : [];
   const unknown = list.filter((a) => a !== '*' && !ctx.agents.has(a));
   if (unknown.length) return { ok: false, message: `No agent with id ${unknown.join(', ')} on the floor.` };
@@ -144,7 +144,7 @@ export function planSkillRequest(
     return { ok: true, next, message: `${key} now reaches ${merged.includes('*') ? 'every agent' : merged.join(', ')} (from their next prompt).` };
   }
   const entry = findCatalogSkill(ctx.catalog, name);
-  if (!entry) return { ok: false, message: `${name} is not in the skills catalog. Search it with md-skills.` };
+  if (!entry) return { ok: false, message: `${name} is not in the skills catalog. Search it with sb-skills.` };
   if (!policyAllows(entry, ctx.policy)) {
     const allowed = ctx.policy === 'mine' ? "Anthropic's own and the human's marketplaces" : "Anthropic's own";
     return { ok: false, message: `${entry.name} is a community skill (${entry.owner}); you may only add ${allowed}. Ask the human to allow the whole catalog in Capabilities → Skills, or to add it there.` };

@@ -2,7 +2,7 @@
 /**
  * A pi custodian, locked down by the app rather than by its prompt:
  * - its extension refuses a tool call the office cannot answer (STRICT);
- * - it runs in bubblewrap with no network (md-netgate relays only the app's
+ * - it runs in bubblewrap with no network (sb-netgate relays only the app's
  *   loopback services and HTTPS to its model provider), writing only its own
  *   folder and its vaults, with the folders it may not read hidden;
  * - only pi's built-in tools, no MCP; no packages or extensions of the user's;
@@ -53,10 +53,10 @@ test('a pi custodian: netgate around bubblewrap with no network, own folder and 
     { critical: ['Jira'], vaults: [vault], extraWritableDirs: [vault], denyDirs: deny, lockdown: { outgoing: path.join(dir, 'outgoing') } });
 
   assert.equal(inj.osSandbox, 'app');
-  assert.equal(inj.wrapCommand, 'node', 'md-netgate runs first, outside the sandbox');
+  assert.equal(inj.wrapCommand, 'node', 'sb-netgate runs first, outside the sandbox');
   const [script, gateDir, hosts] = inj.wrap;
-  assert.ok(script.endsWith('/.netgate/md-netgate.cjs'));
-  assert.equal(fs.readFileSync(path.join(dir, '.netgate', 'md-netgate.cjs'), 'utf8'), MD_NETGATE, 'written fresh into its own folder');
+  assert.ok(script.endsWith('/.netgate/sb-netgate.cjs'));
+  assert.equal(fs.readFileSync(path.join(dir, '.netgate', 'sb-netgate.cjs'), 'utf8'), MD_NETGATE, 'written fresh into its own folder');
   assert.equal(hosts, 'api.anthropic.com', 'its model provider only');
   const b = inj.wrap.indexOf('bwrap');
   const inner = inj.wrap.lastIndexOf('--inner');
@@ -143,11 +143,11 @@ test('extension: no answer from the office blocks a custodian\'s call, not an or
   assert.equal(await toolCall(t, { AGENT_ID: 'jim-1', HIVE_GUARD: boxed }, ''), null);
 });
 
-// ─── md-netgate's proxy: the model host only ────────────────────────────────
+// ─── sb-netgate's proxy: the model host only ────────────────────────────────
 
 test('netgate: the CONNECT proxy refuses every host but the allowed ones, and relays loopback ports', { skip: process.platform === 'win32' ? 'Unix sockets in a temp dir: Linux/macOS (the WSL run covers it live)' : false }, async (t) => {
   const dir = tmp(t);
-  const script = path.join(dir, 'md-netgate.cjs');
+  const script = path.join(dir, 'sb-netgate.cjs');
   fs.writeFileSync(script, MD_NETGATE);
   const app = http.createServer((_q, r) => r.end('pong'));
   await new Promise((r) => app.listen(0, '127.0.0.1', r));

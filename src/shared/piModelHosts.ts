@@ -1,12 +1,12 @@
 /**
- * The hosts a pi custodian may reach over HTTPS (md-netgate, main/netgate.ts).
+ * The hosts a pi custodian may reach over HTTPS (sb-netgate, main/netgate.ts).
  * The app detects them from the custodian's pi settings (its default
  * provider, from a fixed map, and remote base URLs in models.json); the human
  * can add more, or replace them, in Settings → AI providers → pi. Saved in
  * config.piModelHosts.
  *
  * Hostnames only, reached on 443: no IP addresses, wildcards, ports, paths or
- * plain http. Loopback needs no entry (md-netgate relays the app's loopback
+ * plain http. Loopback needs no entry (sb-netgate relays the app's loopback
  * services and a loopback model by itself).
  *
  * Pure: no electron, no node.
@@ -63,7 +63,7 @@ export function sanitizePiModelHosts(raw: unknown): PiModelHostsConfig | undefin
   return { hosts, mode: r.mode === 'replace' ? 'replace' : 'add' };
 }
 
-/** The hosts md-netgate lets a pi custodian reach: the detected ones plus the
+/** The hosts sb-netgate lets a pi custodian reach: the detected ones plus the
  *  human's, or only the human's when they replace them. */
 export function resolvePiModelHosts(detected: string[], cfg: unknown): string[] {
   const c = sanitizePiModelHosts(cfg);

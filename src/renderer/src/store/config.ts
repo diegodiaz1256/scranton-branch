@@ -197,7 +197,7 @@ export interface HarnessConfig {
   /** Refuse to start a pi agent where the app cannot sandbox it (no bubblewrap,
    *  or not Linux/WSL): shared/piSandbox.ts. Absent → false (it runs, badged). */
   piRequireSandbox?: boolean;
-  /** The hosts a pi custodian may reach over HTTPS (md-netgate): added to the
+  /** The hosts a pi custodian may reach over HTTPS (sb-netgate): added to the
    *  ones detected from its pi settings, or replacing them (shared/piModelHosts.ts). */
   piModelHosts?: { hosts: string[]; mode: 'add' | 'replace' };
   /** Certificates for agents' HTTPS (custom endpoints, company gateways):

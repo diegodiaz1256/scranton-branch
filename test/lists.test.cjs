@@ -41,7 +41,7 @@ test('munder-lists: an agent moves a bought item and adds a wanted one through t
   const { spawn } = require('node:child_process');
   const { MD_LISTS_MCP } = loadTs('src/main/listsMcp.ts');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md lists '));
-  const script = path.join(dir, 'md-lists.cjs');
+  const script = path.join(dir, 'sb-lists.cjs');
   fs.writeFileSync(script, MD_LISTS_MCP);
   const lists = path.join(dir, 'lists');
   fs.mkdirSync(lists);

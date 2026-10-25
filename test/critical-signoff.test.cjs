@@ -138,7 +138,7 @@ test('files + network: the custodian\'s sandbox writes its folder and vault only
   const s = JSON.parse(fs.readFileSync(inj.args[inj.args.indexOf('--settings') + 1], 'utf8'));
   assert.deepEqual(s.sandbox.filesystem.allowWrite, [dir, vault], 'not the hive root, not the palace');
   assert.deepEqual(s.permissions.additionalDirectories, [dir, vault]);
-  assert.deepEqual(s.sandbox.network, { allowedDomains: ['127.0.0.1:47123'], strictAllowlist: true }, 'the broker (md-api), no other host');
+  assert.deepEqual(s.sandbox.network, { allowedDomains: ['127.0.0.1:47123'], strictAllowlist: true }, 'the broker (sb-api), no other host');
   assert.equal(s.sandbox.failIfUnavailable, true, 'no sandbox, no custodian shell');
   const g = hive.guardFor('pam-1');
   assert.deepEqual(g.roots, [dir, vault]);

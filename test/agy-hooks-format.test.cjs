@@ -51,7 +51,7 @@ test('the guard reads Antigravity 1.4 tool calls: write_file/edit_file Path, run
     ['write_file', { Path: path.join(project, 'a.txt'), Content: 'ok' }],
     ['edit_file', { Path: path.join(project, 'a.txt'), Target: 'ok', Replacement: 'bye' }],
     ['run_command', { CommandLine: 'npm test' }],
-    ['run_command', { CommandLine: `node ${path.join(root, 'bin', 'md-api.cjs')}` }],
+    ['run_command', { CommandLine: `node ${path.join(root, 'bin', 'sb-api.cjs')}` }],
     ['read_file', { Path: shim }]
   ]) {
     assert.equal(guardToolCall(tool, input, g, os.homedir(), project), null, `${tool} ${JSON.stringify(input)}`);

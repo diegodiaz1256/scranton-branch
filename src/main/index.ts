@@ -4283,7 +4283,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           roam: (readConfig().agentRoam ?? []).includes(opts.hive.id),
           // The human's "Run without sandbox" (never for a custodian).
           unsandboxed: runsUnsandboxed(readConfig().agentUnsandboxed, readConfig().criticalCustodians, opts.hive.id),
-          // Its sandboxed shell may reach this broker port (md-api, md-run…).
+          // Its sandboxed shell may reach this broker port (sb-api, sb-run…).
           brokerUrl: opts.env?.SB_BROKER_URL,
           // Cloud CLI logins the human exposed to it (never a custodian's).
           exposeCredentials: isCustodian(criticalMap(), opts.hive.id) ? [] : cleanCloudCredentialMap(readConfig().agentCloudCredentials)[opts.hive.id] ?? []

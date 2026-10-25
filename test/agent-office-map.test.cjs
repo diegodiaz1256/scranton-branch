@@ -35,7 +35,7 @@ test('every agent gets the office map with absolute paths and the no-hunting rul
     for (const f of ['tasks.json', 'board.md', 'registry.json', 'research', 'lists']) {
       assert.ok(prompt.includes(path.join(root, f)), `${provider}: ${f} by full path`);
     }
-    assert.ok(prompt.includes(path.join(root, 'bin', 'md-run.cjs')), `${provider}: runners`);
+    assert.ok(prompt.includes(path.join(root, 'bin', 'sb-run.cjs')), `${provider}: runners`);
     assert.match(prompt, /source code: if something is not here/, provider);
     assert.match(prompt, /ask god instead of hunting/, provider);
   }
@@ -83,7 +83,7 @@ test('PROTOCOL.md is a short index; each topic is its own file', async (t) => {
     assert.equal(worker.includes(`protocol/${d.file}`), d.who === 'everyone', `${d.file} under its audience`);
   }
   assert.match(read('messages.md'), /"act": "request \| inform/);
-  assert.match(read('services.md'), /`bin\/md-run\.cjs` with no arguments/);
+  assert.match(read('services.md'), /`bin\/sb-run\.cjs` with no arguments/);
   assert.match(read('hire.md'), /"spec": "munder-difflin\/hire@1"/);
   // What a live orchestrator had to guess or got wrong on a WSL floor: the
   // engine names and pi's model form, polling for the spawn, archiving a temp
@@ -98,7 +98,7 @@ test('PROTOCOL.md is a short index; each topic is its own file', async (t) => {
   assert.match(prompt, /open only the one you need/);
 });
 
-test('md-run with no runners says so instead of printing nothing', async (t) => {
+test('sb-run with no runners says so instead of printing nothing', async (t) => {
   // Live: a Pi agent ran it, got exit 0 and an empty line, and could not tell
   // "none yet" from a failure.
   const http = require('node:http');
@@ -107,7 +107,7 @@ test('md-run with no runners says so instead of printing nothing', async (t) => 
   const server = http.createServer((req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ runners: [] })); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   t.after(() => server.close());
-  const out = await new Promise((resolve, reject) => execFile(process.execPath, [path.join(root, 'bin', 'md-run.cjs')], {
+  const out = await new Promise((resolve, reject) => execFile(process.execPath, [path.join(root, 'bin', 'sb-run.cjs')], {
     env: { ...process.env, MD_BROKER_URL: `http://127.0.0.1:${server.address().port}`, MD_BROKER_TOKEN: 't' }
   }, (err, stdout) => (err ? reject(err) : resolve(stdout))));
   assert.match(out, /No runners are set up for you yet/);

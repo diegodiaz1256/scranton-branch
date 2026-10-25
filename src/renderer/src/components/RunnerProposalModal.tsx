@@ -6,7 +6,7 @@ import './RunnerProposalModal.css';
 type Kind = 'secret' | 'op';
 
 /**
- * An agent asks for a runner (`md-run --propose`): a command that runs with
+ * An agent asks for a runner (`sb-run --propose`): a command that runs with
  * secrets the agent never sees. The human reads the exact command, why, and
  * which secrets it uses, and can create the ones that do not exist yet right
  * here (a value or a 1Password reference), stored encrypted by the app.
