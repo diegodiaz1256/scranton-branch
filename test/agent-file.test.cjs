@@ -222,7 +222,8 @@ test('round-trip: export → file → import plan keeps what it should', () => {
   assert.deepEqual(plan.connections.missing.map((c) => c.service), ['github-token', 'api:jira']);
   assert.deepEqual(plan.mcpManual.map((m) => m.name), ['Local tool', 'Remote']);
   assert.equal(plan.memory, true);
-  assert.equal(fillPlaceholders('in {{PROJECT}}/src', '/work/p'), 'in /work/p/src');
+  assert.equal(fillPlaceholders('in {{PROJECT}}/src', { project: '/work/p' }), 'in /work/p/src');
+  assert.equal(fillPlaceholders('{{OFFICE}}/hive and {{HOME}}/.ssh, {{PROJECT}}', { office: '/home/u/offices/x/', home: '/home/u' }), '/home/u/offices/x/hive and /home/u/.ssh, {{PROJECT}}');
 });
 
 test('import grants nothing privileged: access capped by the office, keyed servers wait for consent', () => {
@@ -264,6 +265,21 @@ test('role bundles round-trip through an agent file', () => {
   assert.deepEqual(saved[0].servers.sort(), ['fetch', 'git']);
   assert.deepEqual(saved[0].access, { git: 'readwrite' });
   assert.equal(planAgentImport(file, { ...LOCAL, customBundles: saved }).bundle.exists, true);
+});
+
+test('a WSL floor: the Linux spellings of its folders become placeholders too', () => {
+  const unc = '\\\\wsl.localhost\\Ubuntu\\home\\zeroge\\offices\\af';
+  const file = buildAgentFile({
+    agent: { id: 'a', name: 'A', cwd: `${unc}\\proj`, goal: 'Work in /home/zeroge/offices/af/proj/src, notes in /home/zeroge/offices/af/hive, keys in /home/zeroge/.ssh' },
+    config: { harnessHome: unc, registeredRepos: [`${unc}\\proj`] },
+    homes: ['\\\\wsl.localhost\\Ubuntu\\home\\zeroge'],
+    extraRoots: [
+      { path: '/home/zeroge/offices/af/proj', token: '{{PROJECT}}' },
+      { path: '/home/zeroge/offices/af', token: '{{OFFICE}}' },
+      { path: '/home/zeroge', token: '{{HOME}}' }
+    ]
+  }, ALL);
+  assert.equal(file.prompt.goal, 'Work in {{PROJECT}}/src, notes in {{OFFICE}}/hive, keys in {{HOME}}/.ssh');
 });
 
 test('paths become placeholders on every platform', () => {

@@ -1245,7 +1245,7 @@ const api = {
   agentFileOpen: (): Promise<{ ok: boolean; fileName?: string; file?: AgentFile; plan?: ImportPlan; error?: string }> =>
     ipcRenderer.invoke('agentFile:open'),
   /** Set up what the file asks for, for a new agent id, before its spawn. */
-  agentFileApply: (agentId: string, file: AgentFile, choices: { project: string; skills: boolean; skillFiles: boolean; memory: boolean; bundle: boolean }): Promise<{ ok: boolean; error?: string; notes?: string[]; config?: HarnessConfig }> =>
+  agentFileApply: (agentId: string, file: AgentFile, choices: { project: string; skills: boolean; skillFiles: boolean; memory: boolean; bundle: boolean }): Promise<{ ok: boolean; error?: string; notes?: string[]; places?: { project?: string; office?: string; home?: string }; config?: HarnessConfig }> =>
     ipcRenderer.invoke('agentFile:apply', agentId, file, choices),
 
   // ─── Config changes ──────────────────────────────────────────────────────

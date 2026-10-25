@@ -93,7 +93,7 @@ import * as integrations from './integrations';
 import { applyMissionRequest, type MissionLike } from '../shared/missionRequests';
 import { cleanCustomBundles } from '../shared/roleBundles';
 import { Factories } from './factories';
-import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toWslUnc, mirroredNetworking, parseWslPath, probeInDistro, WSL_INSTALL, wslAgentTmpDir } from './wsl';
+import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toLinuxPath, toWslUnc, mirroredNetworking, parseWslPath, probeInDistro, WSL_INSTALL, wslAgentTmpDir } from './wsl';
 import { WslBridge } from './wslBridge';
 import { appImageRelaunch } from './appImageLauncher';
 import { McpServers } from './mcpServers';
@@ -161,7 +161,7 @@ import { toolCatalog, type ToolStatus } from '../shared/toolCatalog';
 import { listLocalSkills, loadCatalog, installSkill, installSkillFromFolder, uninstallSkill, type LocalSkill, type CatalogSkill } from './skills';
 import { cleanMarketplaces, loadMarketplace, loadMarketplaces, marketplaceProblem, mergeCatalog } from './skillMarketplaces';
 import { cleanSkillPolicy, planSkillRequest, skillReaches } from '../shared/skillRequests';
-import { EXPORT_PARTS, agentFileName, buildAgentFile, fillPlaceholders, planAgentImport, validateAgentFile, type AgentFile, type ExportParts, type ImportLocal } from '../shared/agentFile';
+import { EXPORT_PARTS, PLACEHOLDER, agentFileName, buildAgentFile, fillPlaceholders, planAgentImport, validateAgentFile, type AgentFile, type ExportParts, type ImportLocal } from '../shared/agentFile';
 import { readAgentFile, readSkillFiles, writeSkillFiles } from './agentFile';
 import { loadHero } from './hero';
 import { loadModelCatalog } from './modelCatalog';
@@ -3681,6 +3681,18 @@ function exportAgentFile(fields: AgentFileFields, parts: ExportParts): AgentFile
     ...(cfg.customMcp ?? []).flatMap((c) => [...Object.values(c.env ?? {}), ...Object.values(c.headers ?? {})]),
     ...secretLookingValues(cfg)
   ];
+  // On a WSL floor the agent wrote its memory and config with Linux paths
+  // (/home/<user>/...): those name the same folders as the UNC ones.
+  const w = hive.wslRoot();
+  const linux = (p: string | null | undefined, token: string) => {
+    const l = w && p ? toLinuxPath(p, w.distro) : null;
+    return l && l.startsWith('/') && l !== p ? [{ path: l, token }] : [];
+  };
+  const extraRoots = [
+    ...[fields.worktreePath, fields.cwd, ...(cfg.registeredRepos ?? [])].flatMap((p) => linux(p, PLACEHOLDER.project)),
+    ...linux(cfg.harnessHome, PLACEHOLDER.office),
+    ...linux(agentsHome(), PLACEHOLDER.home)
+  ];
   return buildAgentFile({
     agent: { ...fields, description: fields.description || reg?.role },
     tags: reg?.capabilities,
@@ -3689,6 +3701,7 @@ function exportAgentFile(fields: AgentFileFields, parts: ExportParts): AgentFile
     connections,
     memory: parts.memory && hive.enabled() ? hive.memory(fields.id) : undefined,
     homes: [homedir(), agentsHome()],
+    extraRoots,
     secrets
   }, parts);
 }
@@ -3755,7 +3768,12 @@ ipcMain.handle('agentFile:apply', async (_evt, agentId: unknown, rawFile: unknow
   if (!v.ok || !v.file) return { ok: false, error: v.errors.join('; ') };
   const file = v.file;
   const c = (rawChoices && typeof rawChoices === 'object' ? rawChoices : {}) as Record<string, unknown>;
-  const project = typeof c.project === 'string' ? c.project : '';
+  // The placeholders as the agent sees its folders: /home/<user>/... on a WSL floor.
+  const places = {
+    project: hive.forAgent(typeof c.project === 'string' ? c.project : ''),
+    office: hive.forAgent(readConfig().harnessHome ?? ''),
+    home: hive.forAgent(agentsHome())
+  };
   const plan = planAgentImport(file, await agentImportLocal());
   const notes: string[] = [];
   try {
@@ -3765,7 +3783,7 @@ ipcMain.handle('agentFile:apply', async (_evt, agentId: unknown, rawFile: unknow
     if (c.bundle === true && plan.bundle && !plan.bundle.exists) {
       writeConfig({ customRoleBundles: cleanCustomBundles([...(readConfig().customRoleBundles ?? []), plan.bundle.bundle]).map(({ custom: _c, ...b }) => b) });
     }
-    if (c.memory === true && file.memory) hive.seedMemory(agentId, fillPlaceholders(file.memory, project));
+    if (c.memory === true && file.memory) hive.seedMemory(agentId, fillPlaceholders(file.memory, places));
     const store = hive.officeSkillStore();
     if (c.skills === true && store) {
       const catalog = await fullSkillCatalog().catch(() => ({ skills: [] as CatalogSkill[] }));
@@ -3796,7 +3814,7 @@ ipcMain.handle('agentFile:apply', async (_evt, agentId: unknown, rawFile: unknow
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e), notes };
   }
-  return { ok: true, notes, config: readConfig() };
+  return { ok: true, notes, places, config: readConfig() };
 });
 
 // IPC: "import hires…" file picker in the Add-Agent modal. Every selected file

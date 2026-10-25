@@ -423,6 +423,9 @@ export interface AgentExportSource {
   memory?: string;
   /** The human's home folder(s): become {{HOME}}. */
   homes?: string[];
+  /** More spellings of the same folders (a WSL floor's /home/<user>/... for
+   *  the \\wsl.localhost\... ones the config holds). */
+  extraRoots?: Array<{ path: string; token: string }>;
   /** Every secret value the office holds that main could read: never written. */
   secrets?: string[];
   now?: string;
@@ -508,6 +511,7 @@ export function buildAgentFile(src: AgentExportSource, parts: ExportParts): Agen
   for (const p of [agent.worktreePath, agent.cwd, ...(cfg.registeredRepos ?? [])]) if (p) roots.push({ path: p, token: PLACEHOLDER.project });
   if (cfg.harnessHome) roots.push({ path: cfg.harnessHome, token: PLACEHOLDER.office });
   for (const h of src.homes ?? []) if (h) roots.push({ path: h, token: PLACEHOLDER.home });
+  for (const r of src.extraRoots ?? []) if (r.path) roots.push(r);
   const ctx = { secrets: [...new Set((src.secrets ?? []).filter((s) => typeof s === 'string' && s.length >= 6))].sort((a, b) => b.length - a.length), roots };
   const line = (s: string, n: number) => clip(cleanText(s, ctx).replace(/[\r\n\t]+/g, ' ').replace(CTRL_RE, '').trim(), n);
   const body = (s: string, n: number) => clip(cleanText(s, ctx).replace(CTRL_RE, ''), n);
@@ -780,7 +784,16 @@ export function planAgentImport(file: AgentFile, local: ImportLocal): ImportPlan
   };
 }
 
-/** {{PROJECT}} in imported text becomes the folder the human picked. */
-export function fillPlaceholders(text: string, project: string): string {
-  return project ? text.split(PLACEHOLDER.project).join(project) : text;
+/** The folders the placeholders stand for here, as the agent sees them. */
+export interface Places { project?: string; office?: string; home?: string }
+
+/** Imported text with {{PROJECT}}, {{OFFICE}} and {{HOME}} put back as this
+ *  office's folders. One left without a folder stays as it is. */
+export function fillPlaceholders(text: string, places: Places): string {
+  let out = text;
+  for (const k of ['project', 'office', 'home'] as const) {
+    const v = places[k];
+    if (v) out = out.split(PLACEHOLDER[k]).join(v.replace(/[\\/]+$/, ''));
+  }
+  return out;
 }

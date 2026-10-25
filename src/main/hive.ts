@@ -3452,7 +3452,7 @@ export class HiveManager {
     const p = join(dir, 'memory.md');
     if (existsSync(p)) return false;
     mkdirSync(dir, { recursive: true });
-    writeFileSync(p, text, 'utf8');
+    writeFileSync(p, this.forAgent(text), 'utf8');
     return true;
   }
   /** Whether an agent has recorded NON-TRIVIAL memory — i.e. has appended real

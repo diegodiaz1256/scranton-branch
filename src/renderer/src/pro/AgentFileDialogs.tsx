@@ -140,7 +140,7 @@ export function ImportAgentDialog({ opened, config, onClose }: { opened: OpenedA
       description: plan.role || 'a fresh harness',
       project: folderName(plan.isolate ? cwd : spawnedCwd),
       tmuxTarget: '', cwd: spawnedCwd,
-      goal: plan.goal ? fillPlaceholders(plan.goal, cwd) : undefined,
+      goal: plan.goal ? fillPlaceholders(plan.goal, applied.places ?? { project: cwd }) : undefined,
       status: 'idle', action: 'starting up', progress: 0, currentStation: 'desk',
       ptyId, command, provider, model: plan.model, worktreePath: res.worktreePath, seedPrompt: res.seedPrompt,
       recentTextTs: Date.now()
@@ -198,7 +198,7 @@ export function ImportAgentDialog({ opened, config, onClose }: { opened: OpenedA
         <div className="pro-card" style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
           {fact(t('pro.agentFile.engine'), <span className="pro-mono">{command}</span>)}
           {plan.role && fact(t('pro.agentFile.role'), plan.role)}
-          {plan.goal && fact(t('pro.agentFile.goal'), <span style={{ whiteSpace: 'pre-wrap' }}>{fillPlaceholders(plan.goal, cwd)}</span>)}
+          {plan.goal && fact(t('pro.agentFile.goal'), <span style={{ whiteSpace: 'pre-wrap' }}>{fillPlaceholders(plan.goal, { project: cwd, office: config.harnessHome ?? undefined })}</span>)}
           {plan.tags.length > 0 && fact(t('pro.agentFile.tags'), list(plan.tags))}
           {fact(t('pro.agentFile.grant'), plan.grant
             ? <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>{plan.grant.map((s) => <span key={s} className={`pro-chip ${plan.needsConsent.includes(s) ? 'pro-chip-off' : ''}`}>{mcpLabel(s)}{plan.access?.[s] === 'readwrite' ? ' · rw' : ''}</span>)}</span>
