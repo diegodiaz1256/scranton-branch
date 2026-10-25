@@ -24,7 +24,14 @@ export interface ModelPrice {
 
 // Anthropic list prices, USD per million tokens. Approximate, fallback-only —
 // the live path uses Claude's own per-model cost, so drift here is harmless.
-const OPUS: ModelPrice = { inputPerM: 15, outputPerM: 75, cacheReadPerM: 1.5, cacheWritePerM: 18.75 };
+// Opus too, one row per generation: a single row priced every Opus at Opus
+// 4/4.1's $15/$75, three times Opus 4.6-5's list price. Cache rows use the
+// usual multipliers (reads 0.1x input, 5-minute writes 1.25x), except Opus
+// 5.5's reads, listed at $0.20 (0.05x).
+// Opus 4.5 keeps the old row: no current price for it was on hand.
+const OPUS_5_5: ModelPrice = { inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2, cacheWritePerM: 5 };
+const OPUS_4_6: ModelPrice = { inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWritePerM: 6.25 };
+const OPUS_LEGACY: ModelPrice = { inputPerM: 15, outputPerM: 75, cacheReadPerM: 1.5, cacheWritePerM: 18.75 };
 const SONNET: ModelPrice = { inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWritePerM: 3.75 };
 // Haiku moved price more than once, so one row per generation: a single row
 // priced every Haiku at Haiku 3.5's $0.80/$4, eight times Haiku 5.5's list
@@ -53,7 +60,7 @@ export function normalizeModel(model: string | undefined | null): string {
 /** Resolve a model id to its price row by family, falling back to Sonnet. */
 export function priceFor(model: string | undefined | null): ModelPrice {
   const m = normalizeModel(model).toLowerCase();
-  if (m.includes('opus')) return OPUS;
+  if (m.includes('opus')) return opusPrice(m);
   if (m.includes('haiku')) return haikuPrice(m);
   if (m.includes('sonnet')) return SONNET;
   return DEFAULT_PRICE;
@@ -70,6 +77,30 @@ function haikuPrice(m: string): ModelPrice {
   if (/3[-.]5-haiku/.test(m)) return HAIKU_3_5;
   if (/3-haiku/.test(m)) return HAIKU_3;
   return HAIKU_4_5;
+}
+
+/** Opus rows by `major.minor`; a missing minor is `.0` (`claude-opus-5`). */
+const OPUS_BY_VERSION: Record<string, ModelPrice> = {
+  '5.5': OPUS_5_5,
+  '5.0': OPUS_4_6,
+  '4.8': OPUS_4_6,
+  '4.7': OPUS_4_6,
+  '4.6': OPUS_4_6,
+  '4.5': OPUS_LEGACY,
+  '4.1': OPUS_LEGACY,
+  '4.0': OPUS_LEGACY
+};
+
+/** The Opus row for a lower-cased model id. The version follows the family
+ *  (`claude-opus-4-8`, `claude-opus-4-1-20250805`, `claude-opus-4.7`); a
+ *  minor is one digit, so the date in `claude-opus-4-20250514` reads as 4.0.
+ *  Claude 3 Opus (`claude-3-opus-20240229`) is on the old row. Any other id,
+ *  the bare `opus` alias or a newer Opus, gets the newest known row. */
+function opusPrice(m: string): ModelPrice {
+  const v = /opus-(\d)(?!\d)(?:[-.](\d)(?!\d))?/.exec(m);
+  if (v) return OPUS_BY_VERSION[`${v[1]}.${v[2] ?? '0'}`] ?? OPUS_5_5;
+  if (/3-opus/.test(m)) return OPUS_LEGACY;
+  return OPUS_5_5;
 }
 
 /** Token split used by the cost estimator (matches `AgentUsage` token fields). */
