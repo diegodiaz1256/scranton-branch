@@ -1,11 +1,11 @@
-# Scranton Branch 1.2.1
+# Scranton Branch 1.3.0
 
 ## What's new
 
-- **New agents show the project's folder name** on Windows and WSL instead of the whole path.
-- **Costs are closer to real.** Each Haiku and Opus generation has its own price (Haiku 5.5 at $0.10/$0.50, Opus 5.5 at $4/$20, Opus 4.6–5 at $5/$25), and the model list has Haiku 5.5 and Gemini 4 Argon.
-- **The breaker stops nagging.** An agent that already stopped is not limited again, and the same warning is not sent twice to the same agent within 10 minutes.
-- **No hourly standup on new installs.** It stays in the missions list, turned off; offices that already have it keep it.
+- **Any agent can start a temp.** Give an agent a quota (0–4, off by default) and it can hand a small job to a short-lived temp that reports back to it and is archived when done. A temp never gets more access than its parent, and custodians can't start one. Schedules, webhooks, Slack and Team can also answer with "A temp" or "A temp, clone of <agent>".
+- **Export an agent to a file.** You pick what goes in (role, engine, capabilities, skills, MCP servers, connections, memory if you want); secrets and your folders never do. Import shows what the file brings and what is missing, and the new agent gets nothing privileged: sandbox on, no custodian role, access capped by the office.
+- **A clean context when work changes.** When an agent moves to a different task after an hour or more, it writes a handoff.md, its context is cleared, and the new session starts from that note. On for new installs, under Automations → Context.
+- **Prompts no longer sit unsent.** The app waits for an agent's screen to be drawn before typing into it (on Windows too), and presses Enter again later if it was ignored, never over your own typing.
 
 ## License
 
@@ -15,6 +15,7 @@ From 1.0.0 Scranton Branch is licensed under the **Apache License 2.0**. If you 
 
 | Version | Highlights |
 |---|---|
+| 1.2.1 | Project folder names on Windows and WSL, costs closer to real, a quieter breaker, no standup on new installs. |
 | 1.2.0 | Agents cannot escape the sandbox, SSH keys and cloud logins hidden, critical connections, Deliverables redone. |
 | 1.1.3 | MCP servers that log in with a key in a header can be imported. |
 | 1.1.2 | Office browser spends fewer tokens, keys work in a Windows floor, Linux launcher survives updates. |
@@ -53,26 +54,26 @@ From 1.0.0 Scranton Branch is licensed under the **Apache License 2.0**. If you 
 ### macOS
 | | |
 |---|---|
-| Universal (Apple Silicon + Intel) | [`Scranton-Branch-1.2.1-mac-universal.dmg`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.2.1-mac-universal.dmg) |
+| Universal (Apple Silicon + Intel) | [`Scranton-Branch-1.3.0-mac-universal.dmg`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.0-mac-universal.dmg) |
 
 ### Windows
 | | |
 |---|---|
-| Installer (x64), *recommended* | [`Scranton-Branch-1.2.1-win-x64-setup.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.2.1-win-x64-setup.exe) |
-| Portable (x64, no install) | [`Scranton-Branch-1.2.1-win-x64-portable.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.2.1-win-x64-portable.exe) |
+| Installer (x64), *recommended* | [`Scranton-Branch-1.3.0-win-x64-setup.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.0-win-x64-setup.exe) |
+| Portable (x64, no install) | [`Scranton-Branch-1.3.0-win-x64-portable.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.0-win-x64-portable.exe) |
 
 ### Linux
 | | |
 |---|---|
-| AppImage (x86_64) | [`Scranton-Branch-1.2.1-linux-x86_64.AppImage`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.2.1-linux-x86_64.AppImage) |
-| Server, no GUI (x64) | [`scranton-branch-server-1.2.1-linux-x64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.2.1-linux-x64.tar.gz) |
-| Server, no GUI (arm64) | [`scranton-branch-server-1.2.1-linux-arm64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.2.1-linux-arm64.tar.gz) |
+| AppImage (x86_64) | [`Scranton-Branch-1.3.0-linux-x86_64.AppImage`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.0-linux-x86_64.AppImage) |
+| Server, no GUI (x64) | [`scranton-branch-server-1.3.0-linux-x64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.3.0-linux-x64.tar.gz) |
+| Server, no GUI (arm64) | [`scranton-branch-server-1.3.0-linux-arm64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.3.0-linux-arm64.tar.gz) |
 
 Server: unpack, then run `sudo ./install.sh`. Setup, Docker and secrets are in [SERVER.md](https://github.com/diegodiaz1256/scranton-branch/blob/main/SERVER.md).
 
 Builds are not code-signed yet: macOS asks you to allow the app in System Settings → Privacy & Security, and Windows SmartScreen asks you to confirm ("More info" → "Run anyway").
 
-Source: [`v1.2.1`](https://github.com/diegodiaz1256/scranton-branch/archive/refs/tags/v1.2.1.tar.gz)
+Source: [`v1.3.0`](https://github.com/diegodiaz1256/scranton-branch/archive/refs/tags/v1.3.0.tar.gz)
 
 ## About Scranton Branch
 

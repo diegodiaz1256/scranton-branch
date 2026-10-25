@@ -1,3 +1,3 @@
-- New agents show the project folder name on Windows and WSL.
-- Costs closer to real: Haiku and Opus priced per generation.
-- The breaker no longer repeats warnings; no hourly standup on new installs.
+- Any agent can start temps, with a quota you set.
+- Export an agent to a file without secrets, and import it.
+- Context cleared on a task switch, with a handoff note; prompts no longer sit unsent.
