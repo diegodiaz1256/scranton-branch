@@ -141,6 +141,9 @@ export interface HarnessConfig {
   /** SSH through the office (shared/sshRelay.ts): agent id → the keys it may use
    *  (fingerprints; none = any) and whether to ask first. Absent → off. */
   agentSshRelay?: Record<string, { keys?: string[]; ask?: boolean; sign?: boolean }>;
+  /** Cloud CLI logins (shared/cloudCredentials.ts) the human let each agent
+   *  read: agent id → set ids. Absent → all hidden. */
+  agentCloudCredentials?: Record<string, string[]>;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'mine' | 'catalog';

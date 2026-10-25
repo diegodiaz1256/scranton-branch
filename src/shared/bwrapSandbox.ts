@@ -8,7 +8,8 @@
  *     the hive, the project or worktree, extra dirs such as the palace), plus a
  *     private /tmp of its own; inside the hive, the other agents' folders stay
  *     read-only (what the app's path guard enforces for Claude);
- *   - the user's credential folders (~/.ssh, cloud CLIs' keys…) hidden;
+ *   - the user's keys (~/.ssh…) hidden, and the cloud CLIs' logins unless
+ *     the human exposed them to this agent (shared/cloudCredentials.ts);
  *   - folders it may not read at all (another agent's confidential vault)
  *     hidden the same way;
  *   - network: the host's (the agent needs its model API, and the app's
@@ -20,6 +21,8 @@
  *
  * Pure: no electron, no node.
  */
+
+import { hiddenCredentialPaths } from './cloudCredentials';
 
 export interface BwrapProfile {
   /** Folders the agent may write (Linux paths). */
@@ -37,6 +40,9 @@ export interface BwrapProfile {
   hide?: string[];
   /** The agent's home (for the credential folders). */
   home: string;
+  /** Cloud CLI logins this agent may read (shared/cloudCredentials.ts ids);
+   *  every other one is hidden. */
+  exposeCredentials?: string[];
   /** 'host' (default): the host network; 'none': no network at all. */
   network?: 'host' | 'none';
 }
@@ -47,8 +53,17 @@ export interface BwrapProfile {
  *  SSH goes through the office instead (shared/sshRelay.ts). */
 export const KEY_HOME_DIRS: readonly string[] = ['.ssh', '.gnupg', '.1password'];
 
-/** Credential folders under $HOME no agent has any business reading. */
-export const SECRET_HOME_DIRS: readonly string[] = [...KEY_HOME_DIRS, '.aws', '.azure', '.kube', '.docker', '.config/gcloud', '.config/gh', '.password-store'];
+/** Credential folders under $HOME no agent ever reads. The cloud CLIs'
+ *  logins are hidden too, unless exposed to the agent (cloudCredentials.ts). */
+export const SECRET_HOME_DIRS: readonly string[] = [...KEY_HOME_DIRS, '.password-store'];
+
+/** What to hide under `home` for this profile: folders (a tmpfs over each)
+ *  and single files (/dev/null over each). */
+function hiddenHome(p: BwrapProfile): { dirs: string[]; files: string[] } {
+  const home = p.home.replace(/\/+$/, '');
+  const creds = hiddenCredentialPaths(p.exposeCredentials);
+  return { dirs: [...SECRET_HOME_DIRS, ...creds.dirs].map((d) => `${home}/${d}`), files: creds.files.map((f) => `${home}/${f}`) };
+}
 
 /** WSL's interop sockets: through them a command in the distro starts Windows
  *  programs as the user, outside any Linux sandbox (ssh.exe with the Windows
@@ -84,7 +99,8 @@ export function cliStateMounts(cli: AppSandboxedCli, home: string): { writable: 
 
 /** The paths a profile mounts over (for the caller's existence check). */
 export function mountPoints(p: BwrapProfile): string[] {
-  return [...SECRET_HOME_DIRS.map((d) => `${p.home.replace(/\/+$/, '')}/${d}`), WSL_INTEROP_DIR, ...(p.hide ?? []), ...(p.writableFiles ?? [])];
+  const h = hiddenHome(p);
+  return [...h.dirs, ...h.files, WSL_INTEROP_DIR, ...(p.hide ?? []), ...(p.writableFiles ?? [])];
 }
 
 const clean = (xs: string[] | undefined): string[] => [...new Set((xs ?? []).filter((x) => typeof x === 'string' && x.startsWith('/') && !x.includes('\0')).map((x) => x.replace(/\/+$/, '') || '/'))];
@@ -94,7 +110,6 @@ const clean = (xs: string[] | undefined): string[] => [...new Set((xs ?? []).fil
  * path exists where the agent runs; only existing mount points are used.
  */
 export function bwrapArgs(p: BwrapProfile, exists: (path: string) => boolean): string[] {
-  const home = p.home.replace(/\/+$/, '');
   const args = [
     '--die-with-parent',
     '--ro-bind', '/', '/',
@@ -116,7 +131,9 @@ export function bwrapArgs(p: BwrapProfile, exists: (path: string) => boolean): s
   // Over every writable bind, so nothing reopens them.
   for (const c of clean(p.controls)) args.push('--ro-bind-try', c, c);
   // Hidden last, so a writable parent cannot uncover them.
-  const hidden = clean([...SECRET_HOME_DIRS.map((d) => `${home}/${d}`), WSL_INTEROP_DIR, ...(p.hide ?? [])]);
+  const home = hiddenHome(p);
+  const hidden = clean([...home.dirs, WSL_INTEROP_DIR, ...(p.hide ?? [])]);
   for (const h of hidden) if (exists(h)) args.push('--tmpfs', h);
+  for (const f of clean(home.files)) if (exists(f)) args.push('--ro-bind', '/dev/null', f);
   return args;
 }
