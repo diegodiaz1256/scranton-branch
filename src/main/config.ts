@@ -67,7 +67,10 @@ export interface ScheduledMission {
 
 /** The built-in hourly ops standup: god reviews who's doing what + whether tasks
  *  are on track and agents are running, and every terminal's context is compacted.
- *  Shipped enabled by default; users can toggle it off in the Command Center. */
+ *  OFF for a new install (DEFAULTS carries it disabled): an hourly god turn
+ *  spends tokens on a floor that may not want it. An install that already has
+ *  it keeps what it has (see SAVED_CONFIG_DEFAULTS); users toggle it in the
+ *  Command Center. */
 export const OPS_STANDUP_MISSION: ScheduledMission = {
   id: 'ops-standup',
   label: 'Hourly ops standup',
@@ -527,6 +530,16 @@ export interface HarnessConfig {
 /** The default model before Sonnet 5.5 (see migrateDefaultModelV1). */
 const OLD_DEFAULT_MODEL = 'claude-fable-5';
 
+/** Defaults that changed for NEW installs only. A config.json saved before
+ *  the change was written under the old defaults, so a key it never stored
+ *  still means the old value: these sit between DEFAULTS and the saved file
+ *  when one exists, and never apply to a first run. The hourly standup used
+ *  to ship enabled; an install that has a saved config and no `missions` of
+ *  its own keeps it on. */
+const SAVED_CONFIG_DEFAULTS: Partial<HarnessConfig> = {
+  missions: [OPS_STANDUP_MISSION]
+};
+
 const DEFAULTS: HarnessConfig = {
   onboardingComplete: false,
   harnessHome: null,
@@ -550,7 +563,8 @@ const DEFAULTS: HarnessConfig = {
   defaultWorkerTokenCap: 0, // 0 = unlimited (human directive: NO per-worker cap)
   semanticMemory: true,
   embeddingModel: 'minilm',
-  missions: [OPS_STANDUP_MISSION],
+  // The standup is listed, switched off: a new install opts in.
+  missions: [{ ...OPS_STANDUP_MISSION, enabled: false }],
   notifications: false,
   strongKeepalive: false,
   autoUpdate: true,
@@ -831,7 +845,7 @@ function readConfigUncached(): HarnessConfig {
       try { writeConfigFiles(p, mergeSecrets(parsed, readSecretsFile(), codec)); } catch { /* retried next launch */ }
     }
     const withSecrets = mergeSecrets(parsed, readSecretsFile(), codec);
-    return normalizeStoredHomes(migrateDefaultModelV1(migrateMcpTrimV1(migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...withSecrets })))));
+    return normalizeStoredHomes(migrateDefaultModelV1(migrateMcpTrimV1(migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...SAVED_CONFIG_DEFAULTS, ...withSecrets })))));
   } catch {
     return withTriggerDefaults({ ...DEFAULTS });
   }
