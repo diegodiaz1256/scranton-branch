@@ -13,6 +13,7 @@ import { waitsOnHuman } from '@/components/TasksKanban';
 import { respawnAgent } from '@/hooks/useRestoreTeam';
 import { useProStore } from './proStore';
 import { CustodianBadge } from './CriticalConnection';
+import { ImportAgentButton } from './AgentFileDialogs';
 import { UnsandboxedBadge } from './Unsandboxed';
 import { unsandboxedAgents } from '@shared/unsandboxed';
 import {
@@ -67,6 +68,7 @@ export function AgentsView({ roster, tasks, directory, asking, config, onOpen }:
         <div className="pro-head-end">
           <input className="pro-input" placeholder={t('pro.agents.search')} value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="pro-btn" onClick={() => setView({ kind: 'section', section: 'capabilities' })}>{t('pro.nav.capabilities')}</button>
+          <ImportAgentButton config={config} />
           <button className="pro-btn pro-btn-primary" onClick={() => useStore.getState().setAddAgentOpen(true)}>{t('pro.agents.add')}</button>
         </div>
       </div>

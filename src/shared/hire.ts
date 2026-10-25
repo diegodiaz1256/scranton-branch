@@ -127,7 +127,7 @@ const FLAG_RE = /^[A-Za-z0-9._\/=:,@+-]{1,100}$/;
  *  punctuation: `claude-sonnet-4-6[1m]`, `Gemini 3.1 Pro (High)`. No quotes,
  *  backticks, `$`, `;`, `&`, `|`, `^`, `<`, `>`, `%`, `!`. (The command field
  *  stays editable, so a legitimate exotic value can still be typed by hand.) */
-const MODEL_RE = /^[A-Za-z0-9 ._()[\]\/:@+-]{1,80}$/;
+export const MODEL_RE = /^[A-Za-z0-9 ._()[\]\/:@+-]{1,80}$/;
 
 /** Flags a manifest is ALLOWED to append — a default-deny ALLOWLIST.
  *
