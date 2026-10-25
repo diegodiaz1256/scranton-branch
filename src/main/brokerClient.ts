@@ -1,21 +1,21 @@
 /**
- * The HTTP client the hive's own commands (md-api, md-run, md-browse) use to
+ * The HTTP client the hive's own commands (sb-api, sb-run, sb-browse) use to
  * reach the app's loopback key broker. Plain JS, spliced into each generated
  * `<hive>/bin/*.cjs` file; no dependencies.
  *
  * Why not `fetch`: inside Claude Code's OS sandbox (bubblewrap on Linux and in
  * a WSL floor's distro, Seatbelt on macOS) a command gets its own network, so
  * 127.0.0.1 is not where the broker listens and the connection is refused
- * ("md-api: fetch failed"). Its traffic leaves only through the sandbox's
+ * ("sb-api: fetch failed"). Its traffic leaves only through the sandbox's
  * proxy (`http_proxy`), and that proxy lets it reach exactly the broker's
  * port, which the agent's settings allow (hive.ts hookSettings). The sandbox
  * also lists 127.0.0.1 in `no_proxy`, and Node's fetch reads neither, so the
  * request is sent to the proxy by hand. Outside the sandbox it goes direct.
  *
  *   brokerRequest(url, { method, headers, body }) → { status, ok, text(), json() }
- *   brokerError('md-api', e, url) → one line naming the URL, the error code
+ *   brokerError('sb-api', e, url) → one line naming the URL, the error code
  *                                   and, in the sandbox, what to do ('' for
- *                                   no "md-api: " prefix)
+ *                                   no "sb-api: " prefix)
  */
 export const BROKER_CLIENT_JS = String.raw`
 const brokerHttp = require('http');

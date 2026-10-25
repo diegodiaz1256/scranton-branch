@@ -15,7 +15,7 @@
  *   (optional) --config /abs/path/to/slack-reply.json
  *
  * The discovery file is located via, in order: --config, then the
- * MD_SLACK_REPLY_CONFIG env var (injected into every agent by main).
+ * SB_SLACK_REPLY_CONFIG env var (injected into every agent by main; MD_* before the rename).
  */
 'use strict';
 
@@ -52,9 +52,9 @@ if (!channel || !thread || !text || text === true) {
   fail('required: --channel <id> --thread <ts> --text "<message>"');
 }
 
-const configPath = args.config || process.env.MD_SLACK_REPLY_CONFIG;
+const configPath = args.config || process.env.SB_SLACK_REPLY_CONFIG || process.env.MD_SLACK_REPLY_CONFIG;
 if (!configPath) {
-  fail('cannot locate the reply endpoint: set MD_SLACK_REPLY_CONFIG or pass --config');
+  fail('cannot locate the reply endpoint: set SB_SLACK_REPLY_CONFIG or pass --config');
 }
 
 let cfg;

@@ -6,7 +6,7 @@
  * 2.1.286: a server listed there is never started), so the bundle goes in
  * <agent>/mcp.json behind --mcp-config. Keyed servers (Connections) never run
  * under the agent: they go through main's MCP gateway, which holds the key, and
- * the agent gets only a capability token (MD_MCP_TOKEN, expanded by Claude Code
+ * the agent gets only a capability token (SB_MCP_TOKEN, also set as MD_MCP_TOKEN; expanded by Claude Code
  * from its env so it is not written into the committed hive either).
  */
 const test = require('node:test');
@@ -45,9 +45,9 @@ test('a keyed server is reached through the gateway with a capability token, nev
   assert.deepEqual(servers['munder-github-token'], {
     type: 'http',
     url: 'http://127.0.0.1:5555/mcp/github-token',
-    headers: { Authorization: 'Bearer ${MD_MCP_TOKEN}' }
+    headers: { Authorization: 'Bearer ${SB_MCP_TOKEN}' }
   });
-  assert.deepEqual(env, { MD_MCP_TOKEN: TOKEN }, 'the token is the only thing in the agent env');
+  assert.deepEqual(env, { SB_MCP_TOKEN: TOKEN, MD_MCP_TOKEN: TOKEN }, 'the token (under both names) is the only thing in the agent env');
   assert.deepEqual(grants, [{ agentId: 'dwight', ids: ['github-token'] }]);
 });
 
@@ -74,7 +74,7 @@ test('"Choose agents" limits a server to its list', (t) => {
   assert.ok(hive.buildDefaultMcpServers(home, cfg, undefined, 'dwight', scopes).servers['munder-github-token']);
   const jim = hive.buildDefaultMcpServers(home, cfg, undefined, 'jim', scopes);
   assert.equal(jim.servers['munder-github-token'], undefined);
-  assert.equal(jim.env.MD_MCP_TOKEN, undefined, 'an agent outside the scope gets no capability');
+  assert.equal(jim.env.SB_MCP_TOKEN, undefined, 'an agent outside the scope gets no capability');
 });
 
 test('consent still gates a keyed server even when a key is stored', (t) => {
@@ -93,7 +93,7 @@ test('spawn: mcp.json behind --mcp-config, nothing in settings.json, neither key
   assert.ok(inj.args[i + 2]?.startsWith('--'), 'the next token is an option, so nothing positional is read as a config path');
   const mcp = JSON.parse(fs.readFileSync(inj.args[i + 1], 'utf8'));
   assert.equal(mcp.mcpServers['munder-github-token'].type, 'http');
-  assert.equal(inj.env.MD_MCP_TOKEN, TOKEN);
+  assert.equal(inj.env.SB_MCP_TOKEN, TOKEN);
   assert.equal(inj.env.GITHUB_PERSONAL_ACCESS_TOKEN, undefined, 'the key never enters the agent env');
 
   const settings = JSON.parse(fs.readFileSync(inj.args[inj.args.indexOf('--settings') + 1], 'utf8'));

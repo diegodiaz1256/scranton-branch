@@ -98,19 +98,19 @@ The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps. An \`id\` or \`
 - **Connections** (GitHub, Database, Notion, Sentry…) are MCP tools named \`munder-<id>\`, for agents
   whose CLI takes the office's MCP servers (Claude Code). Your system prompt lists the ones you
   have and whether they are read-only for you; none listed means none.
-- **REST APIs** (Jira, Linear, Stripe, your own…) go through \`bin/md-api.cjs\`: run it with no
-  arguments to list the ones you may use right now, then \`md-api <api> GET /path\`. A body goes last:
+- **REST APIs** (Jira, Linear, Stripe, your own…) go through \`bin/sb-api.cjs\`: run it with no
+  arguments to list the ones you may use right now, then \`sb-api <api> GET /path\`. A body goes last:
   JSON, or \`a=1&b=2\` for an API that takes a form (Stripe). An API the
   human connects later works at once. A refusal says why (switched off, no key, not for you, read-only).
-- **Runners** run commands that need secrets: \`bin/md-run.cjs\` with no arguments lists the ones that
-  exist now (also ones added after you started) and the names of the stored secrets, \`md-run <runner>\`
+- **Runners** run commands that need secrets: \`bin/sb-run.cjs\` with no arguments lists the ones that
+  exist now (also ones added after you started) and the names of the stored secrets, \`sb-run <runner>\`
   runs one. The app executes it in your folder and masks every secret in the output. No runner for what
-  you need? Propose one: \`md-run --propose <name> --secrets NAME[,NAME] --why "<reason>" -- <command>\`.
+  you need? Propose one: \`sb-run --propose <name> --secrets NAME[,NAME] --why "<reason>" -- <command>\`.
   The human sees the exact command and approves it once; a runner must finish (it is not for a server
   that keeps running).
 - **The office browser** reads a page with the app's own Chromium when a plain fetch gets nothing
-  (403, "enable JavaScript", an empty shell): \`bin/md-browse.cjs <url>\` (\`--links\` for its links),
-  \`md-browse --search "<query>"\`; Claude Code agents also have it as the \`munder-browser\` tools. It is
+  (403, "enable JavaScript", an empty shell): \`bin/sb-browse.cjs <url>\` (\`--links\` for its links),
+  \`sb-browse --search "<query>"\`; Claude Code agents also have it as the \`munder-browser\` tools. It is
   off when Web is switched off for you. It does not solve captchas or bot challenges: report those.
 - **Deliverables** for the human go in a folder of their own: \`research/<ticket>/\` for a task with
   a ticket, else \`research/<yyyy-mm-dd>-<topic>/\`. One main document per folder, its images and
@@ -279,8 +279,8 @@ and any they close without deciding are offered again on the next launch.`
     who: 'orchestrator',
     when: 'an agent would do a job better with a skill (pdf, docx, xlsx, pptx, web testing...)',
     body: `Office skills come from the skills catalog. Find one with
-\`bin/md-skills.cjs search <words>\` (one line per match; your instructions give the full command)
-and see who has what with \`md-skills list\`. To add or remove, write ONE JSON file into your own
+\`bin/sb-skills.cjs search <words>\` (one line per match; your instructions give the full command)
+and see who has what with \`sb-skills list\`. To add or remove, write ONE JSON file into your own
 \`skills/\` folder:
 
 \`\`\`json
@@ -350,11 +350,11 @@ same office. The top bar also has the theme switch (☾), full screen, and Setti
   **Your marketplaces** (GitHub repositories with skills, added by address).
 - **Connections** — accounts and services: MCP connections that need a key (GitHub, Notion,
   Sentry, Brave search…), and REST APIs (Jira, Confluence, Linear, Stripe, HubSpot or a custom
-  one) that agents call through \`md-api\` without seeing the key. Each has a Test button and a
+  one) that agents call through \`sb-api\` without seeing the key. Each has a Test button and a
   read-only / read & write level.
 - **Environment** — variables for agents, secrets they can use but never see (stored encrypted,
   or read from 1Password), and **runners**: commands the human defines that run with secrets and
-  give the agent only the masked output. An agent may propose a runner (\`md-run --propose\`); the
+  give the agent only the masked output. An agent may propose a runner (\`sb-run --propose\`); the
   human approves it in a dialog. The secrets it names must already exist here.
 - **AI providers** — the engines (Claude Code, Codex, Gemini, Copilot, Cursor, Pi, OpenCode…),
   their sign-in state, custom OpenAI-compatible endpoints (with model list), and certificates
@@ -437,7 +437,7 @@ export function renderProtocolIndex(): string {
     '- `research/` — deliverables for the human, a folder each (`research/<ticket>/` or `research/<yyyy-mm-dd>-<topic>/`); `research/hires/` — hire proposals.',
     '- `lists/` — the human\'s personal lists.',
     '- `spawn-requests/`, `archive-requests/`, `missions.json` — temps started and archived, and scheduled missions.',
-    '- `bin/md-api.cjs` (REST APIs), `bin/md-run.cjs` (runners) — no arguments lists what you may use.',
+    '- `bin/sb-api.cjs` (REST APIs), `bin/sb-run.cjs` (runners) — no arguments lists what you may use.',
     '',
     'Never hunt for office files or tools across the disk, in other projects, or in Scranton Branch\'s',
     'own installation or source code. If something is not here, in your folder, your working directory',

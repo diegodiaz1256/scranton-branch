@@ -1,5 +1,5 @@
 /**
- * md-netgate: the network wall around a pi custodian (criticalConnections.ts).
+ * sb-netgate: the network wall around a pi custodian (criticalConnections.ts).
  *
  * Bubblewrap can take a process's network away (--unshare-net) but cannot
  * filter it. So the custodian runs with NO network, and this small script
@@ -11,7 +11,7 @@
  *   - HTTPS to its model provider's hosts only, through a CONNECT proxy that
  *     refuses every other host.
  *
- * Run as:  node md-netgate.cjs <gate dir> <allowed hosts, comma> -- bwrap … --unshare-net … -- node md-netgate.cjs --inner <gate dir> -- pi …
+ * Run as:  node sb-netgate.cjs <gate dir> <allowed hosts, comma> -- bwrap … --unshare-net … -- node sb-netgate.cjs --inner <gate dir> -- pi …
  * Outside the sandbox it listens on Unix sockets in <gate dir> (bound into the
  * sandbox) and relays them to the real ports and hosts; inside, it listens on
  * the same loopback ports and relays them to those sockets, then runs the CLI
@@ -50,7 +50,7 @@ function run(command, env) {
   const child = spawn(command[0], command.slice(1), { stdio: 'inherit', env });
   for (const s of ['SIGTERM', 'SIGHUP', 'SIGINT']) process.on(s, () => { try { child.kill(s); } catch (e) {} });
   child.on('exit', (code, sig) => process.exit(code == null ? (sig ? 1 : 0) : code));
-  child.on('error', (e) => { process.stderr.write('md-netgate: ' + e.message + '\n'); process.exit(127); });
+  child.on('error', (e) => { process.stderr.write('sb-netgate: ' + e.message + '\n'); process.exit(127); });
 }
 
 if (!inner) {
@@ -71,7 +71,7 @@ if (!inner) {
       const m = /^CONNECT ([^\s:]+):(\d+) HTTP\/1\.[01]\r\n/i.exec(buf);
       const host = m ? m[1].toLowerCase() : '';
       if (!m || m[2] !== '443' || !allow.has(host)) {
-        process.stderr.write('md-netgate: refused ' + (m ? host + ':' + m[2] : 'a non-CONNECT request') + '\n');
+        process.stderr.write('sb-netgate: refused ' + (m ? host + ':' + m[2] : 'a non-CONNECT request') + '\n');
         c.end('HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\nmd-netgate: this agent may reach only its model provider (' + [...allow].join(', ') + ').\n');
         return;
       }

@@ -305,7 +305,7 @@ export function App() {
       {/* v0.3.4: background-update toast ("restart to update"); renders null until
           main's updater pushes a status. */}
       <UpdateToast />
-      {/* An agent's runner proposal (md-run --propose); renders null until one arrives. */}
+      {/* An agent's runner proposal (sb-run --propose); renders null until one arrives. */}
       <RunnerProposalModal />
       {/* Title bar */}
       <div

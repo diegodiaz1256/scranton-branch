@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { linuxizeText, parseWslPath, toLinuxPath, wslCommand } from './wsl';
 import { spawnSize, type PtySize } from '../shared/ptySize';
 import { isRepaintEcho, repaintEchoUntil } from '../shared/ptyRepaint';
+import { appEnv } from '../shared/envName';
 import {
   captureFromLoginShell,
   isSafeCommandName,
@@ -40,16 +41,17 @@ export function withHiveRuntimeFallback(path: string, hiveRoot?: string): string
 
 /** Server only (POSIX, running as root): agents run as another user, so the
  *  secret-store key and the server's own environment are out of their reach.
- *  MD_AGENT_UID / MD_AGENT_GID pick the user; MD_AGENT_HOME its home (where the
+ *  SB_AGENT_UID / SB_AGENT_GID pick the user; SB_AGENT_HOME its home (where the
  *  agent CLIs keep their logins). Unset everywhere else — a no-op on desktops. */
 export function agentIdentity(): { ids: { uid?: number; gid?: number }; env: Record<string, string> } {
-  const uid = Number(process.env.MD_AGENT_UID);
-  const gid = Number(process.env.MD_AGENT_GID);
-  if (process.platform === 'win32' || !process.env.MD_AGENT_UID || !Number.isInteger(uid) || !Number.isInteger(gid) || process.getuid?.() !== 0) {
+  const uidRaw = appEnv('AGENT_UID');
+  const uid = Number(uidRaw);
+  const gid = Number(appEnv('AGENT_GID'));
+  if (process.platform === 'win32' || !uidRaw || !Number.isInteger(uid) || !Number.isInteger(gid) || process.getuid?.() !== 0) {
     return { ids: {}, env: {} };
   }
-  const home = process.env.MD_AGENT_HOME;
-  return { ids: { uid, gid }, env: home ? { HOME: home, USER: process.env.MD_AGENT_USER ?? 'agent' } : {} };
+  const home = appEnv('AGENT_HOME');
+  return { ids: { uid, gid }, env: home ? { HOME: home, USER: appEnv('AGENT_USER') ?? 'agent' } : {} };
 }
 
 /** How much trailing PTY output to retain per session for crash diagnostics.

@@ -1,7 +1,7 @@
 'use strict';
 /**
  * The office browser: agents read pages with the app's own Chromium (browser.ts)
- * through the integration broker, by command (md-browse) or MCP (munder-browser).
+ * through the integration broker, by command (sb-browse) or MCP (munder-browser).
  * Web switched off for an agent closes it in its tools, its prompt AND the broker.
  */
 const test = require('node:test');
@@ -84,10 +84,10 @@ test('broker: Web switched off closes the browser too', async (t) => {
   assert.deepEqual(calls, []);
 });
 
-test('md-browse as a command and as an MCP server', async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-browse-'));
+test('sb-browse as a command and as an MCP server', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-browse-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const script = path.join(dir, 'md-browse.cjs');
+  const script = path.join(dir, 'sb-browse.cjs');
   fs.writeFileSync(script, MD_BROWSE);
   const seen = [];
   const server = http.createServer((req, res) => {
@@ -123,7 +123,7 @@ test('md-browse as a command and as an MCP server', async (t) => {
 });
 
 test('agents get the browser in their tools, unless Web is off', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-browse-hive-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-browse-hive-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const hive = new HiveManager(() => home);
   const on = await hive.ensureAgent({ id: 'jim', name: 'Jim', provider: 'claude', cwd: home }, {});
@@ -135,10 +135,10 @@ test('agents get the browser in their tools, unless Web is off', async (t) => {
   // Claude agents hear about it when a WebFetch fails (hook), not up front.
   assert.doesNotMatch(prompt(on), /BROWSER:/);
   assert.doesNotMatch(prompt(off), /BROWSER:/);
-  assert.ok(fs.existsSync(path.join(home, 'hive', 'bin', 'md-browse.cjs')));
+  assert.ok(fs.existsSync(path.join(home, 'hive', 'bin', 'sb-browse.cjs')));
   const codex = await hive.ensureAgent({ id: 'oscar', name: 'Oscar', provider: 'codex', cwd: home }, {});
   const cp = codex.args[codex.args.length - 1];
-  assert.match(cp, /BROWSER: .*md-browse\.cjs/);
+  assert.match(cp, /BROWSER: .*sb-browse\.cjs/);
   assert.doesNotMatch(cp, /munder-browser tools/, 'no MCP promised to a CLI that does not get it');
 });
 
@@ -166,7 +166,7 @@ test('a failed WebFetch is answered with the office browser, not the prompt', as
   assert.equal(B.webFetchFailed('PostToolUse', undefined, 'ok'), true, 'next to empty');
   assert.equal(B.webFetchFailed('PostToolUse', undefined, 'The article explains how Electron renders pages with Chromium and lists the release dates of every major version since 2016.'), false);
   // Claude agents: no browser line in the prompt; the hook registers failures.
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-browse-hint-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-browse-hint-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const hive = new HiveManager(() => home);
   const inj = await hive.ensureAgent({ id: 'jim', name: 'Jim', provider: 'claude', cwd: home }, {});

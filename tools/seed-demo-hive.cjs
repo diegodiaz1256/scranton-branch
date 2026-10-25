@@ -7,7 +7,7 @@
  *
  *   .demo/userData/       Electron userData for the demo run — config.json,
  *                         trigger-history.json, localStorage. The app points
- *                         userData here when MD_DEMO_HOME is set (src/main/demo.ts).
+ *                         userData here when SB_DEMO_HOME is set (src/main/demo.ts).
  *   .demo/Dunder Mifflin/ harnessHome: roster.json + hive/ (registry, tasks,
  *                         mailboxes, memory, spawn-requests). The space is on
  *                         purpose: the demo doubles as a paths-with-spaces check.

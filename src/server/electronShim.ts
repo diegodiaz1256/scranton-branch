@@ -5,7 +5,7 @@
  * The server build (tools/build-server.cjs) aliases `electron` to this module.
  * The desktop build never sees it.
  *
- *   app            data dir (MD_DATA_DIR), lifecycle events, quit/exit, a
+ *   app            data dir (SB_DATA_DIR), lifecycle events, quit/exit, a
  *                  pid-file single-instance lock
  *   ipcMain        an in-process handler registry; the engine (src/server/
  *                  engine.ts) calls it through `rendererBridge`
@@ -20,13 +20,14 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { loadSecretKey } from './secretKey';
+import { appEnv } from '../shared/envName';
 import { open, seal } from './secretBox';
 
 declare const __APP_VERSION__: string;
 
 // ─── app ─────────────────────────────────────────────────────────────────────
 
-const dataDir = resolve(process.env.MD_DATA_DIR || join(homedir(), '.scranton-branch-server'));
+const dataDir = resolve(appEnv('DATA_DIR') || join(homedir(), '.scranton-branch-server'));
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const appRoot = resolve(__dirname, '..');
 
@@ -258,11 +259,11 @@ const secretKey = loadSecretKey(dataDir);
 export const safeStorage = {
   isEncryptionAvailable(): boolean { return secretKey !== null; },
   encryptString(plain: string): Buffer {
-    if (!secretKey) throw new Error('no secret key (set MD_SECRET_KEY_FILE)');
+    if (!secretKey) throw new Error('no secret key (set SB_SECRET_KEY_FILE)');
     return seal(secretKey, plain);
   },
   decryptString(buf: Buffer): string {
-    if (!secretKey) throw new Error('no secret key (set MD_SECRET_KEY_FILE)');
+    if (!secretKey) throw new Error('no secret key (set SB_SECRET_KEY_FILE)');
     return open(secretKey, buf);
   },
   getSelectedStorageBackend(): string { return 'md_server_key'; }

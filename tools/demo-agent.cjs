@@ -10,7 +10,7 @@
  *   - hook events (UserPromptSubmit / PreToolUse / PostToolUse / Stop / Status)
  *     to the hive's hook socket, so floor states and context gauges move;
  *   - OTLP/JSON token + cost metrics and tool spans to the embedded collector
- *     (MD_DEMO_OTEL, exported by main in demo mode), so spend and tokens show.
+ *     (SB_DEMO_OTEL, exported by main in demo mode), so spend and tokens show.
  *
  * Identity comes from the hive env (AGENT_ID / AGENT_NAME / HIVE_ROOT), or argv[2]
  * when run by hand. Typing a line into its terminal starts a turn about it.
@@ -23,7 +23,7 @@ const path = require('node:path');
 const AGENT_ID = process.env.AGENT_ID || process.argv[2] || 'demo';
 const AGENT_NAME = process.env.AGENT_NAME || AGENT_ID;
 const HIVE_ROOT = process.env.HIVE_ROOT || '';
-const OTEL = process.env.MD_DEMO_OTEL || '';
+const OTEL = process.env.SB_DEMO_OTEL || process.env.MD_DEMO_OTEL || '';
 const SESSION_ID = `demo-${AGENT_ID}-${crypto.randomBytes(4).toString('hex')}`;
 const MODEL = AGENT_ID === 'god' ? 'claude-opus-4-8' : 'claude-sonnet-4-6';
 const CONTEXT_LIMIT = 200_000;

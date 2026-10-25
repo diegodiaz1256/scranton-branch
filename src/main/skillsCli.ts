@@ -1,12 +1,12 @@
 /**
- * md-skills: the orchestrator's look at the skills catalog and the office's
- * skills, written to <hive>/bin/md-skills.cjs. Read-only: it searches the
+ * sb-skills: the orchestrator's look at the skills catalog and the office's
+ * skills, written to <hive>/bin/sb-skills.cjs. Read-only: it searches the
  * catalog mirror main keeps in <hive>/skills/catalog.json and lists
  * <hive>/skills/office.json. Adding or removing goes through a request file
  * (shared/skillRequests.ts), which main checks.
  *
- *   node md-skills.cjs search pdf forms     best matches, one line each
- *   node md-skills.cjs list                 office skills and who has them
+ *   node sb-skills.cjs search pdf forms     best matches, one line each
+ *   node sb-skills.cjs list                 office skills and who has them
  */
 export const MD_SKILLS = `'use strict';
 var fs = require('fs');
@@ -33,6 +33,6 @@ if (cmd === 'list') {
   else if (!hits.length) console.log('Nothing matches.' + (cat.policy === 'official' ? ' (Only Anthropic skills are allowed.)' : cat.policy === 'mine' ? " (Only Anthropic's and the human's own marketplaces are allowed.)" : ''));
   hits.forEach(function (x) { var d = x.c.description || ''; console.log(x.c.name + ' [' + x.c.owner + (x.c.marketplace ? ', your marketplace' : '') + '] ' + (d.length > 90 ? d.slice(0, 89) + '...' : d) + (office[x.c.name] ? ' (in the office)' : '')); });
 } else {
-  console.log('md-skills search <words> | md-skills list');
+  console.log('sb-skills search <words> | sb-skills list');
 }
 `;

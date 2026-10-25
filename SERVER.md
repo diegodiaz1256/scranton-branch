@@ -24,11 +24,11 @@ Then edit `/etc/scranton-branch/server.env`:
 
 | Variable | |
 |---|---|
-| `MD_OFFICE` | the office directory (default `/srv/office`) |
-| `MD_NAME` | its name on Team |
-| `MD_TEAM_JOIN` | an invite from your desktop (Manager → Team → Invite). Used once, then remembered |
-| `MD_MAX_WORKERS` | how many workers may run at once |
-| `MD_RELAY_TOKEN` | `<relay>=<token>` for a relay that needs one (see below) |
+| `SB_OFFICE` | the office directory (default `/srv/office`) |
+| `SB_NAME` | its name on Team |
+| `SB_TEAM_JOIN` | an invite from your desktop (Manager → Team → Invite). Used once, then remembered |
+| `SB_MAX_WORKERS` | how many workers may run at once |
+| `SB_RELAY_TOKEN` | `<relay>=<token>` for a relay that needs one (see below) |
 | `ANTHROPIC_API_KEY` | optional: agents use it instead of a login |
 
 and `sudo systemctl restart scranton-branch`. Logs: `journalctl -u scranton-branch -f`.
@@ -38,6 +38,12 @@ Agents run as the `agent` user. Log their CLI in once:
 
 Every flag has a variable and the other way round: `--office`, `--name`,
 `--team-join`, `--max-workers`.
+
+The variables were named `MD_*` before the rename to Scranton Branch. Those names
+still work as deprecated aliases (an `SB_*` variable wins when both are set), so an
+older `server.env` or compose file needs no change. The one exception: the unit now
+sets `SB_DATA_DIR`, so a `server.env` that moved the data dir with `MD_DATA_DIR`
+should rename it.
 
 ## Docker
 
@@ -57,12 +63,12 @@ them is the server's alone:
 
 - **systemd**: `/etc/scranton-branch/secret.key` (root, 0600), handed to the
   service as a credential.
-- **Docker**: a compose secret (`MD_SECRET_KEY_FILE`). Keep the host file 0600;
+- **Docker**: a compose secret (`SB_SECRET_KEY_FILE`). Keep the host file 0600;
   the container warns if agents could read it.
-- Otherwise `MD_SECRET_KEY` (removed from the environment once read) or a
+- Otherwise `SB_SECRET_KEY` (removed from the environment once read) or a
   generated `<data dir>/secret.key`.
 
-Agents never see it: they run as another user (`MD_AGENT_UID`/`MD_AGENT_GID`),
+Agents never see it: they run as another user (`SB_AGENT_UID`/`SB_AGENT_GID`),
 so neither the key nor the server's environment is readable to them. Back the
 key up — stored keys are unreadable without it.
 
@@ -81,7 +87,7 @@ only ever sees a random mailbox and opaque bytes. Each team picks its own:
 
 A relay that needs credentials takes them in the team's Edit form on a desktop
 (MQTT `user:password`, or an ntfy token), and in
-`MD_RELAY_TOKEN=<relay>=<token>` (comma-separated for several) on a server.
+`SB_RELAY_TOKEN=<relay>=<token>` (comma-separated for several) on a server.
 They are kept in the encrypted store, sent only to their relay, and never
 reach agents. Only TLS relays are accepted (`https`, `mqtts`, `wss`).
 

@@ -1,11 +1,11 @@
 /**
- * md-browse: the office browser (browser.ts) from an agent's side. Written to
- * <hive>/bin/md-browse.cjs. With arguments it is a command any CLI can run:
- *   md-browse <url> [--links] [--full] [--page N] [--chars N]
- *   md-browse --search "<query>"
+ * sb-browse: the office browser (browser.ts) from an agent's side. Written to
+ * <hive>/bin/sb-browse.cjs. With arguments it is a command any CLI can run:
+ *   sb-browse <url> [--links] [--full] [--page N] [--chars N]
+ *   sb-browse --search "<query>"
  * Without arguments it is a stdio MCP server (munder-browser) with the tools
  * browse_page and web_search, for Claude Code. Both talk to the integration
- * broker (MD_BROKER_URL / MD_BROKER_TOKEN, already in every agent's env), so
+ * broker (SB_BROKER_URL / SB_BROKER_TOKEN, already in every agent's env; MD_* before the rename), so
  * WSL floors reach the app's Chromium too. Plain Node, no dependencies.
  * Requests go through brokerClient.ts so the command also works inside
  * Claude Code's sandbox.
@@ -14,8 +14,8 @@ import { BROKER_CLIENT_JS } from './brokerClient';
 
 export const MD_BROWSE = String.raw`#!/usr/bin/env node
 'use strict';
-// md-browse — written by Scranton Branch; do not edit (it is rewritten).
-const base = process.env.MD_BROKER_URL, token = process.env.MD_BROKER_TOKEN;
+// sb-browse — written by Scranton Branch; do not edit (it is rewritten).
+const base = process.env.SB_BROKER_URL || process.env.MD_BROKER_URL, token = process.env.SB_BROKER_TOKEN || process.env.MD_BROKER_TOKEN;
 ${BROKER_CLIENT_JS}
 async function ask(route, body) {
   if (!base || !token) throw new Error('the office browser is not available to this agent');
@@ -65,7 +65,7 @@ if (args.length) {
   const url = args.filter((x) => x !== '--links' && x !== '--full')[0];
   const run = query !== undefined ? ask('search', { query })
     : ask('browse', { url, links, max_chars: chars ? Number(chars) : undefined, page: page ? Number(page) : undefined, mode: full ? 'full' : undefined });
-  run.then((t) => { process.stdout.write(t.endsWith('\n') ? t : t + '\n'); }, (e) => { console.error('md-browse: ' + (e && e.message || e)); process.exit(1); });
+  run.then((t) => { process.stdout.write(t.endsWith('\n') ? t : t + '\n'); }, (e) => { console.error('sb-browse: ' + (e && e.message || e)); process.exit(1); });
 } else {
   const readline = require('readline');
   const send = (m) => process.stdout.write(JSON.stringify(m) + '\n');

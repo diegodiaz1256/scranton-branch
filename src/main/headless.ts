@@ -7,10 +7,11 @@
  *                                        Node, no Chromium — what Ubuntu
  *                                        servers and containers run
  *
- *   --office <dir>        MD_OFFICE        the office (first run: skips onboarding)
- *   --name <name>         MD_NAME          this office's name on Team
- *   --team-join <code>    MD_TEAM_JOIN     pair with an invite from Manager → Team
- *   --max-workers <n>     MD_MAX_WORKERS   cap on concurrent workers
+ *   --office <dir>        SB_OFFICE        the office (first run: skips onboarding)
+ *   --name <name>         SB_NAME          this office's name on Team
+ *   --team-join <code>    SB_TEAM_JOIN     pair with an invite from Manager → Team
+ *   --max-workers <n>     SB_MAX_WORKERS   cap on concurrent workers
+ *   (each SB_* is also read as MD_*, its name before the rename; @shared/envName)
  *
  * In the desktop host the renderer still runs, in a window that is never shown, so every bit of
  * orchestration (the orchestrator's boot, team restore, inbox wake-ups, queue
@@ -27,19 +28,19 @@
  */
 import { app } from 'electron';
 import { resolve } from 'node:path';
+import { appEnv, takeAppEnv } from '../shared/envName';
 
 /** A flag's value, else its environment variable (systemd units and
  *  containers configure through the environment). */
 function argValue(name: string): string | undefined {
-  const env = process.env[`MD_${name.toUpperCase().replace(/-/g, '_')}`];
+  const env = appEnv(name.toUpperCase().replace(/-/g, '_'));
   return flagValue(name) ?? (env && env.trim() ? env.trim() : undefined);
 }
 
 /** Read a secret from the environment and remove it, so no child (agents
  *  inherit this process's environment) ever sees it. */
 function takeEnv(name: string): string | undefined {
-  const v = process.env[name];
-  delete process.env[name];
+  const v = takeAppEnv(name);
   return v && v.trim() ? v.trim() : undefined;
 }
 
@@ -51,10 +52,10 @@ function flagValue(name: string): string | undefined {
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : undefined;
 }
 
-export const HEADLESS = process.argv.includes('--headless') || process.env.MD_HEADLESS === '1';
+export const HEADLESS = process.argv.includes('--headless') || appEnv('HEADLESS') === '1';
 
 /** The GUI-less server build (src/server): plain Node, no Electron at all. */
-export const SERVER = process.env.MD_SERVER === '1';
+export const SERVER = appEnv('SERVER') === '1';
 
 /** First-run setup from the command line (headless only). */
 export const HEADLESS_SETUP = HEADLESS
@@ -63,7 +64,7 @@ export const HEADLESS_SETUP = HEADLESS
       name: argValue('name'),
       teamJoin: argValue('team-join'),
       maxWorkers: Number(argValue('max-workers')) || undefined,
-      relayTokens: takeEnv('MD_RELAY_TOKEN')?.split(',').map((s) => s.trim()).filter(Boolean)
+      relayTokens: takeEnv('RELAY_TOKEN')?.split(',').map((s) => s.trim()).filter(Boolean)
     }
   : null;
 

@@ -31,7 +31,7 @@ test('the helper scripts are written once, then left alone until they change', (
   const home = tmp(t);
   const hive = new HiveManager(() => home);
   hive.ensureHive();
-  const shim = path.join(hive.root(), 'bin', 'md-run.cjs');
+  const shim = path.join(hive.root(), 'bin', 'sb-run.cjs');
   // Whole seconds, and 1 ms of slack: some filesystems (CI's) store mtimes
   // with less precision than JavaScript's.
   const old = new Date(Math.floor((Date.now() - 60_000) / 1000) * 1000);

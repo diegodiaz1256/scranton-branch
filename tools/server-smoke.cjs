@@ -24,7 +24,7 @@ writeFileSync(join(data, 'config.json'), JSON.stringify({
 }));
 
 const child = spawn(process.execPath, [join(root, 'out/server/index.cjs'), '--office', office, '--name', 'Smoke'], {
-  env: { ...process.env, MD_DATA_DIR: data, MD_MAX_WORKERS: '2' },
+  env: { ...process.env, SB_DATA_DIR: data, SB_MAX_WORKERS: '2' },
   stdio: ['ignore', 'pipe', 'pipe']
 });
 let log = '';
@@ -56,7 +56,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log(`ok: ${god.name} is up after ${Date.now() - t0} ms`);
   if (!/floor engine running/.test(log)) fail('the floor engine did not report in');
   const cfg = JSON.parse(readFileSync(join(data, 'config.json'), 'utf8'));
-  if (cfg.maxConcurrentWorkers !== 2) fail(`MD_MAX_WORKERS not applied (${cfg.maxConcurrentWorkers})`);
+  if (cfg.maxConcurrentWorkers !== 2) fail(`SB_MAX_WORKERS not applied (${cfg.maxConcurrentWorkers})`);
   if (cfg.onboardingComplete !== true) fail('--office did not complete onboarding');
 
   if (process.platform === 'win32') { child.kill(); console.log('ok (shutdown not checked on Windows)'); return; }

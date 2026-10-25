@@ -1,7 +1,7 @@
 'use strict';
 /**
- * md-api: how any hive agent reaches a REST integration without holding its key.
- * The agent runs <hive>/bin/md-api.cjs with only MD_BROKER_URL + its capability
+ * sb-api: how any hive agent reaches a REST integration without holding its key.
+ * The agent runs <hive>/bin/sb-api.cjs with only MD_BROKER_URL + its capability
  * token; the broker adds the real credential upstream.
  */
 const test = require('node:test');
@@ -28,12 +28,12 @@ function run(script, args, env) {
   });
 }
 
-test('md-api calls an integration through the broker, which adds the key', async (t) => {
+test('sb-api calls an integration through the broker, which adds the key', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md api-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const hive = new HiveManager(() => home);
   hive.ensureHive();
-  const cli = path.join(home, 'hive', 'bin', 'md-api.cjs');
+  const cli = path.join(home, 'hive', 'bin', 'sb-api.cjs');
   assert.ok(fs.existsSync(cli), 'bootstrap writes the helper');
 
   const seen = [];
@@ -87,8 +87,8 @@ test('md-api calls an integration through the broker, which adds the key', async
   assert.match(none.err, /started without the app key broker.*restart this agent/);
 });
 
-test('the prompt lists the granted integrations with the exact md-api command', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-api-prompt-'));
+test('the prompt lists the granted integrations with the exact sb-api command', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-api-prompt-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const hive = new HiveManager(() => home);
   const inj = await hive.ensureAgent(
@@ -98,7 +98,7 @@ test('the prompt lists the granted integrations with the exact md-api command', 
   const prompt = inj.args[inj.args.indexOf('--append-system-prompt') + 1];
   assert.match(prompt, /REST APIs you can call/);
   assert.match(prompt, /linear \(Linear\)/);
-  assert.ok(prompt.includes(path.join(home, 'hive', 'bin', 'md-api.cjs')), 'absolute helper path, no $VAR');
+  assert.ok(prompt.includes(path.join(home, 'hive', 'bin', 'sb-api.cjs')), 'absolute helper path, no $VAR');
 
   const bare = await hive.ensureAgent({ id: 'pam', name: 'Pam', provider: 'claude', cwd: home }, {});
   assert.doesNotMatch(bare.args[bare.args.indexOf('--append-system-prompt') + 1], /REST APIs you can call/);

@@ -128,8 +128,9 @@ test('the hive hands an imported keyed server out through the gateway, the key n
   hive.setCustomMcp((agentId) => s.m.forAgent(agentId));
   hive.setMcpGateway((_agentId, ids) => ({ url: 'http://127.0.0.1:5555', token: `cap:${ids.join(',')}` }));
   const { servers, env } = hive.buildDefaultMcpServers(home, {}, undefined, 'dwight');
-  assert.deepEqual(servers[`munder-${gh}`], { type: 'http', url: `http://127.0.0.1:5555/mcp/${gh}`, headers: { Authorization: 'Bearer ${MD_MCP_TOKEN}' } });
+  assert.deepEqual(servers[`munder-${gh}`], { type: 'http', url: `http://127.0.0.1:5555/mcp/${gh}`, headers: { Authorization: 'Bearer ${SB_MCP_TOKEN}' } });
   assert.deepEqual(servers[`munder-${fetchId}`], { command: 'uvx', args: ['mcp-server-fetch'] });
-  assert.equal(env.MD_MCP_TOKEN, `cap:${gh}`);
+  assert.equal(env.SB_MCP_TOKEN, `cap:${gh}`);
+  assert.equal(env.MD_MCP_TOKEN, `cap:${gh}`, 'the old name too, for a session started before the rename');
   assert.ok(!JSON.stringify({ servers, env }).includes('ghp_abc123'));
 });

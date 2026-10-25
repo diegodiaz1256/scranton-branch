@@ -112,7 +112,7 @@ test('the guard refuses the controls to file tools and shell commands, even for 
     ['Write', { file_path: path.join(dir, 'memory.md') }],
     ['Write', { file_path: path.join(project, '.claude', 'skills', 'x', 'SKILL.md') }],
     ['Read', { file_path: path.join(dir, 'settings.json') }],
-    ['Bash', { command: `node "${path.join(root, 'bin', 'md-api.cjs')}" github GET /user` }],
+    ['Bash', { command: `node "${path.join(root, 'bin', 'sb-api.cjs')}" github GET /user` }],
     ['Bash', { command: `cp "${path.join(dir, 'settings.json')}" /tmp/s.json` }],
     ['Bash', { command: `mv "${path.join(dir, 'inbox', 'm.md')}" "${path.join(dir, 'inbox', '.done')}"/` }]
   ]) {

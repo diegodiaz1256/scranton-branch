@@ -71,6 +71,8 @@ import { BROKER_CLIENT_JS } from './brokerClient';
 import { MD_SSH_CLI, MD_SSH_SIGN_CLI, sshWrapperScript } from './sshRelayClient';
 import { HOOK_OFFLINE_JS } from '../shared/hookOffline';
 import { MD_LISTS_MCP } from './listsMcp';
+import { bothEnv } from '../shared/envName';
+import { withToolAliases } from './agentBinAliases';
 import { liveNamesakes, similarLive, supersededArchived } from './namesakes';
 
 /** The subset of HarnessConfig the hive consumes for the default-MCP merge.
@@ -285,7 +287,7 @@ export interface SpawnInjection {
    *  WSL floors): run `bwrap <wrap…> -- <command> <args…>` instead of the
    *  command. Absent: the CLI runs as is. */
   wrap?: string[];
-  /** The program the wrap runs (default bwrap; md-netgate for a custodian). */
+  /** The program the wrap runs (default bwrap; sb-netgate for a custodian). */
   wrapCommand?: string;
   /** Whether the agent runs in an OS sandbox: its CLI's own, the app's,
    *  none (pi on native Windows, or bubblewrap missing), or off (the human's
@@ -1078,20 +1080,21 @@ export class HiveManager {
     // stamp of their contents), or one is missing. Rewriting all of them on
     // every launch cost seconds of blocked main thread on a WSL office, where
     // each write crosses \\wsl.localhost.
-    const binFiles: Array<[string, string]> = [
+    // The hive commands go out under both names, sb-* and md-* (agentBinAliases.ts).
+    const binFiles: Array<[string, string]> = withToolAliases([
       [this.shimPath()!, HOOK_SHIM],
       // The proxy-bridge sidecar for hookless CLIs (qwen).
       [this.proxyShimPath()!, PROXY_BRIDGE_SHIM],
-      // md-api: an agent's door to the REST integrations behind the key broker.
-      [join(root, 'bin', 'md-api.cjs'), MD_API_CLI],
-      // md-run: ask the app to run a runner (a command with secrets the agent never sees).
-      [join(root, 'bin', 'md-run.cjs'), MD_RUN_CLI],
+      // sb-api: an agent's door to the REST integrations behind the key broker.
+      [join(root, 'bin', 'sb-api.cjs'), MD_API_CLI],
+      // sb-run: ask the app to run a runner (a command with secrets the agent never sees).
+      [join(root, 'bin', 'sb-run.cjs'), MD_RUN_CLI],
       // munder-lists: the human's lists as MCP tools (listsMcp.ts).
-      [join(root, 'bin', 'md-lists.cjs'), MD_LISTS_MCP],
-      // md-browse: the office browser (browser.ts), as a command and an MCP server.
-      [join(root, 'bin', 'md-browse.cjs'), MD_BROWSE],
-      // md-skills: the orchestrator's search of the skills catalog (skillsCli.ts).
-      [join(root, 'bin', 'md-skills.cjs'), MD_SKILLS],
+      [join(root, 'bin', 'sb-lists.cjs'), MD_LISTS_MCP],
+      // sb-browse: the office browser (browser.ts), as a command and an MCP server.
+      [join(root, 'bin', 'sb-browse.cjs'), MD_BROWSE],
+      // sb-skills: the orchestrator's search of the skills catalog (skillsCli.ts).
+      [join(root, 'bin', 'sb-skills.cjs'), MD_SKILLS],
       // md-ssh: git over SSH through the office, never with the keys
       // (sshRelay.ts), and the `ssh` on a sandboxed agent's PATH that runs it.
       [join(root, 'bin', 'md-ssh.cjs'), MD_SSH_CLI],
@@ -1102,7 +1105,7 @@ export class HiveManager {
         [join(this.sshWrapperDir()!, 'ssh'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh.cjs')))] as [string, string],
         [join(this.sshWrapperDir()!, 'md-ssh-sign'), sshWrapperScript(this.wslRoot() ? 'node' : this.nodeLauncherPath()!, this.forAgent(join(root, 'bin', 'md-ssh-sign.cjs')), 'commit signer: signed by the app with your SSH key (md-ssh-sign.cjs)')] as [string, string]
       ] : [])
-    ];
+    ]);
     if (this.sshWrapperDir()) mkdirSync(this.sshWrapperDir()!, { recursive: true });
     const stampPath = join(root, 'bin', '.generated');
     const stamp = createHash('sha1').update(binFiles.map(([p, c]) => `${p}\0${c}`).join('\0')).digest('hex');
@@ -1200,8 +1203,8 @@ export class HiveManager {
        *  verification off only when the user chose it). */
       tls?: { caFile?: string; insecure?: boolean };
       /** REST integrations this agent may call through the key broker (its
-       *  MD_BROKER_TOKEN is granted for exactly these). Listed in its prompt with
-       *  the md-api command; empty/undefined → no line. */
+       *  SB_BROKER_TOKEN is granted for exactly these). Listed in its prompt with
+       *  the sb-api command; empty/undefined → no line. */
       integrations?: Array<{ id: string; label: string }>;
       /** Runners this agent may ask for (envVault.ts): names only, never values. */
       runners?: Array<{ id: string; name: string; description?: string; secrets: string[] }>;
@@ -1272,7 +1275,7 @@ export class HiveManager {
       /** Cloud CLI logins the human let it read (shared/cloudCredentials.ts);
        *  the rest stay hidden. Never for a custodian. */
       exposeCredentials?: string[];
-      /** The key broker this agent was handed (MD_BROKER_URL): its sandbox may
+      /** The key broker this agent was handed (SB_BROKER_URL): its sandbox may
        *  reach that one loopback port (hookSettings). */
       brokerUrl?: string;
     } = {}
@@ -1527,7 +1530,7 @@ export class HiveManager {
               appWrap = unsandboxed ? null : await this.appSandbox('pi', meta, dir, root, opts, sock);
               // A custodian: its tool calls wait for the office's answer and
               // are refused when it cannot be reached; only pi's own built-in
-              // tools, no MCP; no network but the app and its model (md-netgate).
+              // tools, no MCP; no network but the app and its model (sb-netgate).
               if (opts.lockdown) {
                 env.HIVE_GUARD_STRICT = '1';
                 preArgs.push('--tools', 'read,bash,edit,write,grep,find,ls', '--exclude-tools', 'mcp__*');
@@ -1673,7 +1676,7 @@ export class HiveManager {
     if (blockedTools.length) args.push('--disallowedTools', ...blockedTools);
     // The human already authorised these connections (and the gateway enforces
     // what each may do): no permission prompt per call, or an agent just waits.
-    const allowedConnections = Object.keys(mcp.servers).filter((n) => mcp.env.MD_MCP_TOKEN && (mcp.servers[n] as { type?: string }).type === 'http');
+    const allowedConnections = Object.keys(mcp.servers).filter((n) => mcp.env.SB_MCP_TOKEN && (mcp.servers[n] as { type?: string }).type === 'http');
     if (allowedConnections.length) args.push('--allowedTools', ...allowedConnections.map((n) => `mcp__${n}`));
     args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults, opts.lockdown?.outgoing));
 
@@ -2057,14 +2060,14 @@ export class HiveManager {
     return root ? join(root, 'skills', 'store') : null;
   }
 
-  /** The catalog the orchestrator searches (md-skills), and what it may add. */
+  /** The catalog the orchestrator searches (sb-skills), and what it may add. */
   writeSkillCatalogMirror(skills: Array<{ name: string; description: string; category: string; owner: string; marketplace?: string }>, policy: SkillPolicy): void {
     const root = this.root();
     if (!root) return;
     try {
       mkdirSync(join(root, 'skills'), { recursive: true });
       writeFileSync(join(root, 'skills', 'catalog.json'), JSON.stringify({
-        note: 'Mirror of the skills catalog for md-skills. Read-only.',
+        note: 'Mirror of the skills catalog for sb-skills. Read-only.',
         policy,
         skills: skills.map((s) => ({ name: s.name, description: s.description, category: s.category, owner: s.owner, ...(s.marketplace ? { marketplace: true } : {}) }))
       }), 'utf8');
@@ -2155,7 +2158,7 @@ export class HiveManager {
     const controlDeny = this.winAgents() ? [] : controls.patterns.map((p) => `Edit(/${slash(p)}${/[\\/](?:bin|\.gemini-hive|extensions|plugins?)$/.test(p) ? '/**' : ''})`);
     // The sandbox gives Bash its own network: the app's loopback broker is
     // reachable only through the sandbox proxy, and only where allowed. The
-    // hive's commands (md-api, md-run, md-browse) go through that proxy
+    // hive's commands (sb-api, sb-run, sb-browse) go through that proxy
     // (brokerClient.ts); this opens exactly the broker's host:port, not
     // localhost at large. Without it a bypass-mode agent still gets through
     // (unlisted hosts are allowed there) but any other mode is refused.
@@ -2338,20 +2341,20 @@ export class HiveManager {
     // The human's lists (Memory → Lists), as tools: told only in the prompt,
     // agents kept those things in their own memory instead.
     const root = this.root();
-    if (agentId && root && !custodian) servers['munder-lists'] = { command: this.nodeCommand(), args: [join(root, 'bin', 'md-lists.cjs'), join(root, 'lists')] };
+    if (agentId && root && !custodian) servers['munder-lists'] = { command: this.nodeCommand(), args: [join(root, 'bin', 'sb-lists.cjs'), join(root, 'lists')] };
     // The office browser, unless Web is switched off for this agent (the broker
     // refuses it then as well).
-    if (agentId && root && !custodian && !cleanToolBlocks(toolBlocks).includes('web')) servers['munder-browser'] = { command: this.nodeCommand(), args: [join(root, 'bin', 'md-browse.cjs')] };
+    if (agentId && root && !custodian && !cleanToolBlocks(toolBlocks).includes('web')) servers['munder-browser'] = { command: this.nodeCommand(), args: [join(root, 'bin', 'sb-browse.cjs')] };
     // No gateway (tests, or it failed to bind) → no keyed servers at all: the
     // fallback is "without GitHub", never "with the key in the agent's env".
     const gw = keyed.length && agentId ? (dryRun ? { url: 'http://127.0.0.1:0', token: '' } : this.mcpGateway(agentId, keyed, this.mcpAccessMap(agentId, keyed))) : null;
     if (gw) {
       for (const id of keyed) {
-        // `${MD_MCP_TOKEN}` is expanded by Claude Code from the process env, so
+        // `${SB_MCP_TOKEN}` is expanded by Claude Code from the process env, so
         // not even the capability token is written into the (committed) hive.
-        servers[`munder-${id}`] = { type: 'http', url: `${gw.url}/mcp/${id}`, headers: { Authorization: 'Bearer ${MD_MCP_TOKEN}' } };
+        servers[`munder-${id}`] = { type: 'http', url: `${gw.url}/mcp/${id}`, headers: { Authorization: 'Bearer ${SB_MCP_TOKEN}' } };
       }
-      env.MD_MCP_TOKEN = gw.token;
+      Object.assign(env, bothEnv('MCP_TOKEN', gw.token));
     }
     return { servers, env };
   }
@@ -2765,10 +2768,10 @@ export class HiveManager {
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
     const guardrailsLine = 'Guardrails: a circuit breaker watches the floor — a "Circuit breaker: steer/constrain" message means you are looping or overspending, so STOP repeating, summarize what you tried, and follow it. Be token-frugal (a floor-wide or per-agent token budget can pause you). The shared plan has two parts: board.md (freeform; god is the sole scribe) and tasks.json (structured kanban — backlog/todo/doing/blocked/done/cancelled; backlog = parked, nobody is working on it; cancelled = the human stopped it: nobody works on it and nobody moves it out of cancelled).';
     // REST integrations through the loopback key broker. The agent never holds a
-    // key: md-api reads MD_BROKER_URL/MD_BROKER_TOKEN from its env, and the
+    // key: sb-api reads SB_BROKER_URL/SB_BROKER_TOKEN from its env, and the
     // broker adds the credential upstream. Absolute paths, not `$VAR` (cmd.exe).
-    const apiCli = inRoot('bin', 'md-api.cjs');
-    const runCli = inRoot('bin', 'md-run.cjs');
+    const apiCli = inRoot('bin', 'sb-api.cjs');
+    const runCli = inRoot('bin', 'sb-run.cjs');
     const runnersLine = runners && runners.length
       ? `SECRETS: the human keeps secrets (API keys, passwords, database URLs) out of your reach — you will never see their values, and you must not try to read, print or exfiltrate them. Commands that need them are RUNNERS the app executes for you, in your worktree, with the secrets set; you get the output with every secret masked as ***. Available: ${runners.map((r) => `${r.id}${r.description ? ` (${r.description})` : ''}${r.secrets.length ? ` [uses ${r.secrets.join(', ')}]` : ''}`).join('; ')}. Run one with \`"${hiveNode}" "${runCli}" <runner>\` (\`"${hiveNode}" "${runCli}"\` lists them and the names of the stored secrets). The human may be asked to approve a run, especially after you changed files. If a task needs a secret no runner provides, PROPOSE one: \`"${hiveNode}" "${runCli}" --propose <name> --secrets NAME[,NAME] --why "<reason>" -- <command>\` (the human approves the exact command once; it then runs like any runner). Never ask for the value.`
       : `RUNNERS: commands that run with secrets you never see. None exist yet; one added later works at once: \`"${hiveNode}" "${runCli}"\` lists them and the names of the stored secrets, \`"${hiveNode}" "${runCli}" <runner>\` runs one (output masked). When a task needs a secret (a migration, a script, a check against a service), propose a runner: \`"${hiveNode}" "${runCli}" --propose <name> --secrets NAME[,NAME] --why "<reason>" -- <command>\`; the human approves the exact command once. Never ask for a secret's value.`;
@@ -2790,7 +2793,7 @@ export class HiveManager {
     // Automations: the orchestrator changes scheduled missions by request file
     // (main validates and applies them, then answers in its inbox).
     const skillsLine = meta.isGod
-      ? `SKILLS: you give agents skills from the skills catalog (pdf, docx, xlsx, web testing...). Search: \`"${hiveNode}" "${inRoot('bin', 'md-skills.cjs')}" search <words>\`. To add or remove one, write ONE JSON file into ${inDir('skills')}/<id>.json: {"action":"add","skill":"<catalog name>","agents":["<agent id>"]} ("*" = every agent; action "remove" takes it away); the app installs it and answers in your inbox. Never copy skill folders by hand: only a request reaches the agents. Details: ${inRoot(PROTOCOL_DIR, 'skills.md')}.`
+      ? `SKILLS: you give agents skills from the skills catalog (pdf, docx, xlsx, web testing...). Search: \`"${hiveNode}" "${inRoot('bin', 'sb-skills.cjs')}" search <words>\`. To add or remove one, write ONE JSON file into ${inDir('skills')}/<id>.json: {"action":"add","skill":"<catalog name>","agents":["<agent id>"]} ("*" = every agent; action "remove" takes it away); the app installs it and answers in your inbox. Never copy skill folders by hand: only a request reaches the agents. Details: ${inRoot(PROTOCOL_DIR, 'skills.md')}.`
       : '';
     const scheduleLine = meta.isGod
       ? `AUTOMATIONS: you can create, change and delete scheduled missions (a prompt sent to an agent on a clock). Read ${inRoot('missions.json')} for the current ones and their ids. To change them, write ONE JSON file per change into ${inDir('schedule')}: {"op":"create","label":"…","to":"<agent id>","body":"<the prompt>","every":"1d"} (every: 30m, 2h, 1d, 1w; or "weekly":{"days":["mon","fri"],"time":"09:00"}), {"op":"update","id":"<id>", …only the fields to change, incl. "enabled":false}, or {"op":"delete","id":"<id>"}. The harness applies it and tells you the result in your inbox. Built-in missions can only be switched on/off or re-timed. Every mission spends tokens each time it fires, so schedule only what the human asked for or clearly needs.`
@@ -2807,7 +2810,7 @@ export class HiveManager {
     // a rule: what is not here does not exist for you.
     const officeMapLine = `WHERE THINGS ARE (full paths; do not search the disk for them): protocol index ${inRoot('PROTOCOL.md')}; plan ${inRoot('board.md')}; task cards ${inRoot('tasks.json')}; who is on the floor ${inRoot('registry.json')} and their live state ${inRoot('fleet.json')}; deliverables ${inRoot('research')}; the human's lists ${inRoot('lists')}; REST APIs \`"${hiveNode}" "${apiCli}"\`; runners \`"${hiveNode}" "${runCli}"\` (both list what you may use when run with no arguments). Never look for office files or tools elsewhere on the disk, in other projects, or in Scranton Branch's own installation or source code: if something is not here, in your folder, your working directory or this prompt, it does not exist for you — ask ${meta.isGod ? 'the human' : 'god'} instead of hunting for it.`;
     // The office browser: a real Chromium for pages a plain fetch cannot read.
-    const browseCli = inRoot('bin', 'md-browse.cjs');
+    const browseCli = inRoot('bin', 'sb-browse.cjs');
     // Claude Code agents are told when a WebFetch fails (PostToolUseFailure, see
     // hooks.ts), not up front; other CLIs have no such moment, so they read it here.
     const browserLine = webOff || hasOfficeMcp ? '' : `BROWSER: for a page that is empty, needs JavaScript or refuses a plain fetch (403, "enable JavaScript", a bot wall for non-browsers), use the office browser — the app's own Chromium${hasOfficeMcp ? ': the munder-browser tools browse_page and web_search, or' : ':'} \`"${hiveNode}" "${browseCli}" <url>\` (add --links for the page's links) and \`"${hiveNode}" "${browseCli}" --search "<query>"\`. It does not solve captchas or bot challenges; if a page asks for one, say so instead of trying to get around it.`;
@@ -2824,7 +2827,7 @@ export class HiveManager {
           '- Manager sidebar: Now, Tasks, Inbox, Deliverables; Office: Automations, Memory, Team, Factories; Setup: Capabilities, Connections, Environment, AI providers, MCP; Agents; Temps.',
           '- An agent writing outside its folders, its git, web, shell or MCP servers: Manager → Capabilities → that agent\'s row → the chip ("Outside its folders", "Git"…). Skills and your own skill marketplaces: Capabilities → Skills. Not in Settings.',
           '- What agents made (Markdown, PDF, diagrams, CSV…), who changed it, each version: Manager → Deliverables → the file. Your questions: Inbox (or the card in Tasks). What the office knows: Memory.',
-          '- Keys for Jira, GitHub, Notion or any REST API: Manager → Connections. Secrets, variables, runners: Manager → Environment (md-run --propose may name a secret that does not exist yet: the human creates it in the same prompt).',
+          '- Keys for Jira, GitHub, Notion or any REST API: Manager → Connections. Secrets, variables, runners: Manager → Environment (sb-run --propose may name a secret that does not exist yet: the human creates it in the same prompt).',
           '- Model and effort per role (orchestrator, your agents, temps): Settings → Models & API keys. Engines, custom endpoints, certificates: Manager → AI providers. Your own tool servers: Manager → MCP.',
           '- Another office at once: File → New Floor (Ctrl+Shift+N); each floor is its own window with its own orchestrator.',
           '- Settings: General (updates, Freezes log, office folder, keep awake, language, reset) · Setup (installed tools) · Models & API keys · Autonomy & limits · Tools, Slack & webhooks · Voice · Memory & knowledge.'
@@ -3884,7 +3887,7 @@ export class HiveManager {
     // own hook config and programs.
     const controls = [...this.controlPathsNow(root, meta.cwd).filter((p) => basename(p) !== 'hooks.sock').map(lin), ...state.controls];
     // A custodian: its own folder and its vaults, nothing else; no network
-    // (md-netgate gives back the app and its model); the folders it may not
+    // (sb-netgate gives back the app and its model); the folders it may not
     // read hidden; its pi login is a copy of its own.
     if (opts.lockdown) {
       const profile = {
@@ -3911,21 +3914,21 @@ export class HiveManager {
     return bwrapArgs(profile, (p) => present.has(p));
   }
 
-  /** A pi custodian's launch: md-netgate (written fresh into its own folder)
+  /** A pi custodian's launch: sb-netgate (written fresh into its own folder)
    *  runs bubblewrap with no network, relaying only the app's loopback ports
    *  and HTTPS to its model provider's hosts (netgate.ts). */
   private custodianNetgate(dir: string, piDir: string, bwrap: string[], modelHosts?: unknown, customBaseUrls: string[] = []): { command: string; args: string[] } {
     const gateDir = join(dir, '.netgate');
     mkdirSync(gateDir, { recursive: true });
-    const script = join(gateDir, 'md-netgate.cjs');
-    writeFileSync(script, MD_NETGATE, 'utf8');
+    const script = join(gateDir, 'sb-netgate.cjs');
+    for (const [p, c] of withToolAliases([[script, MD_NETGATE]])) writeFileSync(p, c, 'utf8');
     const read = (f: string): string | null => { try { return readFileSync(join(piDir, f), 'utf8'); } catch { return null; } };
     const hosts = resolvePiModelHosts([...piModelHosts(read('settings.json'), read('models.json')), ...customProviderHosts(customBaseUrls)], modelHosts);
     const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
     const node = this.nodeCommand();
     // No remote host (a model on loopback, or the human allowed none): ',' not
     // '', since wsl.exe refuses an empty argument (Wsl/Service/E_INVALIDARG)
-    // and the custodian never started on a WSL floor. md-netgate reads it as none.
+    // and the custodian never started on a WSL floor. sb-netgate reads it as none.
     return {
       command: node,
       args: [lin(script), lin(gateDir), hosts.join(',') || ',', '--', 'bwrap', ...bwrap, '--', node, lin(script), '--inner', lin(gateDir)]
@@ -4830,17 +4833,21 @@ function renderCommandsMd(): string {
 }
 const COMMANDS_MD = renderCommandsMd();
 
-// ─── md-api (written to <hive>/bin/md-api.cjs) ───────────────────────────────
-// `md-api <integration> <METHOD> <path> [body]` → the loopback key broker.
+/** The broker URL and token every hive command reads: SB_* (this app's name),
+ *  else MD_* (the name before the rename, still set by older builds). */
+const BROKER_ENV_JS = 'const base = process.env.SB_BROKER_URL || process.env.MD_BROKER_URL, token = process.env.SB_BROKER_TOKEN || process.env.MD_BROKER_TOKEN;';
+
+// ─── sb-api (written to <hive>/bin/sb-api.cjs) ───────────────────────────────
+// `sb-api <integration> <METHOD> <path> [body]` → the loopback key broker.
 // The agent's env carries the broker URL and its per-agent capability token (a
 // handle, never the key); the broker checks the grant and adds the real
 // credential upstream. Prints the status line, then the body.
 const MD_API_CLI = `#!/usr/bin/env node
 'use strict';
 const [id, methodArg, pathArg, body] = process.argv.slice(2);
-const base = process.env.MD_BROKER_URL, token = process.env.MD_BROKER_TOKEN;
+${BROKER_ENV_JS}
 if (!base || !token) {
-  console.error('md-api: this agent was started without the app key broker (the app was still starting, or it is an old session). Ask the human to restart this agent.');
+  console.error('sb-api: this agent was started without the app key broker (the app was still starting, or it is an old session). Ask the human to restart this agent.');
   process.exit(2);
 }
 ${BROKER_CLIENT_JS}
@@ -4849,18 +4856,18 @@ const headers = { Authorization: 'Bearer ' + token, Accept: 'application/json' }
 if (!id) {
   brokerRequest(base.replace(/\\/+$/, '') + '/i', { headers })
     .then(async (res) => {
-      if (!res.ok) { console.error('md-api: the app answered HTTP ' + res.status + ' at ' + base + ' ' + (await res.text()).slice(0, 200)); process.exit(1); }
+      if (!res.ok) { console.error('sb-api: the app answered HTTP ' + res.status + ' at ' + base + ' ' + (await res.text()).slice(0, 200)); process.exit(1); }
       const j = await res.json().catch(() => ({}));
       const apis = (j && j.apis) || [];
       if (!apis.length) console.log('No REST APIs are available to you right now (the human connects them in Connections; they work at once).');
       for (const a of apis) console.log(a.id + '  ' + a.label + (a.access === 'read' ? '  (read-only: GET and searches)' : ''));
-      console.log('usage: md-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [body: JSON, or a=1&b=2 as a form]');
+      console.log('usage: sb-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [body: JSON, or a=1&b=2 as a form]');
       process.exit(0);
     })
-    .catch((e) => { console.error(brokerError('md-api', e, base)); process.exit(1); });
+    .catch((e) => { console.error(brokerError('sb-api', e, base)); process.exit(1); });
 } else {
   if (!methodArg) {
-    console.error('usage: md-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [body: JSON, or a=1&b=2 as a form]   (md-api alone lists your APIs)');
+    console.error('usage: sb-api <api> <GET|POST|PUT|PATCH|DELETE> <path> [body: JSON, or a=1&b=2 as a form]   (sb-api alone lists your APIs)');
     process.exit(2);
   }
   const method = methodArg.toUpperCase();
@@ -4876,7 +4883,7 @@ if (!id) {
       if (text) console.log(text);
       process.exit(res.ok ? 0 : 1);
     })
-    .catch((e) => { console.error(brokerError('md-api', e, base)); process.exit(1); });
+    .catch((e) => { console.error(brokerError('sb-api', e, base)); process.exit(1); });
 }
 `;
 
@@ -4884,17 +4891,17 @@ const MD_RUN_CLI = `#!/usr/bin/env node
 'use strict';
 // Ask the app to run a runner: a command the human defined, executed with
 // secrets you never see; its output comes back with them masked.
-//   md-run                      list runners and the secrets that exist (names only)
-//   md-run <runner>             run one
-//   md-run --propose <name> --secrets A,B [--why "<reason>"] -- <command…>
+//   sb-run                      list runners and the secrets that exist (names only)
+//   sb-run <runner>             run one
+//   sb-run --propose <name> --secrets A,B [--why "<reason>"] -- <command…>
 //                               ask the human to add a runner (they see the command)
 const argv = process.argv.slice(2);
-const base = process.env.MD_BROKER_URL, token = process.env.MD_BROKER_TOKEN;
-if (!base || !token) { console.error('md-run: no runners are available to this agent.'); process.exit(2); }
+${BROKER_ENV_JS}
+if (!base || !token) { console.error('sb-run: no runners are available to this agent.'); process.exit(2); }
 ${BROKER_CLIENT_JS}
 const headers = { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' };
 const root = base.replace(/\\/+$/, '') + '/run';
-const fail = (e) => { console.error(brokerError('md-run', e, base)); process.exit(1); };
+const fail = (e) => { console.error(brokerError('sb-run', e, base)); process.exit(1); };
 if (argv[0] === '--propose') {
   const sep = argv.indexOf('--');
   const opts = sep === -1 ? argv.slice(1) : argv.slice(1, sep);
@@ -4902,7 +4909,7 @@ if (argv[0] === '--propose') {
   const name = opts[0] && !opts[0].startsWith('--') ? opts[0] : '';
   const val = (flag) => { const i = opts.indexOf(flag); return i === -1 ? '' : (opts[i + 1] || ''); };
   if (!name || !command) {
-    console.error('usage: md-run --propose <name> --secrets A,B [--why "<reason>"] -- <command…>');
+    console.error('usage: sb-run --propose <name> --secrets A,B [--why "<reason>"] -- <command…>');
     process.exit(2);
   }
   const secrets = val('--secrets').split(',').map((x) => x.trim()).filter(Boolean);
@@ -4910,8 +4917,8 @@ if (argv[0] === '--propose') {
   brokerRequest(root, { method: 'POST', headers, body: JSON.stringify({ name, command, secrets, description: val('--why') }) })
     .then(async (res) => {
       const body = await res.json().catch(() => ({}));
-      if (!body.ok) { console.error('md-run: ' + (body.error || ('HTTP ' + res.status))); process.exit(1); }
-      console.log('Added runner ' + body.id + '. Run it with: md-run ' + body.id);
+      if (!body.ok) { console.error('sb-run: ' + (body.error || ('HTTP ' + res.status))); process.exit(1); }
+      console.log('Added runner ' + body.id + '. Run it with: sb-run ' + body.id);
     })
     .catch(fail);
 } else {
@@ -4924,10 +4931,10 @@ if (argv[0] === '--propose') {
         for (const r of body.runners || []) console.log(r.id + (r.description ? '  — ' + r.description : '') + (r.secrets && r.secrets.length ? '  [uses ' + r.secrets.join(', ') + ']' : ''));
         console.log('');
         console.log('Secrets stored (names only, never values): ' + ((body.secrets || []).join(', ') || 'none yet'));
-        console.log('Need a command with one of them? md-run --propose <name> --secrets NAME[,NAME] --why "<reason>" -- <command>');
+        console.log('Need a command with one of them? sb-run --propose <name> --secrets NAME[,NAME] --why "<reason>" -- <command>');
         process.exit(0);
       }
-      if (!body.ok) { console.error('md-run: ' + (body.error || ('HTTP ' + res.status))); process.exit(1); }
+      if (!body.ok) { console.error('sb-run: ' + (body.error || ('HTTP ' + res.status))); process.exit(1); }
       if (body.output) process.stdout.write(body.output.endsWith('\\n') ? body.output : body.output + '\\n');
       console.log('[exit ' + body.exitCode + ']');
       process.exit(body.exitCode === 0 ? 0 : 1);

@@ -1,6 +1,6 @@
 'use strict';
 /**
- * The hosts a pi custodian may reach over HTTPS (md-netgate): detected from
+ * The hosts a pi custodian may reach over HTTPS (sb-netgate): detected from
  * its pi settings, plus or instead of the human's (config.piModelHosts,
  * Settings → AI providers → pi). Hostnames only, HTTPS only.
  */
@@ -56,7 +56,7 @@ test('resolved: the detected ones plus the human\'s, or only the human\'s', () =
   assert.deepEqual(resolvePiModelHosts(['api.anthropic.com'], { hosts: ['evil.example,api.x.ai'], mode: 'add' }), ['api.anthropic.com'], 'a hand-edited config cannot smuggle a second host past the comma list');
 });
 
-test('md-netgate gets them: a pi custodian\'s launch carries the resolved hosts', async (t) => {
+test('sb-netgate gets them: a pi custodian\'s launch carries the resolved hosts', async (t) => {
   const electron = require.resolve('electron');
   require.cache[electron] = { id: electron, filename: electron, loaded: true, exports: { Notification: class { show() {} static isSupported() { return false; } } } };
   const { HiveManager } = loadTs('src/main/hive.ts');

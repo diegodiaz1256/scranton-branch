@@ -293,7 +293,7 @@ export class IntegrationBroker {
     }
 
     // 3a'') POST /browse {url, links?, max_chars?} and POST /search {query}: the
-    //      office browser (md-browse). Plain text back.
+    //      office browser (sb-browse). Plain text back.
     const browse = /^\/(browse|search)\/?$/.exec(rawUrl);
     if (browse && this.deps.browser) {
       if ((req.method ?? '').toUpperCase() !== 'POST') return IntegrationBroker.sendError(res, 405, 'method_not_allowed', `POST /${browse[1]}`);
@@ -317,7 +317,7 @@ export class IntegrationBroker {
       return;
     }
 
-    // 3a') GET /i: the APIs this agent may use right now (md-api with no arguments).
+    // 3a') GET /i: the APIs this agent may use right now (sb-api with no arguments).
     if (/^\/i\/?(\?.*)?$/.test(rawUrl) && (req.method ?? 'GET').toUpperCase() === 'GET') {
       const now = this.allowed(cap);
       const apis = [...now.ids].map((id) => ({ id, label: this.deps.getRecord(id)?.label ?? id, access: now.access.get(id) ?? 'readwrite' }));

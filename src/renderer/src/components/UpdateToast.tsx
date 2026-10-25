@@ -98,7 +98,7 @@ export function UpdateToast() {
   }), []);
 
   // Main may have emitted before this window existed (a downloaded update
-  // from a previous session, or the dev-only MD_DROP_PREVIEW boot hook), and a
+  // from a previous session, or the dev-only SB_DROP_PREVIEW boot hook), and a
   // push nobody was listening to is gone. Pull the last status once on mount so
   // that state is not lost.
   useEffect(() => {

@@ -8,11 +8,11 @@ import { join } from 'node:path';
 // bundled skills); the server build copies them next to itself.
 (process as { resourcesPath?: string }).resourcesPath = join(__dirname, 'resources');
 // main reads this at import (src/main/headless.ts): no window is ever shown.
-process.env.MD_HEADLESS = '1';
+process.env.SB_HEADLESS = '1';
 // …and there is no Electron: no self-updater (update the server with its
 // package), no Chromium switches.
-process.env.MD_SERVER = '1';
+process.env.SB_SERVER = '1';
 // Agents in another user's group must be able to write what main creates in
 // the office (inboxes, the hook socket): group-writable by default.
-if (process.env.MD_AGENT_UID && process.platform !== 'win32') process.umask(0o002);
+if ((process.env.SB_AGENT_UID || process.env.MD_AGENT_UID) && process.platform !== 'win32') process.umask(0o002);
 

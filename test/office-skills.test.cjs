@@ -1,6 +1,6 @@
 'use strict';
 // The orchestrator manages the agents' skills: it searches the catalog with
-// md-skills, asks for one by request file, and main installs it into the
+// sb-skills, asks for one by request file, and main installs it into the
 // office store and copies it into exactly the agents it named.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -88,10 +88,10 @@ test('hive: the agents named get it in .claude/skills, the others lose it; their
   assert.ok(!fs.existsSync(path.join(skills('jim'), 'pdf')), 'taken away');
   assert.ok(fs.existsSync(path.join(skills('jim'), 'mine')), 'a skill it did not give is never removed');
 
-  // md-skills: the orchestrator's search, over the mirror main writes.
+  // sb-skills: the orchestrator's search, over the mirror main writes.
   hive.writeSkillCatalogMirror(CATALOG, 'official');
   hive.writeOfficeSkills(readOfficeSkills({ skills: { docx: { url: 'u', owner: 'anthropics', dir: 'docx', agents: ['*'], addedAt: 'T' } } }));
-  const cli = path.join(home, 'hive', 'bin', 'md-skills.cjs');
+  const cli = path.join(home, 'hive', 'bin', 'sb-skills.cjs');
   const run = (...a) => execFileSync(process.execPath, [cli, ...a], { encoding: 'utf8', env: { ...process.env, HIVE_ROOT: path.join(home, 'hive') } });
   assert.match(run('search', 'pdf'), /^pdf \[anthropics\] Read and fill PDF forms/);
   assert.doesNotMatch(run('search', 'stripe'), /stripe-best/);

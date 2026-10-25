@@ -174,6 +174,7 @@ import { speak as speakAloud, stopSpeaking } from './speak';
 import { appendWorkLog, workerExitNotice, workLogLine, type WorkLogEntry } from './workLog';
 import { latestDone, archiveRequestProblem, legacyTemps } from './tempWorkers';
 import { FreezeMonitor, instrumentEvents, instrumentIpc, instrumentTimers, type FreezeEntry } from './freezeLog';
+import { bothEnv } from '../shared/envName';
 
 // Freeze log (freezeLog.ts): set up before any handler or timer exists, so all
 // of them are timed and a stall can name what caused it.
@@ -4230,7 +4231,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // is looked up per request (broker `live`), so an API connected later works
       // without restarting it. Re-granting revokes a worker's earlier token.
       const token = integrationBroker.grant(opts.id, ids, access, opts.hive.id);
-      opts.env = { ...(opts.env ?? {}), MD_BROKER_URL: integrationBroker.url(), MD_BROKER_TOKEN: token };
+      opts.env = { ...(opts.env ?? {}), ...bothEnv('BROKER_URL', integrationBroker.url()), ...bothEnv('BROKER_TOKEN', token) };
       const labels = new Map(integrations.listRecords().map((r) => [r.id, r.label]));
       brokerIntegrations = ids.map((id) => ({ id, label: `${labels.get(id) ?? id}${access[id] === 'read' ? ', read-only: GET and searches' : ''}` }));
       // For diagnosis: which APIs this agent had when it started (log.jsonl).
@@ -4282,8 +4283,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           roam: (readConfig().agentRoam ?? []).includes(opts.hive.id),
           // The human's "Run without sandbox" (never for a custodian).
           unsandboxed: runsUnsandboxed(readConfig().agentUnsandboxed, readConfig().criticalCustodians, opts.hive.id),
-          // Its sandboxed shell may reach this broker port (md-api, md-run…).
-          brokerUrl: opts.env?.MD_BROKER_URL,
+          // Its sandboxed shell may reach this broker port (sb-api, sb-run…).
+          brokerUrl: opts.env?.SB_BROKER_URL,
           // Cloud CLI logins the human exposed to it (never a custodian's).
           exposeCredentials: isCustodian(criticalMap(), opts.hive.id) ? [] : cleanCloudCredentialMap(readConfig().agentCloudCredentials)[opts.hive.id] ?? []
         }
@@ -4641,7 +4642,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       }
       // Set on the app's own env for Windows agents; a WSL agent only gets what
       // its spawn carries (pty.ts), so hand it over here (as a /mnt path).
-      if (process.env.MD_SLACK_REPLY_CONFIG && !(opts.hive && isCustodian(criticalMap(), opts.hive.id))) opts.env = { ...(opts.env ?? {}), MD_SLACK_REPLY_CONFIG: process.env.MD_SLACK_REPLY_CONFIG };
+      if (process.env.MD_SLACK_REPLY_CONFIG && !(opts.hive && isCustodian(criticalMap(), opts.hive.id))) opts.env = { ...(opts.env ?? {}), ...bothEnv('SLACK_REPLY_CONFIG', process.env.MD_SLACK_REPLY_CONFIG) };
       // Claude's temp folder in the user's own cache, not /tmp (wsl.ts
       // AGENT_TMP_SCRIPT): made and repaired before every spawn.
       if (provider === 'claude' && !opts.env?.CLAUDE_CODE_TMPDIR) {
@@ -7995,8 +7996,7 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   if (integrationBroker.running()) {
     const apis = apisFor(workerId);
     const token = integrationBroker.grant(workerId, apis.ids, apis.access, workerId);
-    brokerEnv.MD_BROKER_URL = integrationBroker.url();
-    brokerEnv.MD_BROKER_TOKEN = token;
+    Object.assign(brokerEnv, bothEnv('BROKER_URL', integrationBroker.url()), bothEnv('BROKER_TOKEN', token));
   }
   const spawnOpts: AgentSpawnOptions = {
     id: workerId, cwd, command: bin, cols: 120, rows: 32,
@@ -8490,7 +8490,7 @@ function bootstrapHiveServices(): void {
   // be granted a capability token + the broker URL in its env. Loopback-only, idempotent.
   // Headless: --team-join pairs this office with yours (an invite made in your
   // desktop's Manager → Team). Team is switched on first if needed.
-  // Servers: MD_RELAY_TOKEN="https://relay.example.com=tk_…[,…]" stores each
+  // Servers: SB_RELAY_TOKEN="https://relay.example.com=tk_…[,…]" stores each
   // token in the encrypted store (set before joining, which talks to the relay).
   // headless.ts already took it out of the environment agents inherit.
   for (const entry of HEADLESS_SETUP?.relayTokens ?? []) {
@@ -8505,7 +8505,7 @@ function bootstrapHiveServices(): void {
     }
   }
   freezes.time('boot: startTeam', () => startTeam());
-  // An invite is single-use and MD_TEAM_JOIN stays in a unit file or compose
+  // An invite is single-use and SB_TEAM_JOIN stays in a unit file or compose
   // file across restarts: join each code once, then remember it was used.
   const joinKey = HEADLESS_SETUP?.teamJoin ? `team.joined.${createHash('sha256').update(HEADLESS_SETUP.teamJoin).digest('hex').slice(0, 16)}` : null;
   if (joinKey && teamNode && !persist.getKv(joinKey)) {
@@ -8540,7 +8540,7 @@ function bootstrapHiveServices(): void {
       hive.setOtelEndpoint(r.endpoint);
       // Demo agents are hookless `custom` CLIs, so the hive never hands them the
       // OTel endpoint; they find it here (PTYs inherit process.env).
-      if (DEMO_HOME) process.env.MD_DEMO_OTEL = r.endpoint;
+      if (DEMO_HOME) Object.assign(process.env, bothEnv('DEMO_OTEL', r.endpoint));
       console.log('[telemetry] collector listening', r.endpoint);
     }
     else console.error('[telemetry] collector failed to start:', r.error);

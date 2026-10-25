@@ -200,7 +200,7 @@ export function AiEnginesSettings({ config }: { config: HarnessConfig }) {
 /** pi has no OS sandbox of its own (the app builds one with bubblewrap on
  *  Linux and WSL floors): refuse pi agents where it cannot (shared/piSandbox.ts),
  *  and the hosts a pi custodian may reach over HTTPS besides the app's loopback
- *  services (md-netgate, shared/piModelHosts.ts). */
+ *  services (sb-netgate, shared/piModelHosts.ts). */
 function PiSandboxSettings({ config }: { config: HarnessConfig }) {
   const { t } = useTranslation();
   const [refuse, setRefuse] = useState(config.piRequireSandbox === true);

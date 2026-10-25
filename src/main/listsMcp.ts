@@ -12,7 +12,7 @@ export const MD_LISTS_MCP = String.raw`#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const DIR = process.argv[2] || process.env.MD_LISTS_DIR;
+const DIR = process.argv[2] || process.env.SB_LISTS_DIR || process.env.MD_LISTS_DIR;
 
 const slugify = (t) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'list';
 const fold = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
