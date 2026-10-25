@@ -372,10 +372,28 @@ export function shellWrittenPaths(cmd: string, depth = 0): string[] {
     cmd = cmd.replace(h.body, '');
   }
   let dir = '';
+  // Variables the line itself sets (`H=../hive; cat > $H/research/x.md`), as
+  // written: the shell resolves them where they are used, so do we.
+  const vars = new Map<string, string>();
+  const unquote = (s: string): string => s.trim().replace(/^["']|["']$/g, '');
+  const expand = (s: string): string => s.replace(/\$([A-Za-z_]\w*)/g, (m, name: string) => vars.get(name) ?? m);
+  // `/x/wordfreq/../hive/a.md` is `/x/hive/a.md`.
+  const tidy = (p: string): string => {
+    const out: string[] = [];
+    for (const s of p.split('/')) {
+      if (s === '.') continue;
+      if (s === '..' && out.length && out[out.length - 1] !== '..' && out[out.length - 1] !== '') { out.pop(); continue; }
+      out.push(s);
+    }
+    return out.join('/');
+  };
   const at = (p: string): string => {
-    const raw = p.trim().replace(/^["']|["']$/g, '');
+    const raw = expand(unquote(p));
+    // A variable the line did not set: where it points is not known here
+    // (joined onto a `cd` it became `<dir>/$OUT/a.md`).
+    if (raw.startsWith('$')) return '';
     if (!dir || /^(?:[A-Za-z]:[\\/]|[\\/]|~)/.test(raw)) return raw;
-    return `${dir.replace(/[\\/]+$/, '')}/${raw}`;
+    return tidy(`${dir.replace(/[\\/]+$/, '')}/${raw}`);
   };
   // A `cd` inside `( … )` moves only the rest of that subshell.
   const outer: string[] = [];
@@ -384,10 +402,16 @@ export function shellWrittenPaths(cmd: string, depth = 0): string[] {
     for (; level < sub; level++) outer.push(dir);
     for (; level > sub; level--) dir = outer.pop() ?? dir;
     const prog = programOf(words);
+    // `H=../hive` on its own (or exported) sets it for the rest of the line.
+    for (const w of prog ? (prog.name === 'export' ? prog.args : []) : words) {
+      const m = /^([A-Za-z_]\w*)=(.*)$/s.exec(w);
+      if (m) vars.set(m[1], expand(unquote(m[2])));
+    }
     if (!prog) continue;
     if (MOVES.has(prog.name)) {
       const t = prog.args.find((a) => !a.startsWith('-'));
-      dir = t ? at(t) : '~';
+      // Into a folder that is not known: what is written there is not either.
+      dir = t ? at(t) || '$' : '~';
       continue;
     }
     if (SHELLS.has(prog.name)) {
