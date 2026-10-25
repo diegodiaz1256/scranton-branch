@@ -173,6 +173,7 @@ import { clearWorkerScratch } from './workerScratch';
 import { speak as speakAloud, stopSpeaking } from './speak';
 import { appendWorkLog, workerExitNotice, workLogLine, type WorkLogEntry } from './workLog';
 import { latestDone, archiveRequestProblem, legacyTemps } from './tempWorkers';
+import { agentTempProblem, changedAccess, cloneProblem, inheritedAccess, parseAnswerer, tempQuotaOf, tempsAtOnce, withoutAccess, type AccessConfig, type Answerer } from '../shared/agentTemps';
 import { FreezeMonitor, instrumentEvents, instrumentIpc, instrumentTimers, type FreezeEntry } from './freezeLog';
 import { bothEnv } from '../shared/envName';
 
@@ -578,6 +579,9 @@ interface WorkerRec {
   /** The PTY id when it is not the worker id: a temp brought back by Restore
    *  team runs in the renderer's `pty-<id>`. Unset = same as workerId. */
   ptyId?: string;
+  /** The lasting agent that started it (its own spawn-requests/): its done,
+   *  failures and refusals go there instead of to the orchestrator. */
+  parent?: string;
 }
 /** Live ephemeral workers by id. Populated by the spawn-request watcher; consulted
  *  by teardownPty so a finished/crashed/reaped worker's worktree is PRESERVED (not
@@ -1108,6 +1112,10 @@ function teardownPty(id: string): void {
   // done for regular agents: their kill flows already manage their own card.
   if (workerRec) {
     try { liveWebContents()?.send('hive:agentArchived', { id: workerRec.workerId }); } catch { /* window torn down */ }
+    // A temp let go for good (done, reaped, archived, stopped) forgets the
+    // access it was given; one that merely died with the app keeps it for
+    // its restore, which applies its parent's again anyway.
+    if (workerRec.releasing) forgetTempAccess(workerRec.workerId);
   }
   syncKeepAwake();
 }
@@ -1122,10 +1130,22 @@ function logWork(rec: WorkerRec, outcome: WorkLogEntry['outcome'], extra: Partia
   if (!root) return;
   try {
     const reg = hive.registry();
-    const godId = reg.godId ?? 'god';
-    const owner = reg.agents[godId]?.name ?? godId;
-    appendWorkLog(join(root, 'agents', godId), owner, workLogLine({ who: rec.name ?? rec.workerId, objective: rec.objective, outcome, ...extra }));
+    // A temp another agent started is in that agent's log, not the orchestrator's.
+    const ownerId = rec.parent ?? reg.godId ?? 'god';
+    const owner = reg.agents[ownerId]?.name ?? ownerId;
+    appendWorkLog(join(root, 'agents', ownerId), owner, workLogLine({ who: rec.name ?? rec.workerId, objective: rec.objective, outcome, ...extra }));
   } catch (e) { console.error('[worker] work log failed:', e); }
+}
+
+/** Tell whoever started a temp: the lasting agent that asked for it, or the
+ *  orchestrator (its own temps, the human's and the triggers'). */
+function informOwner(parent: string | undefined, subject: string, body: string, slack?: { channel: string; thread_ts: string }): void {
+  if (!parent) { informGod(subject, body, slack); return; }
+  try {
+    hive.send({ to: parent, act: 'inform', subject, body }, 'ephemeral-worker');
+  } catch (e) {
+    console.error('[worker] informOwner failed:', e);
+  }
 }
 
 /** The text of a worker's newest done (after it spawned): its report. */
@@ -1182,6 +1202,22 @@ function writeTeamMirror(): void {
 }
 
 function routeTeamToGod(peerName: string, subject: string, body: string, kind: InboundKind): void {
+  // A temp answers a directive instead when Team says so. Only the
+  // orchestrator writes to teammates, so the temp's done goes to it and it
+  // replies; with no temp available it gets the message as before.
+  const answer = parseAnswerer(readConfig().teamAnswer);
+  if (answer.kind !== 'agent' && kind === 'directive') {
+    void hireTempForTrigger(answer, {
+      objective: `${peerName} asked over Team (from their office, sealed end to end): ${subject || '(no subject)'}\n\n${body}\n\n(Put your answer in your done message: the orchestrator sends it back to ${peerName}.)`,
+      name: `Team: ${peerName}`,
+      source: `${peerName}'s Team message`
+    }).then((ok) => { if (!ok) deliverTeamToGod(peerName, subject, body, kind); }, () => deliverTeamToGod(peerName, subject, body, kind));
+    return;
+  }
+  deliverTeamToGod(peerName, subject, body, kind);
+}
+
+function deliverTeamToGod(peerName: string, subject: string, body: string, kind: InboundKind): void {
   const dir = teamRequestsDir();
   try {
     hive.send({
@@ -1707,7 +1743,16 @@ function syncMissions(): void {
         // one only cost the orchestrator a turn to find that out (tokenDiet.ts).
         const idleStandup = m.id === 'ops-standup' && !floorBusySince(m.lastFiredAt ?? 0);
         if (m.kind !== 'compact' && hive.enabled() && !idleStandup) {
-          hive.send({ to: m.to, act: 'request', subject: m.label, body: m.body }, 'scheduler');
+          const answer = parseAnswerer(m.to);
+          if (answer.kind !== 'agent') {
+            // "Sends to: a temp" — one temp per run, archived when it is done;
+            // with no temp available the orchestrator gets the run instead.
+            const toGod = (): void => { try { hive.send({ to: 'god', act: 'request', subject: m.label, body: m.body }, 'scheduler'); } catch { /* best-effort */ } };
+            void hireTempForTrigger(answer, { objective: m.body, name: m.label, source: `The scheduled mission "${m.label}"` })
+              .then((ok) => { if (!ok) toGod(); }, () => toGod());
+          } else {
+            hive.send({ to: m.to, act: 'request', subject: m.label, body: m.body }, 'scheduler');
+          }
         }
         // Auto-compact: do NOT jam /compact into busy terminals. Hand it to the
         // renderer, which queues a /compact per agent (deduped — never two at
@@ -2777,6 +2822,19 @@ async function startSlackServer(): Promise<{ ok: boolean; url?: string; error?: 
         autonomyPreamble: buildAutonomousRequestProtocol(m.channel, m.thread_ts, slackReplyScriptPath())
       };
       if (localFiles.length > 0) ipcMsg.files = localFiles;
+      // A temp answers in the thread instead when Slack says so; with no temp
+      // available the message goes to the orchestrator's queue as before.
+      const answer = parseAnswerer(readConfig().slackAnswer);
+      if (answer.kind !== 'agent') {
+        const files = localFiles.length ? `\n\nAttached files (downloaded for you):\n${localFiles.map((f) => `- ${f.path}`).join('\n')}` : '';
+        const started = await hireTempForTrigger(answer, {
+          objective: `${m.text}${files}`,
+          name: 'Slack',
+          slack: { channel: m.channel, thread_ts: m.thread_ts },
+          source: 'A Slack message'
+        }).catch(() => false);
+        if (started) return;
+      }
       try { liveWebContents()?.send('slack:incomingMessage', ipcMsg); }
       catch { /* window torn down */ }
     }
@@ -2935,6 +2993,8 @@ function dispatchWebhookWork(arg: {
   tokenHash?: string;
   /** 'webhook' | 'org' — only for the subject line and the god-facing note. */
   origin: 'webhook' | 'org';
+  /** The endpoint's "who answers" (WebhookTrigger.answer): unset = the orchestrator. */
+  answer?: string;
 }): boolean {
   try {
     const card: HiveTask = {
@@ -2959,16 +3019,31 @@ function dispatchWebhookWork(arg: {
   // Body carries ONLY the sender's message + the card id (so whoever finishes it
   // updates that card's status/result for the caller's GET) — never the secret,
   // never the raw token.
-  try {
-    hive.send({
-      to: 'god',
-      act: 'request',
-      subject: `[${arg.origin}] ${arg.title}`,
-      body: `${arg.message}\n\n(Inbound via the generic ${arg.origin} API, tracked as kanban card ${arg.taskId}. When this work is finished, set that card's status to 'done' and fill its 'result' so the caller's status check reflects the outcome.)`,
-      requires_reply: false
-    }, 'webhook');
-  } catch (e) {
-    console.error('[webhook] could not route to god:', e instanceof Error ? e.message : e);
+  const toGod = (): void => {
+    try {
+      hive.send({
+        to: 'god',
+        act: 'request',
+        subject: `[${arg.origin}] ${arg.title}`,
+        body: `${arg.message}\n\n(Inbound via the generic ${arg.origin} API, tracked as kanban card ${arg.taskId}. When this work is finished, set that card's status to 'done' and fill its 'result' so the caller's status check reflects the outcome.)`,
+        requires_reply: false
+      }, 'webhook');
+    } catch (e) {
+      console.error('[webhook] could not route to god:', e instanceof Error ? e.message : e);
+    }
+  };
+  // A temp answers instead when the endpoint says so. Its done reaches the
+  // orchestrator, who closes the card; if no temp can start, the orchestrator
+  // gets the job as before.
+  const answer = parseAnswerer(arg.answer);
+  if (answer.kind !== 'agent') {
+    void hireTempForTrigger(answer, {
+      objective: `${arg.message}\n\n(Inbound via the generic ${arg.origin} API, tracked as kanban card ${arg.taskId}. Put the outcome in your done message: the orchestrator records it on that card for the caller.)`,
+      name: arg.title,
+      source: `The ${arg.origin} message "${arg.title}"`
+    }).then((ok) => { if (!ok) toGod(); }, () => toGod());
+  } else {
+    toGod();
   }
   return true;
 }
@@ -3027,7 +3102,7 @@ function handleWebhookMessage(msg: WebhookInbound, endpoint: WebhookEndpointRef)
   }
 
   const taskId = `webhook-${randomBytes(8).toString('hex')}`;
-  if (!dispatchWebhookWork({ taskId, title, message: msg.message, tokenHash, origin: 'webhook' })) return null;
+  if (!dispatchWebhookWork({ taskId, title, message: msg.message, tokenHash, origin: 'webhook', answer: trigger?.answer })) return null;
   appendTriggerHistory({ ...base, decision: 'auto-allowed', taskId });
   notifyTriggerHistoryUpdated();
   return { token, taskId, pending: false };
@@ -3935,6 +4010,10 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
       resolve({ ok: false, error: `it did not start within 90 s (stuck at: ${at})` });
     }, 90_000);
   });
+  // A temp given another agent's access gets it again from that agent, as it
+  // is NOW: never more than its parent, even if the human narrowed the parent
+  // while the app was closed.
+  if (tempId && temp?.accessFrom) applyTempAccess(temp.accessFrom, tempId);
   try {
     // One at a time (spawnGate.ts): a team coming up no longer freezes the app.
     const res = await Promise.race([spawnTurn(() => spawnAgentCore(opts, owner)), watchdog]);
@@ -3943,7 +4022,8 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
       // archived at teardown, measured from the ORIGINAL hiring.
       liveWorkers.set(tempId, {
         workerId: tempId, reqId: temp.reqId, name: opts.hive?.name, objective: temp.objective, slack: temp.slack,
-        baseBranch: temp.baseBranch, spawnedAt: temp.spawnedAt, tokenCap: temp.tokenCap, ptyId: opts.id
+        baseBranch: temp.baseBranch, spawnedAt: temp.spawnedAt, tokenCap: temp.tokenCap, ptyId: opts.id,
+        ...(temp.hiredBy === 'agent' && temp.parent ? { parent: temp.parent } : {})
       });
       console.log(`[worker] restored temp ${tempId} is tracked again (pty ${opts.id})`);
     }
@@ -5635,6 +5715,7 @@ ipcMain.handle('critical:set', async (_evt, kind: unknown, id: unknown, critical
     const a = hive.enabled() ? hive.registry().agents?.[custodian] : undefined;
     if (!a || a.status === 'gone' || a.archived) return { ok: false, error: 'unknown agent' };
     if (a.isGod) return { ok: false, error: 'the orchestrator routes everyone\'s work; choose another agent as custodian' };
+    if (a.temp) return { ok: false, error: 'a temp is gone after one job and never holds a critical connection; choose a lasting agent as custodian' };
     if (a.provider === 'pi' && !(appSandbox = await hive.sandboxAvailable())) return { ok: false, error: 'a pi agent can be a custodian only where the app can sandbox it: a Linux or WSL floor with bubblewrap. Use a WSL floor, or a Claude Code agent.' };
     if (!canBeCustodian(a.provider, { osSandbox: appSandbox })) return { ok: false, error: 'only a Claude Code agent, or a pi agent on a Linux or WSL floor, can be a custodian' };
     if (unsandboxedAgents(readConfig().agentUnsandboxed).includes(custodian)) return { ok: false, error: `${a.name ?? custodian} runs without its sandbox (Capabilities). Turn that off first: a custodian always runs sandboxed.` };
@@ -7334,7 +7415,9 @@ function sanitizeWebhookTrigger(raw: unknown, existing: WebhookTrigger[]): Webho
     enabled: secret ? (typeof r.enabled === 'boolean' ? r.enabled : prior?.enabled ?? false) : false,
     mode,
     schema: typeof r.schema === 'string' && r.schema.trim() ? r.schema : prior?.schema ?? DEFAULT_WEBHOOK_SCHEMA,
-    createdAt: typeof r.createdAt === 'number' && r.createdAt > 0 ? r.createdAt : prior?.createdAt ?? Date.now()
+    createdAt: typeof r.createdAt === 'number' && r.createdAt > 0 ? r.createdAt : prior?.createdAt ?? Date.now(),
+    // Who answers: the orchestrator (no entry), or a temp / a clone of an agent.
+    ...(typeof r.answer === 'string' && r.answer.trim() && r.answer.trim() !== 'god' ? { answer: r.answer.trim().slice(0, 120) } : {})
   };
 }
 
@@ -7406,7 +7489,8 @@ ipcMain.handle('triggerHistory:decide', (_evt, arg: unknown) => {
   const taskId = `webhook-${randomBytes(8).toString('hex')}`;
   const tokenHash = heldTokenHashFor(id);
   const title = entry.title ?? (entry.body.length > 80 ? `${entry.body.slice(0, 79)}…` : entry.body);
-  if (!dispatchWebhookWork({ taskId, title, message: entry.body, tokenHash, origin: entry.source })) {
+  const answer = entry.source === 'webhook' ? (readConfig().webhookTriggers ?? []).find((t) => t.id === entry.sourceId)?.answer : undefined;
+  if (!dispatchWebhookWork({ taskId, title, message: entry.body, tokenHash, origin: entry.source, answer })) {
     // The card is what the caller polls and what god works from. Leave the entry
     // pending so the operator can approve again once the hive is writable.
     return entry;
@@ -7783,9 +7867,10 @@ async function askToSpawnPending(): Promise<void> {
   }
 }
 
-/** Move a processed request out of the queue so it's never reprocessed. */
-function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {
-  const queue = spawnRequestsDir();
+/** Move a processed request out of its queue so it's never reprocessed. The
+ *  queue is the hive's spawn-requests/ unless given (an agent's own). */
+function archiveRequest(filePath: string, sub: '.done' | '.failed', queueDir?: string): void {
+  const queue = queueDir ?? spawnRequestsDir();
   try {
     if (!queue) throw new Error('no hive root');
     const dir = join(queue, sub);
@@ -7804,16 +7889,16 @@ function archiveRequestsDir(): string | null {
   return root ? join(root, 'archive-requests') : null;
 }
 
-/** The orchestrator's archive requests: `archive-requests/<any>.json` holding
- *  {"id":"worker-…"}. It had no way to let go of a temp it hired: a temp that
- *  never sent its done (or was restored as a regular agent) stayed on the floor
- *  until the human closed it. Same shape as spawn-requests: the file is
- *  untrusted, so only a temp the orchestrator hired is archived
- *  (archiveRequestProblem); each request moves to .done/ or .failed/ and the
- *  orchestrator hears the outcome in its inbox. Work committed on the temp's
- *  branch is preserved by the usual teardown. */
-function processArchiveRequests(): void {
-  const dir = archiveRequestsDir();
+/** Archive requests: `archive-requests/<any>.json` holding {"id":"worker-…"}.
+ *  The orchestrator had no way to let go of a temp it hired: a temp that never
+ *  sent its done (or was restored as a regular agent) stayed on the floor until
+ *  the human closed it. Same shape as spawn-requests: the file is untrusted, so
+ *  only a temp the requester started is archived (archiveRequestProblem); each
+ *  request moves to .done/ or .failed/ and the requester hears the outcome in
+ *  its inbox. Work committed on the temp's branch is preserved by the usual
+ *  teardown. `requester` unset is the orchestrator and the hive's
+ *  archive-requests/; an agent's own requests are in its own folder. */
+function processArchiveRequests(dir = archiveRequestsDir(), requester?: string): void {
   if (!dir || !existsSync(dir)) return;
   let files: string[] = [];
   try { files = readdirSync(dir).filter((f) => f.endsWith('.json')).sort(); } catch { return; }
@@ -7824,14 +7909,14 @@ function processArchiveRequests(): void {
       const raw = JSON.parse(readFileSync(fp, 'utf8')) as { id?: unknown };
       id = typeof raw.id === 'string' ? raw.id.trim() : '';
     } catch { /* unparseable → refused below as missing id */ }
-    const problem = hive.enabled() ? archiveRequestProblem(hive.registry(), id) : 'no hive is open';
+    const problem = hive.enabled() ? archiveRequestProblem(hive.registry(), id, requester) : 'no hive is open';
     const sub = problem ? '.failed' : '.done';
     try {
       mkdirSync(join(dir, sub), { recursive: true });
       renameSync(fp, join(dir, sub, f));
     } catch { try { unlinkSync(fp); } catch { /* noop */ } }
     if (problem) {
-      informGod(`[archive request refused] ${id || f}`, `archive-requests/${f} was refused: ${problem}.`);
+      informOwner(requester, `[archive request refused] ${id || f}`, `archive-requests/${f} was refused: ${problem}.`);
       continue;
     }
     const rec = liveWorkers.get(id);
@@ -7848,9 +7933,96 @@ function processArchiveRequests(): void {
       if (!rec) { try { liveWebContents()?.send('hive:agentArchived', { id }); } catch { /* window torn down */ } }
     }
     hive.setArchived(id, true);
-    console.log(`[worker] archived ${id} at the orchestrator's request`);
-    informGod(`[temp archived] ${id}`, `${id} was archived as you asked${pty ? ' (its terminal was closed)' : ''}. Work committed on its branch is preserved for you.`, rec?.slack);
+    forgetTempAccess(id);
+    console.log(`[worker] archived ${id} at the request of ${requester ?? 'the orchestrator'}`);
+    informOwner(requester, `[temp archived] ${id}`, `${id} was archived as you asked${pty ? ' (its terminal was closed)' : ''}. Work committed on its branch is preserved${requester ? '' : ' for you'}.`, rec?.slack);
   }
+}
+
+/** Every lasting agent's own queues, `agents/<id>/spawn-requests/` and
+ *  `agents/<id>/archive-requests/`: any agent, not only the orchestrator, may
+ *  start a temp for one job, within the quota the human gave it ("Temps per
+ *  agent", default 0 = none) and the office's "Max temps at once". The folder
+ *  says who asked (an agent writes only its own), so the temp reports to that
+ *  agent and runs with at most its access. A request over quota is refused
+ *  with the reason in the agent's inbox, never left waiting unseen. */
+async function processAgentTempRequests(): Promise<void> {
+  const root = hive.root();
+  if (!root || !hive.enabled()) return;
+  const reg = hive.registry();
+  const cfg = readConfig();
+  const officeMax = tempsAtOnce(cfg.maxConcurrentWorkers);
+  const critical = criticalMap();
+  for (const [id, a] of Object.entries(reg.agents ?? {})) {
+    if (a.archived || a.isGod || id === reg.godId) continue;
+    const base = join(root, 'agents', id);
+    const quota = tempQuotaOf(cfg.agentTempQuota, id);
+    const queue = join(base, 'spawn-requests');
+    // The folders exist once the human gives the agent temps, so its first
+    // request does not fail on a missing directory.
+    if (quota > 0 && !a.temp) {
+      for (const d of [queue, join(base, 'archive-requests')]) {
+        if (!existsSync(d)) { try { mkdirSync(d, { recursive: true }); } catch { /* best-effort */ } }
+      }
+    }
+    processArchiveRequests(join(base, 'archive-requests'), id);
+    if (!existsSync(queue)) continue;
+    let files: string[] = [];
+    try { files = readdirSync(queue).filter((f) => f.endsWith('.json')).sort(); } catch { continue; }
+    for (const f of files) {
+      const mine = [...liveWorkers.values()].filter((w) => w.parent === id && !w.releasing).length;
+      const problem = agentTempProblem(
+        { id, temp: !!a.temp, custodian: isCustodian(critical, id) },
+        quota, mine, liveWorkers.size, officeMax
+      );
+      if (problem) {
+        console.log(`[worker] refused ${id}'s temp request ${f}: ${problem}`);
+        informOwner(id, `[temp refused] ${f}`, `Your spawn request spawn-requests/${f} was refused: ${problem}.`);
+        archiveRequest(join(queue, f), '.failed', queue);
+        continue;
+      }
+      await processSpawnRequest(join(queue, f), { parent: id, queueDir: queue });
+    }
+  }
+}
+
+/** A trigger whose "who answers" is a temp (Schedules, webhooks, Slack, Team):
+ *  start one for this job, a plain temp or a clone of an agent. False when it
+ *  could not (no free desk, an agent that cannot be cloned, a refused spawn);
+ *  the caller then hands the job to the orchestrator as before, so a trigger
+ *  never goes unanswered. Its results go to the orchestrator. */
+async function hireTempForTrigger(answer: Answerer, job: { objective: string; name?: string; slack?: { channel: string; thread_ts: string }; source: string }): Promise<boolean> {
+  if (answer.kind === 'agent' || !hive.enabled()) return false;
+  const queue = spawnRequestsDir();
+  if (!queue) return false;
+  const cfg = readConfig();
+  if (liveWorkers.size >= tempsAtOnce(cfg.maxConcurrentWorkers)) {
+    informGod(`[no temp desk free] ${job.source}`, `${job.source} is set to be answered by a temp, but every temp desk is taken (${liveWorkers.size} at once). It was handed to you instead.`);
+    return false;
+  }
+  const reg = hive.registry();
+  const of = answer.kind === 'clone' ? answer.of : undefined;
+  if (of) {
+    const why = cloneProblem(reg.agents[of], isCustodian(criticalMap(), of));
+    if (why) {
+      informGod(`[temp not started] ${job.source}`, `${job.source} is set to be answered by a temp cloned from ${of}, but ${why}. It was handed to you instead.`);
+      return false;
+    }
+  }
+  // A plain temp works where the orchestrator does (the office); a clone
+  // where its agent does (processSpawnRequest takes that from the agent).
+  const cwd = of ? '' : (reg.agents[reg.godId ?? 'god']?.cwd ?? cfg.harnessHome ?? '');
+  const id = `${of ? 'clone' : 'temp'}-${Date.now().toString(36)}-${randomBytes(2).toString('hex')}`;
+  const dir = join(queue, 'trigger');
+  const file = join(dir, `${id}.json`);
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, JSON.stringify({ id, objective: job.objective, ...(cwd ? { cwd } : {}), ...(job.name ? { name: job.name.slice(0, 40) } : {}), ...(job.slack ? { slack: job.slack } : {}) }, null, 2), 'utf8');
+  } catch (e) {
+    console.error('[worker] could not write a trigger temp request:', e);
+    return false;
+  }
+  return processSpawnRequest(file, { cloneOf: of, trigger: true });
 }
 
 /** Mark temps hired before their hiring was persisted (legacyTemps), so Restore
@@ -7888,59 +8060,139 @@ function workerDoneAt(workerId: string, spawnedAt: number): number | null {
   return latestDone(join(root, 'agents', workerId), spawnedAt)?.at ?? null;
 }
 
+/** Who a spawn request comes from, beyond the file itself. Set by main from
+ *  WHERE the file sits or which trigger fired, never read from the request. */
+interface SpawnCtx {
+  /** A lasting agent's own request (agents/<id>/spawn-requests/): it hears
+   *  the refusals and the temp's done, and the temp runs in its folder, on its
+   *  engine unless the request picks another, with at most its access. */
+  parent?: string;
+  /** A trigger's "A temp, clone of <agent>": the temp takes that agent's
+   *  engine, model, role and access, for one job. */
+  cloneOf?: string;
+  /** Started by a trigger whose "who answers" is a temp (results go to the
+   *  orchestrator). */
+  trigger?: boolean;
+  /** Where the request is filed once processed (default the hive's spawn-requests/). */
+  queueDir?: string;
+}
+
+/** What the renderer's roster (roster.json) knows about an agent that the
+ *  registry does not: its engine, model, look and standing goal. */
+function rosterEntry(agentId: string): { provider?: AgentProvider; model?: string; character?: string; accent?: string; goal?: string; cwd?: string; worktreePath?: string } | null {
+  const snap = roster.read();
+  if (!snap || !Array.isArray(snap.agents)) return null;
+  for (const entry of snap.agents) {
+    if (!entry || typeof entry !== 'object') continue;
+    const a = entry as Record<string, unknown>;
+    if (a.id !== agentId) continue;
+    const s = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    return {
+      provider: isAgentProvider(a.provider) ? a.provider : undefined,
+      model: s(a.model), character: s(a.character), accent: s(a.accent), goal: s(a.goal), cwd: s(a.cwd), worktreePath: s(a.worktreePath)
+    };
+  }
+  return null;
+}
+
+/** Give temp `tempId` the access of agent `fromId` and no more
+ *  (shared/agentTemps.ts). Best-effort; written before the temp spawns. */
+function applyTempAccess(fromId: string, tempId: string): void {
+  try {
+    const cfg = readConfig() as unknown as AccessConfig;
+    const patch = changedAccess(cfg, inheritedAccess(cfg, fromId, tempId));
+    if (Object.keys(patch).length) writeConfig(patch as unknown as Partial<HarnessConfig>);
+  } catch (e) { console.error('[worker] could not apply a temp\'s access:', e); }
+}
+
+/** Forget every per-agent grant for a temp that is gone for good. */
+function forgetTempAccess(tempId: string): void {
+  try {
+    const cfg = readConfig() as unknown as AccessConfig;
+    const patch = changedAccess(cfg, withoutAccess(cfg, tempId));
+    if (Object.keys(patch).length) writeConfig(patch as unknown as Partial<HarnessConfig>);
+  } catch (e) { console.error('[worker] could not clear a temp\'s access:', e); }
+}
+
 /** Spin up one ephemeral worker from a spawn-request. Terminal failures (bad
- *  request, missing CLI, spawn error) archive to .failed and inform god WITH the
- *  Slack coords so god can post a 'couldn't start' reply. On success the worker is
+ *  request, missing CLI, spawn error) archive to .failed and inform whoever
+ *  asked (the orchestrator WITH the Slack coords so it can post a 'couldn't
+ *  start' reply, or the agent whose request it was). On success the worker is
  *  registered (for done-scan / reaping / safe teardown) and dispatched its
- *  objective via the standard inbox path. */
-async function processSpawnRequest(filePath: string): Promise<void> {
+ *  objective via the standard inbox path. True when it started. */
+async function processSpawnRequest(filePath: string, ctx: SpawnCtx = {}): Promise<boolean> {
+  const owner = ctx.parent;
+  const queueDir = ctx.queueDir;
   let raw: SpawnRequest;
   try {
     raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;
   } catch (e) {
     console.error('[worker] unparseable spawn-request:', filePath, e);
-    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);
-    archiveRequest(filePath, '.failed');
-    return;
+    informOwner(owner, '[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);
+    archiveRequest(filePath, '.failed', queueDir);
+    return false;
   }
-  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'
+  // An agent's own temp does not post to Slack: the agent that asked answers
+  // its thread itself once the temp's done reaches it.
+  const slack = !owner && raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'
     ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;
-  const fail = (reason: string): void => {
-    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);
-    archiveRequest(filePath, '.failed');
+  const fail = (reason: string): false => {
+    informOwner(owner, `[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);
+    archiveRequest(filePath, '.failed', queueDir);
+    return false;
   };
 
   const objective = typeof raw.objective === 'string' ? raw.objective.trim() : '';
-  if (!objective) { fail('missing "objective"'); return; }
+  if (!objective) return fail('missing "objective"');
 
-  const reqId = (typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : basename(filePath).replace(/\.json$/i, ''))
-    .replace(/[^A-Za-z0-9._-]/g, '-');
+  // The agent whose access (and, unless the request says otherwise, engine) the
+  // temp gets: the one that asked for it, or the one a trigger clones.
+  const accessFrom = owner ?? ctx.cloneOf;
+  const reg = hive.registry();
+  const src = accessFrom ? reg.agents[accessFrom] : undefined;
+  if (accessFrom && !src) return fail(`there is no agent "${accessFrom}"`);
+  if (ctx.cloneOf) {
+    const why = cloneProblem(src, isCustodian(criticalMap(), ctx.cloneOf));
+    if (why) return fail(why);
+  }
+  const srcEntry = accessFrom ? rosterEntry(accessFrom) : null;
+
+  const baseId = (typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : basename(filePath).replace(/\.json$/i, ''));
+  // An agent's request ids are its own: two agents both asking for "review"
+  // must not collide, and the id says whose temp it is.
+  const reqId = (owner ? `${owner}-${baseId}` : baseId).replace(/[^A-Za-z0-9._-]/g, '-');
   const workerId = `worker-${reqId}`;
-  if (liveWorkers.has(workerId)) { fail(`worker "${workerId}" already running`); return; }
+  if (liveWorkers.has(workerId)) return fail(`worker "${workerId}" already running`);
 
   // Worker request files are hand/LLM-authored, so `~/…` shows up here too — expand
   // before the existence check (Node reads `~` literally).
   // A WSL floor's god runs inside the distro, so it writes Linux paths
   // (`/home/u/repo`, `~/repo`): open them through \\wsl.localhost.
   const floorWsl = hive.wslRoot();
-  const rawCwd = typeof raw.cwd === 'string' ? raw.cwd.trim() : '';
-  const cwd = !rawCwd ? ''
+  // An agent's temp works in the agent's own folder unless it names one inside
+  // it; a clone works where the agent it copies does.
+  const rawCwd = ctx.cloneOf ? '' : typeof raw.cwd === 'string' ? raw.cwd.trim() : '';
+  const cwd = !rawCwd ? (src?.cwd ?? '')
     : floorWsl ? fromLinuxPath(rawCwd, floorWsl.distro, () => distroHomeUnc(floorWsl.distro))
     : expandTilde(rawCwd);
   // A network path is refused before anything touches it: even existsSync on
   // \\host\share makes Windows connect and offer the user's NTLM hash. The
   // only UNC paths allowed are this floor's own distro.
-  if (cwd && !uncAllowed(cwd)) { fail(`"cwd" may not be a network path (${cwd})`); return; }
-  if (!cwd || !existsSync(cwd)) { fail(`"cwd" missing or not found (${cwd || 'unset'})`); return; }
+  if (cwd && !uncAllowed(cwd)) return fail(`"cwd" may not be a network path (${cwd})`);
+  if (!cwd || !existsSync(cwd)) return fail(`"cwd" missing or not found (${cwd || 'unset'})`);
 
   // Request line → executable + argv (auto-mode inheritance, tokenization,
   // model-flag dedupe). Pure and unit-tested — see workerLaunch.ts for why this
-  // translation earned a test.
+  // translation earned a test. A clone runs on its agent's engine and model; an
+  // agent's temp on the agent's own unless the request picks one.
   const cfgSpawn = readConfig();
+  const picksEngine = !ctx.cloneOf && (!!raw.command || !!raw.provider);
+  const asked = isAgentProvider(raw.provider) ? raw.provider : undefined;
+  const provider: AgentProvider | undefined = picksEngine ? asked : (srcEntry?.provider ?? src?.provider ?? asked);
   const launch = buildWorkerLaunch({
-    requestCommand: raw.command,
-    requestProvider: raw.provider,
-    requestModel: raw.model,
+    requestCommand: ctx.cloneOf ? undefined : raw.command,
+    requestProvider: provider,
+    requestModel: ctx.cloneOf ? srcEntry?.model : (raw.model ?? (picksEngine ? undefined : srcEntry?.model)),
     defaultCommand: cfgSpawn.defaultCommand,
     autoMode: !!cfgSpawn.autoMode
   });
@@ -7952,24 +8204,26 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   // reinterpret. Rejected here, before any resolution; the resolver guards behind
   // it validate the same thing in depth.
   if (!isSafeCommandName(bin) && !isAbsolute(bin)) {
-    fail(`refusing spawn: engine command "${bin}" is not a plain command name or an absolute path`);
-    return;
+    return fail(`refusing spawn: engine command "${bin}" is not a plain command name or an absolute path`);
   }
   // The request file is untrusted (any agent can write the hive): only an agent
-  // CLI, with no settings/MCP/backend flags, in a folder the user set up.
+  // CLI, with no settings/MCP/backend flags, in a folder the user set up. An
+  // agent's temp stays inside that agent's own working folder.
   {
     const providers: AgentProvider[] = ['claude', 'codex', 'grok', 'kimi', 'gemini', 'antigravity', 'qwen', 'opencode', 'crush', 'pi', 'copilot', 'cursor'];
     const bins = [
       ...providers.map((pr) => tokenizeCommand(defaultCommandForProvider(pr))[0] ?? ''),
       tokenizeCommand(cfgSpawn.defaultCommand ?? '')[0] ?? ''
     ];
-    const roots = [
-      ...(cfgSpawn.registeredRepos ?? []),
-      cfgSpawn.harnessHome ?? '',
-      ...Object.values(hive.registry().agents ?? {}).map((a) => (a as { cwd?: string }).cwd ?? '')
-    ];
+    const roots = src
+      ? [src.cwd, srcEntry?.cwd ?? '', srcEntry?.worktreePath ?? '']
+      : [
+        ...(cfgSpawn.registeredRepos ?? []),
+        cfgSpawn.harnessHome ?? '',
+        ...Object.values(reg.agents ?? {}).map((a) => (a as { cwd?: string }).cwd ?? '')
+      ];
     const problem = workerRequestProblem(launch, cwd, { bins, roots, caseInsensitive: process.platform === 'win32' });
-    if (problem) { fail(`refusing spawn: ${problem}`); return; }
+    if (problem) return fail(`refusing spawn: ${src && problem.includes('is not a registered repo') ? `"${cwd}" is outside ${src.name ?? accessFrom}'s working folder (${src.cwd})` : problem}`);
   }
   // Missing-CLI → FAIL FAST. A headless worker has no human to watch an installer,
   // so we never run the cc49e1e install banner here — we reject and tell god.
@@ -7979,21 +8233,27 @@ async function processSpawnRequest(filePath: string): Promise<void> {
     const there = bin.startsWith('/')
       ? existsSync(toWslUnc(cwdWsl.distro, bin))
       : !!(await probeInDistro(cwdWsl.distro, [bin]))[bin];
-    if (!there) { fail(`engine CLI "${bin}" is not installed inside WSL (${cwdWsl.distro})`); return; }
-  } else if (!ptyManager.isCommandAvailable(bin)) { fail(`engine CLI "${bin}" is not installed`); return; }
+    if (!there) return fail(`engine CLI "${bin}" is not installed inside WSL (${cwdWsl.distro})`);
+  } else if (!ptyManager.isCommandAvailable(bin)) return fail(`engine CLI "${bin}" is not installed`);
 
   const isolate = raw.isolate !== false; // default true
   // Base branch the worktree will be cut from (for the ahead-of-base safety check).
   let baseBranch = 'main';
   try { const br = await getBranch(cwd); if ('current' in br && br.current) baseBranch = br.current; } catch { /* keep default */ }
 
+  const requestedName = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : '';
   const meta: AgentMeta = {
     id: workerId,
-    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : `Worker ${reqId.slice(0, 12)}`,
-    provider: raw.provider,
-    role: 'worker',
+    name: requestedName || (ctx.cloneOf && src ? `${src.name} (temp)` : `Worker ${reqId.slice(0, 12)}`),
+    provider,
+    // A clone does its agent's job: same role and capabilities.
+    role: ctx.cloneOf && src?.role ? src.role : 'worker',
+    ...(ctx.cloneOf && src?.capabilities?.length ? { capabilities: [...src.capabilities] } : {}),
     cwd
   };
+  // Never more than the agent it comes from: copied before the spawn reads the
+  // config (MCP grants, tool blocks, scopes, the broker grant below).
+  if (accessFrom) applyTempAccess(accessFrom, workerId);
   // Phase 2: grant this worker a broker capability over the currently-enabled
   // integrations and inject the broker URL + a per-worker capability TOKEN (a handle,
   // never a secret) into its env, so it can reach registered REST integrations through
@@ -8008,7 +8268,7 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   const spawnOpts: AgentSpawnOptions = {
     id: workerId, cwd, command: bin, cols: 120, rows: 32,
     args: launch.args,
-    hive: meta, temp: true, isolate, provider: raw.provider, env: brokerEnv
+    hive: meta, temp: true, isolate, provider, env: brokerEnv
   };
 
   let res: { ok: boolean; error?: string; worktreePath?: string };
@@ -8017,7 +8277,11 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   } catch (e) {
     res = { ok: false, error: String(e) };
   }
-  if (!res.ok) { integrationBroker.revoke(workerId); fail(`spawn failed — ${res.error ?? 'unknown error'}`); return; }
+  if (!res.ok) {
+    integrationBroker.revoke(workerId);
+    if (accessFrom) forgetTempAccess(workerId);
+    return fail(`spawn failed — ${res.error ?? 'unknown error'}`);
+  }
 
   // A god-hired worker is a MAIN-initiated spawn, so the renderer would never
   // card it on its own (same reason as the voice-spawn broadcast): without this
@@ -8030,13 +8294,13 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   const card = {
     id: workerId,
     name: meta.name,
-    provider: raw.provider ?? 'claude',
+    provider: provider ?? 'claude',
     cwd: res.worktreePath ?? cwd,
     command: launch.command,
     role: meta.role,
     worktreePath: res.worktreePath,
-    character: typeof raw.character === 'string' ? raw.character : undefined,
-    accent: typeof raw.accent === 'string' ? raw.accent : undefined
+    character: typeof raw.character === 'string' ? raw.character : (ctx.cloneOf ? srcEntry?.character : undefined),
+    accent: typeof raw.accent === 'string' ? raw.accent : (ctx.cloneOf ? srcEntry?.accent : undefined)
   };
   try {
     liveWebContents()?.send('hive:agentSpawned', card);
@@ -8047,29 +8311,42 @@ async function processSpawnRequest(filePath: string): Promise<void> {
   const tokenCap = typeof raw.tokenCap === 'number' && Number.isFinite(raw.tokenCap) && raw.tokenCap > 0
     ? raw.tokenCap : undefined;
   const spawnedAt = Date.now();
-  liveWorkers.set(workerId, { workerId, reqId, name: meta.name, objective, slack, baseBranch, spawnedAt, tokenCap, card });
+  liveWorkers.set(workerId, { workerId, reqId, name: meta.name, objective, slack, baseBranch, spawnedAt, tokenCap, card, parent: owner });
   // …and on disk, so a restart does not turn it into a permanent agent.
-  hive.setTemp(workerId, { reqId, spawnedAt, baseBranch, tokenCap, objective, slack, hiredBy: basename(dirname(filePath)) === 'human' ? 'human' : 'orchestrator' });
+  const hiredBy: TempHiring['hiredBy'] = owner ? 'agent' : ctx.trigger ? 'trigger' : basename(dirname(filePath)) === 'human' ? 'human' : 'orchestrator';
+  hive.setTemp(workerId, { reqId, spawnedAt, baseBranch, tokenCap, objective, slack, hiredBy, ...(owner ? { parent: owner } : {}), ...(accessFrom ? { accessFrom } : {}) });
 
   // Dispatch the objective via the standard inbox path (zero new transport),
   // reusing the autonomous-request preamble so the worker gets the exact Slack
-  // reply command + autonomy policy. `from: god` so the worker treats it as a god
-  // dispatch per its protocol.
+  // reply command + autonomy policy. From whoever started it (god for its own,
+  // the human's and the triggers'), so the worker treats it as a dispatch from
+  // them and its done goes back there.
+  const boss = owner ?? 'god';
   try {
     const prefix = slack
       ? buildAutonomousRequestProtocol(slack.channel, slack.thread_ts, slackReplyScriptPath())
       : '[AUTONOMOUS WORKER TASK — no interactive human is watching. Work autonomously; do not ask interactive questions.] The task starts now: ';
-    const suffix = `\n\n[CAPABILITIES] Before you start, consult your capability catalog — run the \`/capabilities\` skill (or read \`$AGENT_DIR/.claude/skills/capabilities/SKILL.md\`). It lists your temporal date-range skills (\`/today\`, \`/last30Days\`, \`/lastQuarter\`, …) and the integrations available to you (reached via the loopback broker) and how to call each. For any time-scoped work, resolve the dates with those skills instead of computing them by hand.\n\n[WORKER COMPLETION] When finished, signal done by sending ONE outbox message to god with "act":"done" and a short result summary — that releases this ephemeral worker (terminal closed; your branch is handed to god). Do NOT push to any remote; god is the sole integrator.`;
+    const goal = ctx.cloneOf ? srcEntry?.goal : undefined;
+    const cloneNote = ctx.cloneOf && src
+      ? `[TEMP COPY] You are a one-job copy of ${src.name} (${src.id})${src.role ? `, whose job is: ${src.role}` : ''}.${goal ? ` Their standing goal: ${goal}.` : ''} Work as they would, on this one job; you are archived when you send your done.\n\n`
+      : '';
+    const ownerNote = owner && src
+      ? `[TEMP] ${src.name} (${owner}) started you for this one job. Report to them, not to god.\n\n`
+      : '';
+    const suffix = `\n\n[CAPABILITIES] Before you start, consult your capability catalog — run the \`/capabilities\` skill (or read \`$AGENT_DIR/.claude/skills/capabilities/SKILL.md\`). It lists your temporal date-range skills (\`/today\`, \`/last30Days\`, \`/lastQuarter\`, …) and the integrations available to you (reached via the loopback broker) and how to call each. For any time-scoped work, resolve the dates with those skills instead of computing them by hand.\n\n[WORKER COMPLETION] When finished, signal done by sending ONE outbox message to ${boss} with "act":"done" and a short result summary — that releases this ephemeral worker (terminal closed; your branch is handed to ${owner ? src?.name ?? owner : 'god'}). Do NOT push to any remote; god is the sole integrator.`;
     // The cap the tick will hold it to (per-request, else the config default).
     const effectiveCap = tokenCap ?? (typeof cfgSpawn.defaultWorkerTokenCap === 'number' && cfgSpawn.defaultWorkerTokenCap > 0 ? cfgSpawn.defaultWorkerTokenCap : 0);
     const capNote = effectiveCap > 0 ? `\n\n${capDispatchNote(effectiveCap)}` : '';
-    hive.send({ to: workerId, conversation: `worker-${reqId}`, act: 'request', subject: meta.name, body: `${prefix}${objective}${suffix}${capNote}` }, 'god');
+    hive.send({ to: workerId, conversation: `worker-${reqId}`, act: 'request', subject: meta.name, body: `${ownerNote}${cloneNote}${prefix}${objective}${suffix}${capNote}` }, boss);
   } catch (e) {
     console.error('[worker] dispatch send failed:', e);
   }
 
-  console.log(`[worker] spawned ${workerId} (cwd=${cwd}, base=${baseBranch}${slack ? ', slack' : ''})`);
-  archiveRequest(filePath, '.done');
+  console.log(`[worker] spawned ${workerId} (cwd=${cwd}, base=${baseBranch}${slack ? ', slack' : ''}${owner ? `, for ${owner}` : ''}${ctx.cloneOf ? `, clone of ${ctx.cloneOf}` : ''})`);
+  // The agent that asked hears which temp it got (the id to archive it by).
+  if (owner) informOwner(owner, `[temp started] ${workerId}`, `${meta.name} (${workerId}) started for your request ${basename(filePath)}. Its done comes back to your inbox; no need to poll.`);
+  archiveRequest(filePath, '.done', queueDir);
+  return true;
 }
 
 /** WORK tokens (input+output+cache writes, no cached reads) a worker has burned
@@ -8139,7 +8416,7 @@ async function ephemeralWorkerTick(): Promise<void> {
     const cfg = readConfig();
     offerOrchestratorHires();
     recordTaskHistory();
-    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);
+    const maxWorkers = tempsAtOnce(cfg.maxConcurrentWorkers);
     const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;
     // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles
     // unless a positive cap is set per-request or via defaultWorkerTokenCap).
@@ -8162,6 +8439,18 @@ async function ephemeralWorkerTick(): Promise<void> {
         rec.releasing = true;
         console.log(`[worker] ${workerId} signaled done — releasing`);
         logWork(rec, 'done', { result: workerDoneText(workerId, rec.spawnedAt) });
+        // A temp another agent started reports to that agent. Its done usually
+        // already went there (it was dispatched from them); one addressed
+        // elsewhere (god, by habit) is forwarded so the result is not lost.
+        if (rec.parent) {
+          const root = hive.root();
+          const done = root ? latestDone(join(root, 'agents', workerId), rec.spawnedAt) : null;
+          if (done && done.to !== rec.parent) {
+            try {
+              hive.send({ to: rec.parent, conversation: `worker-${rec.reqId}`, act: 'done', subject: `[temp done] ${rec.name ?? workerId}`, body: done.text || '(no summary)' }, workerId);
+            } catch (e) { console.error('[worker] forwarding a temp\'s done failed:', e); }
+          }
+        }
         // Its mailbox is finished with too. Workers seldom file their own work
         // order before signaling done, and the id is reused on every re-hire of
         // the same name, so anything left unread here would greet the next
@@ -8185,7 +8474,8 @@ async function ephemeralWorkerTick(): Promise<void> {
         if (unanswered.length > 0) {
           const oneLine = (s: string): string => s.replace(/[\r\n]+/g, ' ');
           const lines = unanswered.map((m) => `- ${m.act} ${oneLine(m.id)} from ${oneLine(m.from)}: "${oneLine(m.subject)}"`);
-          informGod(
+          informOwner(
+            rec.parent,
             `[worker released — mail filed unread] ${workerId}`,
             `Worker ${workerId} signaled done and was released. These messages were still unread in its inbox and were filed under inbox/.done without an answer:\n`
             + lines.join('\n')
@@ -8207,7 +8497,7 @@ async function ephemeralWorkerTick(): Promise<void> {
         rec.capWarned = true;
         console.warn(`[worker] ${workerId} near its token cap (${used.toLocaleString()} of ${tokenCap.toLocaleString()}) — asking it to wrap up`);
         try {
-          hive.send({ to: workerId, conversation: `worker-${rec.reqId}`, act: 'request', subject: 'Token budget almost spent: wrap up', body: capWarningBody(used, tokenCap) }, 'god');
+          hive.send({ to: workerId, conversation: `worker-${rec.reqId}`, act: 'request', subject: 'Token budget almost spent: wrap up', body: capWarningBody(used, tokenCap) }, rec.parent ?? 'god');
         } catch (e) { console.error('[worker] cap warning send failed:', e); }
       } else if (stage === 'reap') {
         rec.releasing = true;
@@ -8215,7 +8505,8 @@ async function ephemeralWorkerTick(): Promise<void> {
         logWork(rec, 'tokens');
         const root = hive.root();
         const last = root ? lastWords(lastOutboxMessage(join(root, 'agents', workerId), rec.spawnedAt)) : lastWords(null);
-        informGod(
+        informOwner(
+          rec.parent,
           `[worker reaped — token cap] ${workerId}`,
           `Worker ${workerId} used ${used.toLocaleString()} tokens (> its cap of ${tokenCap.toLocaleString()}) and was reaped. Any committed work on its branch is preserved for you.\n${last}`,
           rec.slack
@@ -8230,7 +8521,8 @@ async function ephemeralWorkerTick(): Promise<void> {
         rec.releasing = true;
         console.warn(`[worker] reaping idle ${workerId} (${Math.round(idleMs / 60000)}min idle)`);
         logWork(rec, 'idle');
-        informGod(
+        informOwner(
+          rec.parent,
           `[worker reaped — idle] ${workerId}`,
           `Worker ${workerId} produced no output for ${Math.round(idleMs / 60000)} min (> the ${Math.round(idleTimeoutMs / 60000)} min cap) and never signaled done, so it was reaped. Any committed work on its branch is preserved for you.`,
           rec.slack
@@ -8273,6 +8565,9 @@ async function ephemeralWorkerTick(): Promise<void> {
     // (2c) The orchestrator archiving a temp it hired. Not gated either: it
     //      only ever lets go of a worker, which costs nothing.
     processArchiveRequests();
+    // (2d) Every other lasting agent's own temps: its spawn and archive
+    //      requests, under the quota the human gave it.
+    await processAgentTempRequests();
     await processTeamRequests();
     await processSkillRequests().catch((e) => console.error('[skills] requests failed:', e));
 
@@ -8358,7 +8653,7 @@ ipcMain.handle('workers:list', (): { live: WorkerSnapshot[]; preserved: Preserve
   const preserved: PreservedSnapshot[] = [...preservedWorktrees.values()].map((e) => ({
     workerId: e.workerId, wtPath: e.wtPath, baseBranch: e.baseBranch, preservedAt: e.preservedAt
   }));
-  return { live, preserved, maxWorkers: Math.max(1, cfg.maxConcurrentWorkers ?? 4) };
+  return { live, preserved, maxWorkers: tempsAtOnce(cfg.maxConcurrentWorkers) };
 });
 
 /** Manually stop a live ephemeral worker. Mirrors the done-release path: mark
@@ -8397,7 +8692,7 @@ ipcMain.handle('workers:hire', async (_evt, req: unknown): Promise<{ ok: boolean
   const queue = spawnRequestsDir();
   if (!queue) return { ok: false, error: 'No hive is open.' };
   const cfg = readConfig();
-  if (liveWorkers.size >= Math.max(1, cfg.maxConcurrentWorkers ?? 4)) {
+  if (liveWorkers.size >= tempsAtOnce(cfg.maxConcurrentWorkers)) {
     return { ok: false, error: 'Every temp desk is taken. Wait for one to finish or stop one.' };
   }
   const id = `temp-${Date.now().toString(36)}-${randomBytes(2).toString('hex')}`;
@@ -8468,6 +8763,8 @@ function bootstrapHiveServices(): void {
   // builder reads this, so an agent spawned earlier would never learn it.
   hive.setRuntimeInfo({ version: app.getVersion(), packaged: app.isPackaged, appPath: app.getAppPath() });
   hive.setOrchestratorMaySpawn(readConfig().orchestratorMaySpawn === true);
+  // Each agent's "Temps per agent", read when its prompt is built.
+  hive.setTempQuota((id) => tempQuotaOf(readConfig().agentTempQuota, id));
   // An app-start marker in the event log. log.jsonl had twelve event kinds and
   // none of them meant "the app restarted", so a relaunch, and more importantly a
   // switch between a packaged build and a local one, was invisible to every agent

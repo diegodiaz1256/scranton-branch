@@ -25,9 +25,9 @@ export function authoredAfter(createdAt: unknown, mtimeMs: number, since: number
 
 /** The newest `act:"done"` in an agent's outbox (and outbox/.sent, where the
  *  router archives delivered mail) authored after `since`, or null. */
-export function latestDone(agentDir: string, since: number): { at: number; text: string } | null {
+export function latestDone(agentDir: string, since: number): { at: number; text: string; to: string } | null {
   const base = join(agentDir, 'outbox');
-  let best: { at: number; text: string } | null = null;
+  let best: { at: number; text: string; to: string } | null = null;
   for (const dir of [base, join(base, '.sent')]) {
     if (!existsSync(dir)) continue;
     let files: string[];
@@ -42,23 +42,29 @@ export function latestDone(agentDir: string, since: number): { at: number; text:
         try { mtime = statSync(fp).mtimeMs; } catch { /* keep NaN */ }
         const at = authoredAfter(msg.created_at, mtime, since);
         if (at === null || (best && at <= best.at)) continue;
-        best = { at, text: messageBody(msg) || (typeof msg.subject === 'string' ? msg.subject : '') };
+        best = { at, text: messageBody(msg) || (typeof msg.subject === 'string' ? msg.subject : ''), to: typeof msg.to === 'string' ? msg.to : '' };
       } catch { /* skip unreadable/partial */ }
     }
   }
   return best;
 }
 
-/** Why the orchestrator may NOT archive agent `id` through archive-requests, or
- *  null when it may: only a temp it hired itself (spawn-requests). Permanent
- *  staff, the orchestrator itself and a temp the human hired are refused. */
-export function archiveRequestProblem(reg: Registry, id: string): string | null {
+/** Why `requester` may NOT archive agent `id` through archive-requests, or
+ *  null when it may: only a temp it started itself. `requester` unset is the
+ *  orchestrator (the hive's archive-requests/), which owns the temps it hired
+ *  and the ones a trigger started for it; any other agent (its own
+ *  archive-requests/) owns only the temps it started. Permanent staff, the
+ *  requester itself, a temp the human hired and anyone else's temp are refused. */
+export function archiveRequestProblem(reg: Registry, id: string, requester?: string): string | null {
   if (!id) return 'missing "id"';
   const a = reg.agents[id];
   if (!a) return `there is no agent "${id}"`;
-  if (id === reg.godId || a.isGod) return 'you cannot archive yourself';
-  if (!a.temp) return `"${id}" is not a temp: only a temp you hired through spawn-requests can be archived this way (ask the human about anyone else)`;
+  if (requester ? id === requester : (id === reg.godId || a.isGod)) return 'you cannot archive yourself';
+  if (!a.temp) return `"${id}" is not a temp: only a temp you started through spawn-requests can be archived this way (ask the human about anyone else)`;
   if (a.temp.hiredBy === 'human') return `"${id}" was hired by the human, so it is theirs to stop`;
+  const parent = a.temp.hiredBy === 'agent' ? a.temp.parent : undefined;
+  if (requester) return parent === requester ? null : `"${id}" was not started by you: you may archive only the temps you started`;
+  if (parent) return `"${id}" was started by ${reg.agents[parent]?.name ?? parent}, so it is theirs to archive`;
   return null;
 }
 

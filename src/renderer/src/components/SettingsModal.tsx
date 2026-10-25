@@ -33,6 +33,8 @@ import { isComposingKey } from '@shared/imeGuard';
 import { LANGUAGES, setLanguage } from '@/i18n';
 import { FreezeLogSection } from './FreezeLogSection';
 import { OfficeRenderSection } from './OfficeRenderSection';
+import { TempQuotaSettings } from './TempQuotaSettings';
+import { TempAnswerOptions } from './TempAnswerOptions';
 
 export interface SettingsModalProps {
   config: HarnessConfig;
@@ -434,6 +436,9 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
   // App/voice-initiated proactive posting (the "queued" ack). Default OFF —
   // the Slack-origin done-reply round-trip is unaffected by this toggle.
   const [slackProactivePosting, setSlackProactivePosting] = useState(config.slackProactivePosting ?? false);
+  // Who answers a Slack message (the orchestrator, a temp, a clone). Staged.
+  const [slackAnswer, setSlackAnswer] = useState(config.slackAnswer || 'god');
+  const slackAgents = useStore((s) => s.agents);
   const [tunnelUrl, setTunnelUrl] = useState('');
   const [slackBusy, setSlackBusy] = useState(false);
   const [slackNote, setSlackNote] = useState('');
@@ -1334,6 +1339,16 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
+                      {/* Temps: the office's cap and each agent's own quota */}
+                      <div>
+                        <div style={sectionHead}>
+                          {t('tempQuota.title')}
+                        </div>
+                        <TempQuotaSettings config={config} stage={stage} />
+                      </div>
+
+                      <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
+
                       {/* Circuit breaker — the FULL unit (v0.3.4: all fields have UI) */}
                       <div>
                         <div style={sectionHead}>
@@ -1627,6 +1642,16 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                                 />
                               </label>
                             </div>
+
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={slackLabelStyle}>{t('tempAnswer.whoAnswers')}</span>
+                              <select value={slackAnswer} style={slackInputStyle}
+                                onChange={(e) => { const v = e.target.value; setSlackAnswer(v); stage({ slackAnswer: v === 'god' ? undefined : v }); }}>
+                                <option value="god">{godName}</option>
+                                <TempAnswerOptions agents={slackAgents} custodians={config.criticalCustodians} />
+                              </select>
+                              <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{t('tempAnswer.slackHint')}</span>
+                            </label>
 
                             {/* App/voice-INITIATED proactive posting — OFF by
                                 default ("stop posting into Slack by default").

@@ -5,6 +5,8 @@ import { MarkdownPreview } from '@/markdown/MarkdownPreview';
 import { TRIGGER_MODES } from '@shared/triggers';
 import { StateBadge } from './data';
 import { Guide, useGuide } from './Guide';
+import { useStore } from '@/store/store';
+import { TempAnswerOptions } from '@/components/TempAnswerOptions';
 
 type Status = Awaited<ReturnType<typeof window.cth.teamStatus>>;
 type Team = Status['teams'][number];
@@ -65,6 +67,7 @@ export function TeamView() {
       <p className="pro-text" style={{ marginTop: -6 }}>
         {t('pro.team.sealed')}
       </p>
+      <TeamAnswerPicker />
       {error && <p className="pro-text" style={{ color: 'var(--cth-coral)' }}>{error}</p>}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 380px) 1fr', gap: 14, alignItems: 'start' }}>
@@ -82,6 +85,30 @@ export function TeamView() {
           : <section className="pro-card"><p className="pro-sub" style={{ margin: 0 }}>{t('pro.team.pick')}</p></section>}
       </div>
     </div>
+  );
+}
+
+/** Who answers a teammate's request: the orchestrator (default), a temp, or a
+ *  temp cloned from an agent. Only the orchestrator writes back over Team, so
+ *  a temp's done goes to it and it replies. */
+function TeamAnswerPicker() {
+  const { t } = useTranslation();
+  const agents = useStore((s) => s.agents);
+  const [answer, setAnswer] = useState('god');
+  useEffect(() => { void window.cth.getConfig().then((c) => setAnswer(c.teamAnswer || 'god')).catch(() => { /* keep default */ }); }, []);
+  const pick = (v: string): void => {
+    setAnswer(v);
+    void window.cth.updateConfig({ teamAnswer: v === 'god' ? undefined : v });
+  };
+  return (
+    <label className="pro-row" style={{ gap: 8, fontSize: 13 }}>
+      <span>{t('tempAnswer.whoAnswers')}</span>
+      <select className="pro-input" style={{ maxWidth: 280 }} value={answer} onChange={(e) => pick(e.target.value)}>
+        <option value="god">{agents.find((a) => a.isGod)?.name ?? t('tempAnswer.orchestrator')}</option>
+        <TempAnswerOptions agents={agents} />
+      </select>
+      <span className="pro-sub" style={{ fontSize: 12 }}>{t('tempAnswer.teamHint')}</span>
+    </label>
   );
 }
 

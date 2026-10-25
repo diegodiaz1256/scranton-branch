@@ -255,8 +255,16 @@ export interface TempHiring {
   tokenCap?: number;
   objective?: string;
   slack?: { channel: string; thread_ts: string };
-  /** Who asked for it: the orchestrator (spawn-requests) or the human (Temps). */
-  hiredBy?: 'orchestrator' | 'human';
+  /** Who asked for it: the orchestrator (spawn-requests), the human (Temps),
+   *  a lasting agent (its own spawn-requests/, see `parent`) or a trigger whose
+   *  "who answers" is a temp (its results go to the orchestrator). */
+  hiredBy?: 'orchestrator' | 'human' | 'agent' | 'trigger';
+  /** The lasting agent that started it (hiredBy 'agent'): its done, failures
+   *  and refusals go there, and only that agent may archive it. */
+  parent?: string;
+  /** The agent whose access it was given (its parent, or the agent a trigger
+   *  cloned): re-applied when the temp is restored, so it never runs with more. */
+  accessFrom?: string;
 }
 
 /** One entry of an agent's MCP config: a stdio server it runs itself, or a
@@ -625,6 +633,16 @@ export class HiveManager {
   private _maySpawn = false;
   setOrchestratorMaySpawn(on: boolean): void {
     this._maySpawn = on;
+  }
+  /** Each agent's "Temps per agent" (config.agentTempQuota), injected by main
+   *  for the same reason: the prompt tells an agent it may start temps only
+   *  when the human gave it some. */
+  private _tempQuota: (agentId: string) => number = () => 0;
+  setTempQuota(get: (agentId: string) => number): void {
+    this._tempQuota = get;
+  }
+  tempQuota(agentId: string): number {
+    try { return this._tempQuota(agentId); } catch { return 0; }
   }
   orchestratorMaySpawn(): boolean {
     return this._maySpawn;
@@ -2757,6 +2775,12 @@ export class HiveManager {
     // happened. Gated on the toggle: advertising a disabled path is worse than
     // saying nothing, and COMMANDS.md documents it either way for the case where
     // the operator turns it on after god was already running.
+    // Any other agent the human gave temps ("Temps per agent"): its own queue,
+    // in its own folder. Said only when it has some, like the god line below.
+    const tempQuota = meta.isGod || meta.isAssistant ? 0 : this.tempQuota(meta.id);
+    const agentTempLine = tempQuota > 0
+      ? `STARTING A TEMP: the human lets you run up to ${tempQuota} temp${tempQuota === 1 ? '' : 's'} at once — a short-lived worker for ONE job you can hand off whole (a side investigation, a long check, a draft) while you keep working. Write ONE JSON file into ${inDir('spawn-requests')}/<id>.json with \`objective\` (required: the whole job, self-contained) and optionally \`name\`, \`cwd\` (default your own working folder; it must be inside it), \`provider\`/\`model\` (default yours), \`isolate\` (default true) and \`tokenCap\`. Within seconds the app starts it, the job comes to it from you, and its done comes back to YOUR inbox (it never reports to god); a refusal (over your limit, or every temp desk in the office taken) reaches your inbox too, so do not poll. A temp gets at most your access, never more. The app archives a temp when it sends its done; to let go of one of yours that never did, write ${inDir('archive-requests')}/<any-name>.json with {"id":"worker-${meta.id}-<id>"} (its id is in the "[temp started]" note you get; only your own). A temp is a fresh spend each time: do small things yourself. Details: ${inRoot(PROTOCOL_DIR, 'temps.md')}.`
+      : '';
     const spawnQueueLine = meta.isGod && this.orchestratorMaySpawn()
       ? `SPAWNING A WORKER: you can start an ephemeral worker yourself by writing ONE JSON file into ${inRoot('spawn-requests')}/<id>.json. Required: \`objective\` (what the worker must do) and \`cwd\` (the repo it runs in). Optional: \`name\`, \`command\` (overrides the provider default; it must be an agent CLI — claude, codex, agy… — with no --settings/--mcp-config/--add-dir/-c/--config/--provider/--base-url flags, and \`cwd\` must be a registered repo, this office or an agent's folder, or the request is refused), \`provider\` (the engine: claude, codex, antigravity (agy), gemini, pi, opencode…; selects its default CLI when command is omitted), \`model\` (the engine's own id; pi and opencode take provider/model), \`isolate\` (default true = its own git worktree), \`tokenCap\`, and \`slack\` ({channel, thread_ts}) to route its failures back to a thread. Within seconds the harness spawns \`worker-<id>\`, puts the objective in its inbox, and moves the request to \`spawn-requests/.done/\` on success or \`.failed/\` with a reason; a refusal and the worker's done both reach your inbox, so do not sleep or poll for them. This is the ONLY way you can spawn; a hire manifest under research/hires/ needs the human to confirm it in the UI, so it is not a route you can complete on your own. Reuse an existing agent first, as above — a worker is a fresh spend every time. The app archives a worker when it sends its done (no archive request for that); to let go of one you started that is no longer needed and never sent its done, write ${inRoot('archive-requests')}/<any-name>.json with {"id":"worker-<id>"} (only your own temps; the outcome comes back to your inbox).`
       : '';
@@ -2868,6 +2892,7 @@ export class HiveManager {
       appHelpLine,
       teamLine,
       spawnQueueLine,
+      agentTempLine,
       hireLine,
       runtimeLine,
       slackLine,
@@ -4243,7 +4268,12 @@ export class HiveManager {
         // the same scan as `breaker` and `inbox`, and god already treats those
         // as routing signals.
         if (a.onHold) { bits.push('ON HOLD — 1:1 with the human'); anyHold = true; }
-        if (reg.agents[a.id]?.temp) { bits.push('temp'); anyTemp = true; }
+        if (reg.agents[a.id]?.temp) {
+          // A temp another agent started is that agent's, not god's to manage.
+          const parent = reg.agents[a.id]?.temp?.hiredBy === 'agent' ? reg.agents[a.id]?.temp?.parent : undefined;
+          bits.push(parent ? `temp of ${parent}` : 'temp');
+          anyTemp = true;
+        }
         // Live context-window occupancy from the statusLine shim — lets god see
         // which agents are near-full when routing, instead of guessing from the
         // cumulative token count. Clamp to 0-100; a fresh meter can briefly
@@ -4274,7 +4304,7 @@ export class HiveManager {
             + 'them or spawn a replacement. The human flips it off when they are done. '
           : '')
         + (anyTemp
-          ? 'A `temp` is a worker you started through spawn-requests: the app archives it when it sends its done '
+          ? 'A `temp` is a worker you started through spawn-requests (a `temp of <id>` was started by that agent and reports to it: leave it alone): the app archives it when it sends its done '
             + `(nothing for you to do); only one you no longer need that never sent its done is yours to archive, with ${join(root, 'archive-requests')}/<id>.json (see spawn.md). `
           : '')
         + 'Route work to someone on this list before spawning anyone new.';

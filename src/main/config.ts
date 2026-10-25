@@ -15,6 +15,7 @@ import { cleanServerList } from '../shared/roleBundles';
 import { cleanAccessMap, isAccess, type Access } from '../shared/connectionAccess';
 import { mainRepoOfWorktree } from '../shared/gitWorktree';
 import { sanitizePiModelHosts } from '../shared/piModelHosts';
+import { clampTempQuota } from '../shared/agentTemps';
 import { expandTilde, normalizeHiveHome } from './fs';
 import { distroHomeUnc, fromLinuxPath, parseWslPath } from './wsl';
 import { hasPlainSecrets, mergeSecrets, splitSecrets, type SecretCodec } from './configSecrets';
@@ -332,9 +333,20 @@ export interface HarnessConfig {
   /** Percent of the subscription's 5-hour / weekly usage window at which agents
    *  are told to wrap up (shared/usageWindowAlerts.ts). Unset → 95 / 98. */
   usageWindowAlerts?: { fiveHourPct?: number; weeklyPct?: number };
-  /** Max concurrent god-triggered ephemeral Slack workers; extra spawn-requests
-   *  wait in the queue (natural backpressure, a resource backstop). Default 4. */
+  /** "Max temps at once" for the whole office: every temp counts, whoever
+   *  started it. The orchestrator's extra spawn-requests wait in the queue
+   *  (natural backpressure, a resource backstop); another agent's are refused
+   *  with the reason. Default 4 (shared/agentTemps.ts tempsAtOnce). */
   maxConcurrentWorkers?: number;
+  /** "Temps per agent": agent id → how many temps it may run at once (0-4)
+   *  through its own spawn-requests/ (shared/agentTemps.ts). Absent → 0, off.
+   *  The orchestrator is not in here: it has orchestratorMaySpawn. */
+  agentTempQuota?: Record<string, number>;
+  /** Who answers a Slack message: unset/'god' = the orchestrator's queue,
+   *  'temp' = a temp, 'temp:<agent id>' = a temp cloned from that agent. */
+  slackAnswer?: string;
+  /** Who answers a Team message from a teammate (same values as slackAnswer). */
+  teamAnswer?: string;
   /** Minutes an ephemeral worker may produce NO output before the reaper kills it
    *  — idle-based, never wall-clock, so an actively-working worker is never reaped.
    *  Default 20. */
@@ -929,6 +941,11 @@ export function writeConfig(patch: Partial<HarnessConfig>): HarnessConfig {
   }
   // A pi custodian's network allow-list: valid hostnames only, whatever the caller sent.
   if (patch.piModelHosts !== undefined) next.piModelHosts = sanitizePiModelHosts(patch.piModelHosts);
+  // "Temps per agent": whole numbers 0-4 only, and a 0 is simply no entry.
+  if (patch.agentTempQuota !== undefined) {
+    const q = patch.agentTempQuota && typeof patch.agentTempQuota === 'object' ? patch.agentTempQuota : {};
+    next.agentTempQuota = Object.fromEntries(Object.entries(q).map(([id, n]) => [id, clampTempQuota(n)]).filter(([id, n]) => typeof id === 'string' && id && (n as number) > 0));
+  }
   if (Array.isArray(patch.registeredRepos)) {
     const seen = new Set<string>();
     // On a WSL floor a typed `/home/u/repo` or `~/repo` is inside the distro.
