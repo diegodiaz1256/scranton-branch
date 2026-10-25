@@ -32,7 +32,7 @@ const loadTs = require('./load-ts.cjs');
 
 const { getStatus } = loadTs('src/main/git.ts');
 
-const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' });
 
 function makeRepo() {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'git-status-rename-'));
