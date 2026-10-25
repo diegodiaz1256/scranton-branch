@@ -1137,7 +1137,13 @@
     "contextBar": "CONTEXT BAR",
     "contextBarHint": "How full the window must be before this may run. 0% = time alone.",
     "bigWindows": "BAR ON BIG WINDOWS",
-    "bigWindowsHint": "Used on ~1M-token windows, where a smaller slice is still an enormous amount of text."
+    "bigWindowsHint": "Used on ~1M-token windows, where a smaller slice is still an enormous amount of text.",
+    "workSwitch": "Clear on a switch of work",
+    "workSwitchBlurb": "When an agent moves to a different task, it writes a handoff note, starts a fresh session, and picks up from the note.",
+    "workSwitchHint": "When an agent switches tasks after {{minutes}} min or more in its session.",
+    "minSession": "MINIMUM SESSION",
+    "minSessionHint": "A shorter session is left alone: its context is small, and it is the context of the work at hand.",
+    "workSwitchHow": "The switch is read from the task board (a card the agent is on, or is newly given). The agent writes handoff.md in its own folder first; for engines that cannot be asked, the app writes it from the board and the terminal. Nothing is cleared while the agent has a message waiting for your sign-off or unsent mail, and its inbox is never touched."
   },
   "schedulesSection": {
     "justNow": "just now",

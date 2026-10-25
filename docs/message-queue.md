@@ -31,7 +31,8 @@ user draft it could land on.)
 ```
 composer / Slack ingress ─┐
 inbox nudge (effect #3) ──┼──▶ enqueueMessage(agentId, text) ──▶ MD queue ──▶ drain (#4) ──▶ PTY
-scheduled /compact (#6) ──┘
+scheduled /compact (#6) ──┤
+work switch (#5d) ────────┘
 ```
 
 This is load-bearing. When the inbox nudge wrote straight into the terminal, it was
@@ -171,5 +172,6 @@ there", not "is the queue blocked".
 |---|---|
 | `src/renderer/src/components/terminalAutomation.ts` | pure policy — blocks, expiry windows. No DOM, fully unit-tested (`test/terminal-automation.test.cjs`) |
 | `src/renderer/src/components/terminalPool.ts` | the pooled xterm per PTY; buffer reads, latches, `isTerminalAutomationSafe`, `hasTerminalDraft` |
-| `src/renderer/src/hooks/useHive.ts` | effect #3 inbox nudge (enqueues), effect #4 drain (the one writer), effect #6 scheduled `/compact` |
+| `src/renderer/src/hooks/useHive.ts` | effect #3 inbox nudge (enqueues), effect #4 drain (the one writer), effect #5d work-switch messages, effect #6 scheduled `/compact` |
+| `src/main/workSwitch.ts` | clear on a switch of work: decides when to queue the handoff request, the clear and the resume (the drain still types them) |
 | `src/renderer/src/store/store.ts` | the MD queues themselves + agent persistence |

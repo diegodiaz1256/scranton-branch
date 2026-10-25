@@ -58,6 +58,9 @@ const QUIESCE_POLL_MS = 4000;
 // After a god/agent spawn, hold off the inbox-wake + queue-drain typers for this
 // long while the readiness handshake + provider-specific boot sequence runs.
 const BOOT_GRACE_MS = 35_000;
+// Longest the inbox nudge is held for an agent writing its handoff note: main's
+// own wait (main/workSwitch.ts HANDOFF_WAIT_MS, 30 min) plus a margin.
+const NUDGE_HOLD_MAX_MS = 35 * 60_000;
 // Delay before typing a one-time TUI protocol seed into a fresh worker (3b) —
 // long enough for the TUI to finish painting and surface any permission prompt.
 // submitToPty additionally waits for the terminal's readiness handshake.
@@ -166,7 +169,7 @@ export async function enableRemoteControl(provider: AgentProvider, sessionName: 
 /** A message the app queued on its own (inbox nudge, /compact), as opposed to
  *  one a person wrote. */
 function isAutomaticMessage(m: QueuedMessage): boolean {
-  return isInboxNudge(m.text) || isCompactionCommand(m.text) || !!m.precondition;
+  return isInboxNudge(m.text) || isCompactionCommand(m.text) || !!m.precondition || !!m.automatic;
 }
 
 function submitToPty(
@@ -355,6 +358,10 @@ export function useHive(config: HarnessConfig | null): void {
   // negligible next to a stalled agent. Evicting ids that have left the inbox would
   // bound it exactly; deliberately not done here to keep this fix minimal.
   const nudged = useRef<Record<string, Set<string>>>({});
+  // Agents whose inbox nudge main holds while they write a handoff note (effect
+  // 5d), with when the hold began: a hold older than NUDGE_HOLD_MAX_MS is let
+  // go whatever main said, so a lost release can never silence an inbox.
+  const nudgeHeld = useRef<Record<string, number>>({});
   // Per-agent context size at the last auto-/compact queued. See the latch note
   // in the context-trigger effect: an idle agent's token count is frozen, so
   // without this the pressure gate re-fires on the identical number every cycle.
@@ -759,6 +766,12 @@ export function useHive(config: HarnessConfig | null): void {
     const iv = setInterval(async () => {
       const agents = useStore.getState().agents.filter((a) => a.ptyId);
       for (const a of agents) {
+        const heldAt = nudgeHeld.current[a.id];
+        if (heldAt !== undefined) {
+          // Its ids stay unseen, so the nudge comes once the hold ends.
+          if (Date.now() - heldAt < NUDGE_HOLD_MAX_MS) continue;
+          delete nudgeHeld.current[a.id];
+        }
         try {
           const inbox = await window.cth.hiveInbox(a.id);
           // Nudge on any id we have not nudged for yet (#130's per-id Set).
@@ -1145,6 +1158,32 @@ export function useHive(config: HarnessConfig | null): void {
       const { agents, enqueueMessage } = useStore.getState();
       if (!agents.some((a) => a.id === evt.agentId)) return;
       enqueueMessage(evt.agentId, evt.text.trim());
+    });
+  }, [config?.onboardingComplete]);
+
+  // 5d) Clear on a switch of work (main/workSwitch.ts). Main decides when, and
+  //     what: the handoff request, then the clear and the resume. They go
+  //     through the queue like every other app message, so the drain types each
+  //     one only at an idle prompt and never over a draft. A withdraw takes back
+  //     a handoff request still waiting, so a fresh session is never asked about
+  //     work it no longer remembers.
+  useEffect(() => {
+    if (!config?.onboardingComplete) return;
+    return window.cth.onWorkSwitchQueue?.((evt) => {
+      if (!evt?.agentId || typeof evt.text !== 'string') return;
+      if (evt?.op === 'hold' || evt?.op === 'release') {
+        if (evt.op === 'hold') nudgeHeld.current[evt.agentId] = Date.now();
+        else delete nudgeHeld.current[evt.agentId];
+        return;
+      }
+      const { agents, messageQueues, enqueueMessage, removeQueuedMessage } = useStore.getState();
+      const text = evt.text.trim();
+      if (evt.op === 'withdraw') {
+        for (const m of messageQueues[evt.agentId] ?? []) if (m.text === text) removeQueuedMessage(evt.agentId, m.id);
+        return;
+      }
+      if (!text || !agents.some((a) => a.id === evt.agentId && a.ptyId)) return;
+      enqueueMessage(evt.agentId, text, { automatic: true });
     });
   }, [config?.onboardingComplete]);
 

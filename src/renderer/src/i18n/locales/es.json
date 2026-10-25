@@ -1137,7 +1137,13 @@
     "contextBar": "BARRA DE CONTEXTO",
     "contextBarHint": "Lo lleno que tiene que estar la ventana antes de que esto pueda ejecutarse. 0% = solo el tiempo.",
     "bigWindows": "BARRA EN VENTANAS GRANDES",
-    "bigWindowsHint": "Se usa en ventanas de ~1M de tokens, donde una porción más pequeña sigue siendo muchísimo texto."
+    "bigWindowsHint": "Se usa en ventanas de ~1M de tokens, donde una porción más pequeña sigue siendo muchísimo texto.",
+    "workSwitch": "Limpiar al cambiar de trabajo",
+    "workSwitchBlurb": "Cuando un agente pasa a otra tarea, escribe una nota de traspaso, empieza una sesión nueva y sigue desde esa nota.",
+    "workSwitchHint": "Cuando un agente cambia de tarea tras {{minutes}} min o más en su sesión.",
+    "minSession": "SESIÓN MÍNIMA",
+    "minSessionHint": "Una sesión más corta no se toca: su contexto es pequeño y es el del trabajo que tiene entre manos.",
+    "workSwitchHow": "El cambio se lee del tablero de tareas (una tarjeta en la que está el agente, o que se le acaba de asignar). Primero el agente escribe handoff.md en su propia carpeta; con los motores a los que no se le puede pedir, la app la escribe a partir del tablero y la terminal. No se limpia nada mientras el agente tenga un mensaje esperando tu aprobación o correo sin enviar, y su bandeja de entrada nunca se toca."
   },
   "schedulesSection": {
     "justNow": "ahora mismo",

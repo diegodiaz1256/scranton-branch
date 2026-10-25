@@ -932,6 +932,11 @@ export class PtyManager {
     return s ? Date.now() - s.lastOutputAt : undefined;
   }
 
+  /** The end of what this PTY printed (raw, escape codes included). */
+  tail(id: string): string | undefined {
+    return this.sessions.get(id)?.tail;
+  }
+
   /** Quit, step one: ask the matching programs to exit on their own, and wait
    *  (at most `timeoutMs`) for them to do it. Returns how many did.
    *

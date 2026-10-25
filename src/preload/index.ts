@@ -1506,6 +1506,15 @@ const api = {
     ipcRenderer.on('trigger:context', listener);
     return () => ipcRenderer.removeListener('trigger:context', listener);
   },
+  /** Clear on a switch of work (main/workSwitch.ts): a message main wants in an
+   *  agent's queue (the handoff request, the clear, the resume), one it takes
+   *  back before delivery, or hold/release of the inbox nudge while the agent
+   *  is asked for its note. Main decides; the queue drain types. */
+  onWorkSwitchQueue: (cb: (evt: { agentId: string; text: string; op: 'enqueue' | 'withdraw' | 'hold' | 'release' }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { agentId: string; text: string; op: 'enqueue' | 'withdraw' | 'hold' | 'release' }) => cb(payload);
+    ipcRenderer.on('workSwitch:queue', listener);
+    return () => ipcRenderer.removeListener('workSwitch:queue', listener);
+  },
 
   // ─── Triggers: webhook endpoints (many endpoints, one server + tunnel) ──────
   /** Every configured endpoint, enabled or not. */

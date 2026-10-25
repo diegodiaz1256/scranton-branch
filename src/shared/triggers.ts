@@ -105,9 +105,23 @@ export interface ContextRule {
   message: string;
 }
 
+/**
+ * Clear on a switch of work: when an agent moves to a different task card than
+ * the one it was on, and its session has run at least `minSessionMs`, it writes
+ * a handoff note in its own folder, its context is cleared, and the new session
+ * starts from that note (main/workSwitch.ts). A long session carrying a finished
+ * task's context into an unrelated one pays for that context on every turn.
+ */
+export interface WorkSwitchRule {
+  enabled: boolean;
+  /** How long the agent's current session must have run before a switch clears it. */
+  minSessionMs: number;
+}
+
 export interface ContextTriggerConfig {
   compact: ContextRule;
   clear: ContextRule;
+  workSwitch: WorkSwitchRule;
 }
 
 /**
@@ -144,8 +158,42 @@ export const DEFAULT_CONTEXT_TRIGGER: ContextTriggerConfig = {
     minContextPct: 90,
     minContextPctLargeWindow: 80,
     message: ''
+  },
+  // Unlike the timed clear, this one keeps what the agent knew: the handoff note
+  // is written first and read first. On for new installs; see workSwitchRuleFor.
+  workSwitch: {
+    enabled: true,
+    minSessionMs: 3_600_000 // 1h
   }
 };
+
+/** Main clamps the minimum session to this range (minutes in the UI). */
+export const WORK_SWITCH_MIN_SESSION_MS = 60_000;
+export const WORK_SWITCH_MAX_SESSION_MS = 86_400_000;
+
+/**
+ * The work-switch rule as a config file holds it, deep-filled.
+ *
+ * `stored` is the persisted `contextTrigger` (raw, before defaults), `existingFile`
+ * whether a config.json was there at all. A config written before this rule
+ * existed has no `workSwitch` key: that install keeps the trigger settings it
+ * saved, so the rule reads as OFF for it, and the operator turns it on in
+ * Triggers. A new install (no file yet, or one written by this build, which
+ * always persists the key) gets the default, ON.
+ */
+export function workSwitchRuleFor(stored: unknown, existingFile: boolean): WorkSwitchRule {
+  const ct = stored && typeof stored === 'object' ? (stored as { workSwitch?: unknown }) : undefined;
+  const raw = ct?.workSwitch && typeof ct.workSwitch === 'object' ? (ct.workSwitch as Partial<WorkSwitchRule>) : undefined;
+  const base: WorkSwitchRule = existingFile && !raw
+    ? { ...DEFAULT_CONTEXT_TRIGGER.workSwitch, enabled: false }
+    : { ...DEFAULT_CONTEXT_TRIGGER.workSwitch };
+  return {
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : base.enabled,
+    minSessionMs: typeof raw?.minSessionMs === 'number' && Number.isFinite(raw.minSessionMs)
+      ? Math.min(WORK_SWITCH_MAX_SESSION_MS, Math.max(WORK_SWITCH_MIN_SESSION_MS, raw.minSessionMs))
+      : base.minSessionMs
+  };
+}
 
 /* ──────────────────────────── webhook triggers ───────────────────────────── */
 

@@ -24,6 +24,7 @@ import {
   DEFAULT_ORG_TRIGGER,
   DEFAULT_TRIGGER_MODE,
   DEFAULT_WEBHOOK_SCHEMA,
+  workSwitchRuleFor,
   type ContextTriggerConfig,
   type OrgTriggerConfig,
   type WebhookTrigger
@@ -628,12 +629,15 @@ function configPath(): string {
  * Every branch below therefore constructs a fresh object, including the
  * "nothing persisted" branch.
  */
-function withTriggerDefaults(cfg: HarnessConfig): HarnessConfig {
+function withTriggerDefaults(cfg: HarnessConfig, stored?: { contextTrigger?: unknown }): HarnessConfig {
   return {
     ...cfg,
     contextTrigger: {
       compact: { ...DEFAULT_CONTEXT_TRIGGER.compact, ...cfg.contextTrigger?.compact },
-      clear: { ...DEFAULT_CONTEXT_TRIGGER.clear, ...cfg.contextTrigger?.clear }
+      clear: { ...DEFAULT_CONTEXT_TRIGGER.clear, ...cfg.contextTrigger?.clear },
+      // `stored` is what config.json held: a file from before the work-switch
+      // rule keeps its saved trigger settings, so the rule reads as off there.
+      workSwitch: stored ? workSwitchRuleFor(stored.contextTrigger, true) : workSwitchRuleFor(cfg.contextTrigger, false)
     },
     orgTrigger: { ...DEFAULT_ORG_TRIGGER, ...cfg.orgTrigger },
     webhookTriggers: Array.isArray(cfg.webhookTriggers)
@@ -845,7 +849,7 @@ function readConfigUncached(): HarnessConfig {
       try { writeConfigFiles(p, mergeSecrets(parsed, readSecretsFile(), codec)); } catch { /* retried next launch */ }
     }
     const withSecrets = mergeSecrets(parsed, readSecretsFile(), codec);
-    return normalizeStoredHomes(migrateDefaultModelV1(migrateMcpTrimV1(migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...SAVED_CONFIG_DEFAULTS, ...withSecrets })))));
+    return normalizeStoredHomes(migrateDefaultModelV1(migrateMcpTrimV1(migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...SAVED_CONFIG_DEFAULTS, ...withSecrets }, withSecrets)))));
   } catch {
     return withTriggerDefaults({ ...DEFAULTS });
   }
@@ -914,6 +918,12 @@ function persistConfig(next: HarnessConfig): HarnessConfig {
 export function writeConfig(patch: Partial<HarnessConfig>): HarnessConfig {
   const current = readConfig();
   const next: HarnessConfig = { ...current, ...patch };
+  // A partial `contextTrigger` patch must not drop the work-switch rule from the
+  // file: a saved config without it reads as an install from before the rule,
+  // which is off (workSwitchRuleFor).
+  if (patch.contextTrigger && !patch.contextTrigger.workSwitch && current.contextTrigger) {
+    next.contextTrigger = { ...patch.contextTrigger, workSwitch: current.contextTrigger.workSwitch };
+  }
   // Project INGESTION — a registered repo is typed by hand ("~/dev/foo") as often
   // as it is picked from the folder dialog. Expand `~` here so the persisted list
   // (and therefore every agent's default cwd) is ABSOLUTE; Node's fs/spawn treat

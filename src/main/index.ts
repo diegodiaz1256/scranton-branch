@@ -68,7 +68,7 @@ import {
 } from './webhook';
 import {
   classifyInboundKind, isAutoAllowed,
-  DEFAULT_CONTEXT_TRIGGER, DEFAULT_ORG_TRIGGER, DEFAULT_TRIGGER_MODE, DEFAULT_WEBHOOK_SCHEMA,
+  DEFAULT_CONTEXT_TRIGGER, DEFAULT_ORG_TRIGGER, DEFAULT_TRIGGER_MODE, DEFAULT_WEBHOOK_SCHEMA, workSwitchRuleFor,
   type ContextRule, type ContextTriggerConfig, type InboundKind, type OrgTriggerConfig,
   type TriggerHistoryEntry, type TriggerMode, type WebhookTrigger
 } from '../shared/triggers';
@@ -144,10 +144,12 @@ import { parseHireDeepLink, type HireManifest } from '../shared/hire';
 import { ClosingTimeController } from './closingTime';
 import {
   argsWithAutoModeFlag,
+  canReceiveInbox,
   defaultCommandForProvider,
   inferAgentProvider,
   isAgentProvider,
   isClaudeProvider,
+  isHiveAwareProvider,
   nonInteractiveEnvForProvider,
   providerPreset,
   installInfoForProvider,
@@ -171,7 +173,10 @@ import {
 import { makeSpawnGate } from './spawnGate';
 import { clearWorkerScratch } from './workerScratch';
 import { speak as speakAloud, stopSpeaking } from './speak';
-import { appendWorkLog, workerExitNotice, workLogLine, type WorkLogEntry } from './workLog';
+import { appendWorkLog, terminalTail, workerExitNotice, workLogLine, type WorkLogEntry } from './workLog';
+import { WorkSwitchClearer } from './workSwitch';
+import { detectWorkSwitches } from '../shared/workSwitch';
+import { clearCommandForProvider } from '../shared/providerAutomation';
 import { latestDone, archiveRequestProblem, legacyTemps } from './tempWorkers';
 import { FreezeMonitor, instrumentEvents, instrumentIpc, instrumentTimers, type FreezeEntry } from './freezeLog';
 import { bothEnv } from '../shared/envName';
@@ -1068,6 +1073,7 @@ function teardownPty(id: string): void {
     ptyToAgent.delete(id);
     // Drop watchdog state so a dead agent can't get nudged or leak its grace.
     try { workerWake.forget(agentId, id); } catch { /* best-effort */ }
+    try { workSwitch.forget(agentId); } catch { /* best-effort */ }
     // Drop breaker state so a dead agent can't leak/zombie a tripped level.
     try { breaker.forget(agentId); breakerWarnings.forget(agentId); } catch { /* best-effort */ }
     // A replacement using this id needs a new usage counter, not the dead PTY's.
@@ -3318,12 +3324,108 @@ function recordTaskHistory(): void {
   } catch { return; } // mid-write: try again next tick
   const next = list.map(snapshotOf).filter((t): t is TaskSnapshot => !!t);
   const events = diffTasks(taskHistoryState.snapshot, next, new Date(now).toISOString());
+  try { noteLedgerForWorkSwitch(taskHistoryState.snapshot, next); } catch (e) { console.error('[work-switch] ledger:', e); }
   try {
     if (events.length) appendFileSync(join(root, 'taskHistory.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n');
     writeFileSync(snapPath, JSON.stringify(next));
     taskHistoryState = { root, snapshot: next, raw };
   } catch (e) { console.error('[tasks] could not record history:', e); }
 }
+
+// Clear on a switch of work (main/workSwitch.ts). The ledger reading above is
+// the signal; the queue (renderer drain) is the only way anything is typed.
+let workSwitchCurrent: Record<string, string> = {};
+let workSwitchTasks: TaskSnapshot[] = [];
+const workSwitch = new WorkSwitchClearer({
+  now: () => Date.now(),
+  rule: () => readConfig().contextTrigger?.workSwitch ?? DEFAULT_CONTEXT_TRIGGER.workSwitch,
+  agent: (id) => {
+    if (!hive.enabled() || !ptyForAgent(id)) return null;
+    const a = hive.registry().agents[id];
+    if (!a || a.archived) return null;
+    const provider = a.provider ?? 'claude';
+    return {
+      name: a.name ?? id,
+      isGod: a.isGod || id === hive.registry().godId,
+      isAssistant: a.isAssistant,
+      canWriteHandoff: canReceiveInbox(provider),
+      clearCommand: clearCommandForProvider(provider, contextRule('clear').message)
+    };
+  },
+  handoffPath: (id) => {
+    const host = join(hive.agentFolder(id), 'handoff.md');
+    return { host, agent: hive.forAgent(host) };
+  },
+  inboxPath: (id) => hive.forAgent(join(hive.agentFolder(id), 'inbox')),
+  standingPath: (id) => {
+    const a = hive.registry().agents[id];
+    // Claude's hive instructions ride in its system prompt and survive a clear;
+    // the other engines got them as their first prompt (session-prompt.md).
+    if (!a || isHiveAwareProvider(a.provider)) return undefined;
+    const host = join(hive.agentFolder(id), 'session-prompt.md');
+    return existsSync(host) ? hive.forAgent(host) : undefined;
+  },
+  fileMtime: (p) => { try { return statSync(p).mtimeMs; } catch { return null; } },
+  writeFile: (p, text) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, hive.forAgent(text), 'utf8'); },
+  busyReason: (id) => {
+    if (readPending().some((x) => x.from === id)) return 'waiting for the human\'s sign-off';
+    if (hive.outbox(id).length) return 'outbox not sent yet';
+    if (isCustodian(criticalMap(), id)) {
+      try { if (readdirSync(join(hive.agentFolder(id), 'outgoing')).length) return 'outgoing files not taken in yet'; } catch { /* none */ }
+    }
+    return null;
+  },
+  task: (taskId) => workSwitchTasks.find((t) => t.id === taskId),
+  taskHistory: (taskId) => {
+    const root = hive.root();
+    if (!root) return [];
+    let lines: string[] = [];
+    try { lines = readFileSync(join(root, 'taskHistory.jsonl'), 'utf8').split('\n').filter(Boolean); } catch { return []; }
+    const out: string[] = [];
+    for (const l of lines) {
+      try {
+        const e = JSON.parse(l) as TaskEvent;
+        if (e.taskId !== taskId) continue;
+        const what = e.kind === 'status' ? `status ${e.from ?? '?'} → ${e.to ?? '?'}`
+          : e.kind === 'assigned' ? `assigned ${e.from ?? '-'} → ${e.to ?? '-'}`
+          : e.kind === 'asked' ? `asked the human: ${e.q}`
+          : e.kind === 'answered' ? `the human answered: ${e.a}`
+          : e.kind === 'result' ? `result: ${e.text}`
+          : e.kind;
+        out.push(`${e.ts}: ${what}`);
+      } catch { /* torn line */ }
+    }
+    return out;
+  },
+  terminalTail: (id) => { const p = ptyForAgent(id); return p ? terminalTail(ptyManager.tail(p), 15, 1500) : ''; },
+  recentlyFiled: (id, since) => {
+    const dir = join(hive.agentFolder(id), 'inbox', '.done');
+    let names: string[] = [];
+    try { names = readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return []; }
+    return names
+      .map((n) => { try { return { n, m: statSync(join(dir, n)).mtimeMs }; } catch { return null; } })
+      .filter((x): x is { n: string; m: number } => !!x && x.m >= since)
+      .sort((a, b) => b.m - a.m)
+      .map((x) => hive.forAgent(join(dir, x.n)));
+  },
+  enqueue: (agentId, text) => { try { liveWebContents()?.send('workSwitch:queue', { agentId, text, op: 'enqueue' }); } catch { /* window gone */ } },
+  withdraw: (agentId, text) => { try { liveWebContents()?.send('workSwitch:queue', { agentId, text, op: 'withdraw' }); } catch { /* window gone */ } },
+  holdNudges: (agentId, on) => { try { liveWebContents()?.send('workSwitch:queue', { agentId, text: '', op: on ? 'hold' : 'release' }); } catch { /* window gone */ } },
+  log: (line) => console.log(line)
+});
+setInterval(() => { try { workSwitch.tick(); } catch (e) { console.error('[work-switch] tick:', e); } }, 5000).unref?.();
+
+/** One new reading of the ledger: who moved to different work. */
+function noteLedgerForWorkSwitch(prev: TaskSnapshot[] | null, next: TaskSnapshot[]): void {
+  workSwitchTasks = next;
+  if (!hive.enabled()) return;
+  const agents = hive.registry().agents;
+  const byName = new Map(Object.values(agents).filter((a) => !a.archived && a.name).map((a) => [a.name.toLowerCase(), a.id]));
+  const r = detectWorkSwitches(workSwitchCurrent, prev, next, (who) => (agents[who] ? who : byName.get(who.toLowerCase()) ?? null));
+  workSwitchCurrent = r.current;
+  if (r.switches.length) workSwitch.onSwitches(r.switches);
+}
+
 ipcMain.handle('hive:taskHistory', (_evt, taskId: unknown, limit: unknown) => {
   const root = hive.enabled() ? hive.root() : null;
   if (!root) return [];
@@ -4487,6 +4589,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // live terminal means active — ensureAgent above already cleared `archived`.
   if (opts.hive?.id) {
     ptyToAgent.set(opts.id, opts.hive.id);
+    // A new session, for the work-switch rule's minimum session age.
+    workSwitch.noteSessionStart(opts.hive.id);
     // Worker inbox-wake watchdog (#151): boot grace starts at spawn so the
     // initial orientation prompt is never mistaken for an idle agent.
     workerWake.noteSpawn(opts.id);
@@ -7249,7 +7353,14 @@ ipcMain.handle('triggers:setContext', (_evt, arg: unknown) => {
   const p = (arg ?? {}) as Partial<ContextTriggerConfig>;
   const next: ContextTriggerConfig = {
     compact: sanitizeContextRule(p.compact, current.compact),
-    clear: sanitizeContextRule(p.clear, current.clear)
+    clear: sanitizeContextRule(p.clear, current.clear),
+    // Same clamp the config read applies; a missing half keeps what is saved.
+    workSwitch: workSwitchRuleFor({
+      workSwitch: {
+        enabled: typeof p.workSwitch?.enabled === 'boolean' ? p.workSwitch.enabled : current.workSwitch.enabled,
+        minSessionMs: typeof p.workSwitch?.minSessionMs === 'number' ? p.workSwitch.minSessionMs : current.workSwitch.minSessionMs
+      }
+    }, false)
   };
   writeConfig({ contextTrigger: next });
   // The timers ARE the setting — a cadence saved but not re-armed would keep
@@ -8605,6 +8716,9 @@ function runWorkerWakeBeat(): void {
   const facts: WorkerWakeFacts[] = [];
   for (const [agentId, a] of Object.entries(reg.agents)) {
     if (agentId === reg.godId || a?.archived) continue;
+    // Being asked for its handoff note (main/workSwitch.ts): the resume sends it
+    // to its inbox once its context is cleared.
+    if (workSwitch.holdsNudges(agentId)) continue;
     const ptyId = ptyForAgent(agentId);
     if (!ptyId) continue;
     const snap = control.snapshot(agentId);
