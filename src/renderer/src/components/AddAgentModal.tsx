@@ -11,6 +11,7 @@ import { type AccentColorName } from '@/design/tokens';
 import type { HireManifest } from '@shared/hire';
 import { hireQueueProgress } from '@shared/hireQueue';
 import { MCP_CATALOG } from '@shared/mcpCatalog';
+import { folderName } from '@shared/folderName';
 import {
   OSS_LOCAL_PICKS,
   OSS_PROVIDER_PICKS,
@@ -124,10 +125,6 @@ const SECTIONS: { key: SectionKey; labelKey: string; hintKey: string }[] = [
   { key: 'engine',    labelKey: 'addAgent.sections.engine.label',    hintKey: 'addAgent.sections.engine.hint' },
   { key: 'briefing',  labelKey: 'addAgent.sections.briefing.label',  hintKey: 'addAgent.sections.briefing.hint' }
 ];
-
-function basename(path: string): string {
-  return path.split('/').filter(Boolean).pop() ?? path;
-}
 
 function uniqueId(name: string): string {
   return `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36)}`;
@@ -473,7 +470,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
       character,
       accent,
       description: description.trim() || 'a fresh harness',
-      project: basename(projectCwd),
+      project: folderName(projectCwd),
       tmuxTarget: '',
       cwd: spawnedCwd,
       goal: goal.trim() || undefined,
@@ -811,12 +808,12 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                                   border: 'none'
                                 }}
                               >
-                                {basename(r)}
+                                {folderName(r)}
                               </button>
                               <button
                                 onClick={() => unregisterProject(r)}
-                                title={`Remove ${basename(r)} from this list. The folder itself is left alone.`}
-                                aria-label={`Remove ${basename(r)} from the project list`}
+                                title={`Remove ${folderName(r)} from this list. The folder itself is left alone.`}
+                                aria-label={`Remove ${folderName(r)} from the project list`}
                                 style={{
                                   padding: '3px 6px 1px 2px',
                                   background: 'transparent',
