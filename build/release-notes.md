@@ -1,3 +1,3 @@
-- **Sandbox**: agents cannot escape it, and your SSH keys and cloud logins stay hidden.
-- Critical connections: one custodian, a vault, your sign-off on what leaves.
-- Deliverables redone: real HTML, no freezes; WSL floors fixed.
+- New agents show the project folder name on Windows and WSL.
+- Costs closer to real: Haiku and Opus priced per generation.
+- The breaker no longer repeats warnings; no hourly standup on new installs.
