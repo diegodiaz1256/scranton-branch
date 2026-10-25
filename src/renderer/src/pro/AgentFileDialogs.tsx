@@ -6,6 +6,7 @@ import { OFFICE_CAST, DEFAULT_CHARACTER, type OfficeCharacterName } from '@/scen
 import type { AccentColorName } from '@/design/tokens';
 import { DEFAULT_EXPORT_PARTS, EXPORT_PARTS, fillPlaceholders, type AgentFile, type ExportPart, type ExportParts, type ImportPlan } from '@shared/agentFile';
 import { mcpLabel } from '@shared/roleBundles';
+import { folderName } from '@shared/folderName';
 
 const ACCENTS: AccentColorName[] = ['coral', 'mint', 'sky', 'lemon', 'lilac', 'peach'];
 
@@ -137,7 +138,7 @@ export function ImportAgentDialog({ opened, config, onClose }: { opened: OpenedA
     addAgent({
       id, name: name.trim(), character, accent,
       description: plan.role || 'a fresh harness',
-      project: (plan.isolate ? cwd : spawnedCwd).split(/[\\/]/).filter(Boolean).pop() ?? spawnedCwd,
+      project: folderName(plan.isolate ? cwd : spawnedCwd),
       tmuxTarget: '', cwd: spawnedCwd,
       goal: plan.goal ? fillPlaceholders(plan.goal, cwd) : undefined,
       status: 'idle', action: 'starting up', progress: 0, currentStation: 'desk',
