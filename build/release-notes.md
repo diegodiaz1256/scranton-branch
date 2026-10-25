@@ -1,3 +1,3 @@
-- **MCP**: import remote servers that log in with a key in a header.
-- The key is encrypted and stays in the app; agents never see it.
-- Add and edit a server's headers, with a secret toggle.
+- **Sandbox**: agents cannot escape it, and your SSH keys and cloud logins stay hidden.
+- Critical connections: one custodian, a vault, your sign-off on what leaves.
+- Deliverables redone: real HTML, no freezes; WSL floors fixed.

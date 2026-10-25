@@ -1,8 +1,13 @@
-# Scranton Branch 1.1.3
+# Scranton Branch 1.2.0
 
 ## What's new
 
-- **MCP servers that log in with a key in a header can be imported.** A remote server that authenticates with `Authorization: Bearer …` or `X-API-Key` (found in Claude Code, Cursor and the other tools' settings, or added by hand) now imports in one click. The key goes to the encrypted store and agents reach the server through the app's MCP gateway, so they can use its tools without ever seeing the key. The add and edit form has header rows with a secret toggle.
+- **Agents cannot leave their sandbox.** When the app does not answer, an agent's file tools are refused outside its folders instead of let through; `dangerouslyDisableSandbox` no longer works; agents cannot edit their own settings, hooks or the hive's commands; and an agent the office could not prepare is not started without its sandbox. Pi and agy run in an OS sandbox the app builds on Linux and WSL floors, and agy's hooks load again so its tool calls are checked. A human-only "Run without sandbox" switch exists for when you really need it, with a red badge and an audit line.
+- **Your keys and logins stay yours.** Agents no longer read `~/.ssh`, `~/.gnupg` or 1Password's socket. When you allow it, git over SSH, Git LFS and commit signing go through the office: the app uses your key outside the sandbox and the agent never sees it. Cloud CLI logins (gh, aws, az, gcloud, kubectl, docker, npm, netrc, git credentials) are hidden too, and you can allow them one by one per agent.
+- **Critical connections.** Mark a Jira or Confluence connection critical and only one custodian agent reaches it. It keeps raw material in a confidential vault only it and you can open, its mail is redacted, and nothing it sends out leaves without your sign-off.
+- **Deliverables, redone.** One way to organise at a time (recent, task, agent, folders), every file listed newest first, HTML rendered for real in a sandboxed frame, big documents no longer freeze the window, a path an agent prints opens the file in Deliverables, and the history shows the agent that made each change.
+- **WSL floors work better.** The key broker is reachable from the sandbox, relative paths are checked where the shell really is, Claude's temp folder no longer breaks after a restart, finished temps archive themselves after a restart too, hive messages no longer pile up unsent in an agent's prompt, and opening an agent's terminal no longer marks it as working.
+- **More:** edit, cancel and reopen tasks; three office levels (full, no walking, no office) with an automatic mode; a warning to agents near your 5-hour and weekly limits; Skills as their own page, with big skills installing; pi's usage in the fleet stats; a temp near its token cap is told to wrap up; agents default to Sonnet 5.5; the hive's commands are `sb-*` (the `md-*` names still work); and the docs and site say Scranton Branch.
 
 ## License
 
@@ -12,6 +17,7 @@ From 1.0.0 Scranton Branch is licensed under the **Apache License 2.0**. If you 
 
 | Version | Highlights |
 |---|---|
+| 1.1.3 | MCP servers that log in with a key in a header can be imported. |
 | 1.1.2 | Office browser spends fewer tokens, keys work in a Windows floor, Linux launcher survives updates. |
 | 1.1.1 | WSL offices: agents write in their own folders again, fewer freezes. |
 | 1.1.0 | Subagents checked against their agent's limits, runner proposals in the app, clearer Settings. |
@@ -48,26 +54,26 @@ From 1.0.0 Scranton Branch is licensed under the **Apache License 2.0**. If you 
 ### macOS
 | | |
 |---|---|
-| Universal (Apple Silicon + Intel) | [`Scranton-Branch-1.1.3-mac-universal.dmg`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.1.3-mac-universal.dmg) |
+| Universal (Apple Silicon + Intel) | [`Scranton-Branch-1.2.0-mac-universal.dmg`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.2.0-mac-universal.dmg) |
 
 ### Windows
 | | |
 |---|---|
-| Installer (x64), *recommended* | [`Scranton-Branch-1.1.3-win-x64-setup.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.1.3-win-x64-setup.exe) |
-| Portable (x64, no install) | [`Scranton-Branch-1.1.3-win-x64-portable.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.1.3-win-x64-portable.exe) |
+| Installer (x64), *recommended* | [`Scranton-Branch-1.2.0-win-x64-setup.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.2.0-win-x64-setup.exe) |
+| Portable (x64, no install) | [`Scranton-Branch-1.2.0-win-x64-portable.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.2.0-win-x64-portable.exe) |
 
 ### Linux
 | | |
 |---|---|
-| AppImage (x86_64) | [`Scranton-Branch-1.1.3-linux-x86_64.AppImage`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.1.3-linux-x86_64.AppImage) |
-| Server, no GUI (x64) | [`scranton-branch-server-1.1.3-linux-x64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.1.3-linux-x64.tar.gz) |
-| Server, no GUI (arm64) | [`scranton-branch-server-1.1.3-linux-arm64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.1.3-linux-arm64.tar.gz) |
+| AppImage (x86_64) | [`Scranton-Branch-1.2.0-linux-x86_64.AppImage`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.2.0-linux-x86_64.AppImage) |
+| Server, no GUI (x64) | [`scranton-branch-server-1.2.0-linux-x64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.2.0-linux-x64.tar.gz) |
+| Server, no GUI (arm64) | [`scranton-branch-server-1.2.0-linux-arm64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.2.0-linux-arm64.tar.gz) |
 
 Server: unpack, then run `sudo ./install.sh`. Setup, Docker and secrets are in [SERVER.md](https://github.com/diegodiaz1256/scranton-branch/blob/main/SERVER.md).
 
 Builds are not code-signed yet: macOS asks you to allow the app in System Settings → Privacy & Security, and Windows SmartScreen asks you to confirm ("More info" → "Run anyway").
 
-Source: [`v1.1.3`](https://github.com/diegodiaz1256/scranton-branch/archive/refs/tags/v1.1.3.tar.gz)
+Source: [`v1.2.0`](https://github.com/diegodiaz1256/scranton-branch/archive/refs/tags/v1.2.0.tar.gz)
 
 ## About Scranton Branch
 
