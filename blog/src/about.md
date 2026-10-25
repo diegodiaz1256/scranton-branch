@@ -4,7 +4,7 @@ title: About this blog
 heading: "The blog behind the office floor."
 eyebrow: About
 description: "About the Scranton Branch blog — who writes it, what it covers, and how Scranton Branch turns the Claude Code terminals you already run into a self-coordinating hive of agents."
-seoTitle: "About — Munder Difflin Blog"
+seoTitle: "About — Scranton Branch Blog"
 permalink: /about/index.html
 ---
 

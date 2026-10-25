@@ -239,7 +239,7 @@ export function setConnectionScope(serverId: unknown, agentIds: unknown): { ok: 
 // ─── Test: one cheap, read-only call per service ─────────────────────────────
 
 async function call(url: string, headers: Record<string, string>): Promise<{ status: number; body: unknown }> {
-  const res = await fetch(url, { headers: { 'User-Agent': 'munder-difflin-connections', ...headers }, signal: AbortSignal.timeout(10_000) });
+  const res = await fetch(url, { headers: { 'User-Agent': 'scranton-branch-connections', ...headers }, signal: AbortSignal.timeout(10_000) });
   let body: unknown = null;
   try { body = await res.json(); } catch { /* not JSON */ }
   return { status: res.status, body };

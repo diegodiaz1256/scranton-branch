@@ -160,7 +160,7 @@ export class TeamNode {
   private state(): TeamState { return this.deps.load(); }
   private headers(relay: string, extra: Record<string, string> = {}): Record<string, string> {
     const token = this.deps.relayToken?.(trimRelay(relay));
-    return { 'User-Agent': 'munder-difflin-team', ...extra, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+    return { 'User-Agent': 'scranton-branch-team', ...extra, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   }
   private persist(s: TeamState): void { this.deps.save(s); this.syncListeners(); this.deps.onChange?.(); }
   private log(m: string): void { this.deps.log?.(m); }

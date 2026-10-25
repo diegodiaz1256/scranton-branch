@@ -2,7 +2,7 @@
   "name": "munder-difflin-blog",
   "version": "0.1.0",
   "private": true,
-  "description": "The Munder Difflin blog — built with Eleventy, deployed to scranton-branch.zerogeworkshop.com/blog via GitHub Pages.",
+  "description": "The Scranton Branch blog — built with Eleventy, deployed to scranton-branch.zerogeworkshop.com/blog via GitHub Pages.",
   "license": "MIT",
   "type": "module",
   "scripts": {

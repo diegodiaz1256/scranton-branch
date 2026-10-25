@@ -1,6 +1,6 @@
-# Munder Difflin Blog
+# Scranton Branch Blog
 
-The Munder Difflin blog — a static [Eleventy](https://www.11ty.dev/) site that builds into
+The Scranton Branch blog — a static [Eleventy](https://www.11ty.dev/) site that builds into
 `docs/blog/` and is served at **https://scranton-branch.zerogeworkshop.com/blog** by the same GitHub Pages deploy as
 the marketing site.
 
@@ -108,7 +108,7 @@ the sitemap, and the RSS feed. No other file needs editing.
 | `updated` | – | `YYYY-MM-DD` last-modified; used in JSON-LD + sitemap `lastmod`. |
 | `author` | – | `{ name, initials }`. Defaults to "Munder Difflin" / "MD". |
 | `ogImage` | – | Absolute URL of a custom social image. Defaults to `site.defaultOgImage`. |
-| `seoTitle` | – | Override the `<title>` (else `"<title> — Munder Difflin Blog"`). |
+| `seoTitle` | – | Override the `<title>` (else `"<title> — Scranton Branch Blog"`). |
 | `ogTitle` | – | Override the OG/Twitter title only. |
 | `canonicalUrl` | – | Override the canonical (rarely needed; auto-derived from the URL). |
 | `thumb` | – | Image URL for the card thumbnail (else a tinted label tile is used). |
