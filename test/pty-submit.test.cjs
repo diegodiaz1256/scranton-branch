@@ -149,6 +149,52 @@ test('new submit: a lost Enter is retried and the message goes through', async (
   assert.deepEqual(tui.sent, ['Brand new day: tell the team to start working.']);
 });
 
+/** A CLI that shows typed text but ignores Enter until it has finished
+ *  starting (`deafEnters` Enters are dropped). */
+function slowStart(deafEnters) {
+  const tui = new FakeClaude();
+  const realRead = tui.read.bind(tui);
+  let dropped = 0;
+  tui.read = (chunk) => { if (chunk === '\r' && dropped < deafEnters) { dropped++; return; } realRead(chunk); };
+  return tui;
+}
+
+test('late Enter: a CLI that ignores the first two Enters still gets the text sent, with no retype', async () => {
+  const tui = slowStart(3);
+  const io = { ...harness(tui), humanActedAt: () => 0 };
+  const verdict = await submitAndVerify(io, inboxNudgeText(['a']), 'claude');
+  assert.equal(verdict, 'retried');
+  assert.equal(tui.sent.length, 1);
+  assert.equal(tui.input, '');
+  assert.equal(io.writes.filter((w) => w === '\r').length, 4);
+  assert.equal(io.writes.filter((w) => w.includes('hive inbox')).length, 1);
+});
+
+test('late Enter: never pressed once a person has touched the terminal', async () => {
+  const tui = slowStart(5);
+  let human = 0;
+  const base = harness(tui);
+  const io = { ...base, humanActedAt: () => human, now: () => 1000 };
+  // The person starts typing after the app's two Enters.
+  const sleep = base.sleep;
+  let sleeps = 0;
+  io.sleep = async (ms) => { if (ms >= 3000 && ++sleeps === 1) human = 2000; return sleep(ms); };
+  const verdict = await submitAndVerify(io, inboxNudgeText(['a']), 'claude');
+  assert.equal(verdict, 'stuck');
+  assert.equal(io.writes.filter((w) => w === '\r').length, 2);
+  assert.equal(tui.sent.length, 0);
+});
+
+test('late Enter: stuck after the last late Enter; a caller that cannot tell human input gets only two Enters', async () => {
+  const tui = slowStart(99);
+  const io = { ...harness(tui), humanActedAt: () => 0 };
+  assert.equal(await submitAndVerify(io, inboxNudgeText(['a']), 'claude'), 'stuck');
+  assert.equal(io.writes.filter((w) => w === '\r').length, 6);
+  const io2 = harness(slowStart(99));
+  assert.equal(await submitAndVerify(io2, inboxNudgeText(['a']), 'claude'), 'stuck');
+  assert.equal(io2.writes.filter((w) => w === '\r').length, 2);
+});
+
 test('new submit: an unreadable screen falls back to the old fire-and-forget', async () => {
   const writes = [];
   const verdict = await submitAndVerify({

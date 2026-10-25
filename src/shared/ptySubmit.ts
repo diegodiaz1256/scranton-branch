@@ -120,7 +120,8 @@ export type SubmitVerdict =
   | 'submitted'
   /** It left only after a second Enter. */
   | 'retried'
-  /** Still on the prompt after two Enters: a human has to look. */
+  /** Still on the prompt after every Enter (or a person touched the terminal
+   *  meanwhile): a human has to look. */
   | 'stuck'
   /** The screen could not be read; the old fire-and-forget behaviour. */
   | 'unverified';
@@ -130,7 +131,22 @@ export interface SubmitIo {
   sleep: (ms: number) => Promise<void>;
   /** Is `probe` still on the prompt? null when the screen cannot tell. */
   inputHas: (probe: string) => boolean | null;
+  /** When a person last typed in or messaged this terminal (epoch ms, 0 if
+   *  never). Given, an Enter that was not taken is pressed again later
+   *  (LATE_ENTER_MS) instead of giving up at once — only while the text is
+   *  still on the prompt and nobody has touched the terminal since it was typed. */
+  humanActedAt?: () => number;
+  now?: () => number;
 }
+
+/**
+ * Waits before each later Enter once two have not been taken. A CLI still
+ * starting (loading MCP servers, a busy main thread on a loaded machine) shows
+ * the text but ignores Enter for a while; giving up after 5 s left the text
+ * there until a human pressed Enter. Each later Enter is still one keystroke
+ * on our own text, never a retype.
+ */
+export const LATE_ENTER_MS: readonly number[] = [3000, 8000, 20_000, 45_000];
 
 /** How long after Enter the prompt is watched for the text to leave. */
 export const SUBMIT_CHECK_MS = 2500;
@@ -153,15 +169,20 @@ async function watchPrompt(io: SubmitIo, probe: string, ms: number): Promise<'go
 }
 
 /**
- * Type `text`, press Enter, and check it was taken. Retries Enter ONCE — a
- * second Enter is what a person does when the first one was eaten, and it also
- * clears Claude Code's "review and press Enter" stop. Never types the text again.
+ * Type `text`, press Enter, and check it was taken. Retries Enter once at once —
+ * a second Enter is what a person does when the first one was eaten, and it
+ * also clears Claude Code's "review and press Enter" stop — then, when the
+ * caller can say whether a person has acted (io.humanActedAt), a few more times
+ * on LATE_ENTER_MS. Never types the text again, and never presses Enter after a
+ * person has touched the terminal: what is on the prompt may be theirs by then.
  */
 export async function submitAndVerify(
   io: SubmitIo,
   text: string,
   provider: AgentProvider
 ): Promise<SubmitVerdict> {
+  const now = io.now ?? Date.now;
+  const typedAt = now();
   await io.write(pastePayload(text, provider));
   await io.sleep(preEnterDelayMs(text));
   await io.write('\r');
@@ -173,7 +194,20 @@ export async function submitAndVerify(
   await io.write('\r');
   const second = await watchPrompt(io, probe, SUBMIT_CHECK_MS);
   if (second === 'gone') return 'retried';
-  return second === 'unknown' ? 'unverified' : 'stuck';
+  if (second === 'unknown') return 'unverified';
+  if (!io.humanActedAt) return 'stuck';
+  for (const wait of LATE_ENTER_MS) {
+    await io.sleep(wait);
+    if (io.humanActedAt() >= typedAt) return 'stuck';
+    const has = io.inputHas(probe);
+    if (has === null) return 'unverified';
+    if (!has) return 'retried';
+    await io.write('\r');
+    const late = await watchPrompt(io, probe, SUBMIT_CHECK_MS);
+    if (late === 'gone') return 'retried';
+    if (late === 'unknown') return 'unverified';
+  }
+  return 'stuck';
 }
 
 /**

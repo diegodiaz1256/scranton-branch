@@ -28,6 +28,7 @@ import {
   isTerminalAutomationSafe,
   takeHumanInput,
   terminalInputHas,
+  terminalHumanActedAt,
   markSubmitStuck,
   terminalShowsUsageLimit,
   terminalSubmitStuck,
@@ -189,8 +190,8 @@ function submitToPty(
     // prompt (shared/ptySubmit.ts). The text goes in bracketed paste for CLIs
     // that take it, so an Enter that reaches the CLI in the same read as the
     // text (a stalled main process, wsl.exe) is still an Enter and not a
-    // character in the input. If the text is still on the prompt after a second
-    // Enter the verdict is 'stuck', and the terminal is latched so nothing more
+    // character in the input. If the text is still on the prompt after the
+    // later Enters too, the verdict is 'stuck', and the terminal is latched so nothing more
     // is typed onto that line until the human deals with it.
     const verdict = await submitAndVerify({
       // writePty NEVER rejects for a dead pty — it resolves { ok:false, error:
@@ -203,11 +204,14 @@ function submitToPty(
         if (!wrote?.ok) throw new Error(wrote?.error ?? `pty write failed: ${ptyId}`);
       },
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      inputHas: (probe) => terminalInputHas(ptyId, probe)
+      inputHas: (probe) => terminalInputHas(ptyId, probe),
+      // Enter is pressed again a few times over ~80 s while the text is still
+      // on the prompt, unless a person touches the terminal meanwhile.
+      humanActedAt: () => terminalHumanActedAt(ptyId)
     }, text, provider);
     if (verdict === 'stuck') {
       markSubmitStuck(ptyId, submitProbe(text));
-      console.warn(`[submit] ${ptyId}: text still on the prompt after two Enters — holding automation until the human acts`);
+      console.warn(`[submit] ${ptyId}: text still on the prompt after every Enter — holding automation until the human acts`);
     }
     await new Promise((r) => setTimeout(r, settleMs));
     return verdict;
