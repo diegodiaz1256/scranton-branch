@@ -160,7 +160,9 @@ import { detectNodeVersion, nodeAtLeast, nodeIsUsable, resolveNodeInstaller } fr
 import { toolCatalog, type ToolStatus } from '../shared/toolCatalog';
 import { listLocalSkills, loadCatalog, installSkill, installSkillFromFolder, uninstallSkill, type LocalSkill, type CatalogSkill } from './skills';
 import { cleanMarketplaces, loadMarketplace, loadMarketplaces, marketplaceProblem, mergeCatalog } from './skillMarketplaces';
-import { cleanSkillPolicy, planSkillRequest } from '../shared/skillRequests';
+import { cleanSkillPolicy, planSkillRequest, skillReaches } from '../shared/skillRequests';
+import { EXPORT_PARTS, agentFileName, buildAgentFile, fillPlaceholders, planAgentImport, validateAgentFile, type AgentFile, type ExportParts, type ImportLocal } from '../shared/agentFile';
+import { readAgentFile, readSkillFiles, writeSkillFiles } from './agentFile';
 import { loadHero } from './hero';
 import { loadModelCatalog } from './modelCatalog';
 import {
@@ -3632,6 +3634,169 @@ ipcMain.handle('hire:defer', (_evt, tokens: unknown) => {
 // IPC: a research/hires/ manifest was spawned or skipped: forget its token.
 ipcMain.handle('hire:reviewed', (_evt, token: unknown) => {
   if (typeof token === 'string') offeredHireSources.delete(token);
+});
+
+// ─── Agent files (shared/agentFile.ts) ───────────────────────────────────────
+// Export one agent to <name>.sbagent.json, hire one from such a file. The file
+// is built HERE from the config (names, never values), so the renderer only
+// ever sees what it shows; an imported file is validated when it is opened
+// and again when it is applied.
+interface AgentFileFields { id: string; name: string; description?: string; goal?: string; character?: string; accent?: string; provider?: string; model?: string; command?: string; cwd?: string; worktreePath?: string }
+function agentFileFields(raw: unknown): AgentFileFields | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const s = (k: string) => (typeof r[k] === 'string' ? (r[k] as string) : undefined);
+  const id = s('id');
+  const name = s('name');
+  if (!id || !name) return null;
+  return { id, name, description: s('description'), goal: s('goal'), character: s('character'), accent: s('accent'), provider: s('provider'), model: s('model'), command: s('command'), cwd: s('cwd'), worktreePath: s('worktreePath') };
+}
+function exportParts(raw: unknown): ExportParts {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return Object.fromEntries(EXPORT_PARTS.map((p) => [p, r[p] === true])) as ExportParts;
+}
+/** Plain values anywhere in the config under a secret-sounding key (the
+ *  Slack token, a webhook secret…): scrubbed from the export's text too. */
+function secretLookingValues(v: unknown, key = '', out: string[] = [], depth = 0): string[] {
+  if (depth > 8) return out;
+  if (typeof v === 'string') { if (/(token|secret|key|password|passwd|credential)/i.test(key)) out.push(v); return out; }
+  if (Array.isArray(v)) { for (const x of v) secretLookingValues(x, key, out, depth + 1); return out; }
+  if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) secretLookingValues(x, k, out, depth + 1);
+  return out;
+}
+function exportAgentFile(fields: AgentFileFields, parts: ExportParts): AgentFile {
+  const cfg = readConfig();
+  const reg = hive.enabled() ? hive.registry().agents[fields.id] : undefined;
+  const store = hive.officeSkillStore();
+  const skills = Object.entries(hive.officeSkills().skills).filter(([, s]) => skillReaches(s, fields.id)).map(([name, s]) => ({
+    name, owner: s.owner, url: s.url,
+    files: parts.skillFiles && store ? readSkillFiles(join(store, s.dir)) : undefined
+  }));
+  const keyed = hive.enabled() ? hive.keyedConnectionsFor(cfg.mcpDefaults, cfg.agentMcpGrants?.[fields.id], fields.id, cfg.connectionScopes, toolBlocksFor(fields.id)) : [];
+  const conns = listConnections();
+  const connections = keyed.flatMap((id) => conns.filter((c) => c.id === id).map((c) => ({ service: c.service, label: c.label })));
+  const secrets = [
+    ...integrations.allSecretValues(),
+    ...(cfg.envVars ?? []).map((v) => v.value ?? ''),
+    ...(cfg.customMcp ?? []).flatMap((c) => [...Object.values(c.env ?? {}), ...Object.values(c.headers ?? {})]),
+    ...secretLookingValues(cfg)
+  ];
+  return buildAgentFile({
+    agent: { ...fields, description: fields.description || reg?.role },
+    tags: reg?.capabilities,
+    config: { ...cfg, integrations: integrations.listRecords().map((r) => ({ id: r.id, label: r.label })) },
+    skills,
+    connections,
+    memory: parts.memory && hive.enabled() ? hive.memory(fields.id) : undefined,
+    homes: [homedir(), agentsHome()],
+    secrets
+  }, parts);
+}
+async function agentImportLocal(): Promise<ImportLocal> {
+  const cfg = readConfig();
+  const catalog = await fullSkillCatalog().catch(() => ({ skills: [] as CatalogSkill[] }));
+  return {
+    catalogSkills: catalog.skills.map((s) => ({ name: s.name, owner: s.owner })),
+    officeSkills: Object.keys(hive.officeSkills().skills),
+    mcpEnabled: Object.fromEntries(Object.entries(cfg.mcpDefaults ?? {}).map(([k, v]) => [k, v?.enabled === true])),
+    connections: listConnections().map((c) => ({ service: c.service, label: c.label, ready: c.ready, enabled: c.enabled })),
+    integrations: integrations.listRecords().map((r) => r.id),
+    customMcpNames: (cfg.customMcp ?? []).map((c) => c.name),
+    envNames: (cfg.envVars ?? []).map((v) => v.name),
+    customBundles: cfg.customRoleBundles,
+    ceilings: {
+      ...(cfg.connectionPolicy ?? {}),
+      ...Object.fromEntries(Object.entries(cfg.integrationPolicy ?? {}).map(([k, v]) => [`api:${k}`, v]))
+    }
+  };
+}
+// What the export would write, for the dialog to show before saving.
+ipcMain.handle('agentFile:preview', (_evt, rawFields: unknown, rawParts: unknown) => {
+  const fields = agentFileFields(rawFields);
+  if (!fields) return { ok: false, error: 'bad request' };
+  try { return { ok: true, json: JSON.stringify(exportAgentFile(fields, exportParts(rawParts)), null, 2) }; }
+  catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+// Built again here (the renderer's preview is never what gets written).
+ipcMain.handle('agentFile:save', async (evt, rawFields: unknown, rawParts: unknown) => {
+  const fields = agentFileFields(rawFields);
+  if (!fields) return { ok: false, error: 'bad request' };
+  let json: string;
+  try { json = JSON.stringify(exportAgentFile(fields, exportParts(rawParts)), null, 2); }
+  catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+  const win = BrowserWindow.fromWebContents(evt.sender) ?? mainWindow;
+  const opts = { title: 'Export agent', defaultPath: join(app.getPath('documents'), agentFileName(fields.name)), filters: [{ name: 'Agent file', extensions: ['json'] }] };
+  const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+  refocusAfterDialog(win);
+  if (res.canceled || !res.filePath) return { ok: false, error: 'cancelled' };
+  try { writeFileSync(res.filePath, json, 'utf8'); } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+  return { ok: true, fileName: basename(res.filePath) };
+});
+// Pick a file and say what hiring it would do here. Nothing is applied.
+ipcMain.handle('agentFile:open', async (evt) => {
+  const win = BrowserWindow.fromWebContents(evt.sender) ?? mainWindow;
+  const opts = { title: 'Import agent', filters: [{ name: 'Agent file', extensions: ['json'] }], properties: ['openFile' as const] };
+  const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+  refocusAfterDialog(win);
+  if (res.canceled || !res.filePaths[0]) return { ok: false, error: 'cancelled' };
+  const fileName = basename(res.filePaths[0]);
+  const r = readAgentFile(res.filePaths[0]);
+  if (!r.ok) return { ok: false, fileName, error: r.error };
+  return { ok: true, fileName, file: r.file, plan: planAgentImport(r.file, await agentImportLocal()) };
+});
+// The human confirmed: set up what the file asks for, for a NEW agent id,
+// before its first spawn. Only what the plan allows; never a custodian, an
+// unsandboxed run, roam, SSH keys or cloud logins.
+ipcMain.handle('agentFile:apply', async (_evt, agentId: unknown, rawFile: unknown, rawChoices: unknown) => {
+  if (typeof agentId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,80}$/.test(agentId)) return { ok: false, error: 'bad agent id' };
+  if (!hive.enabled()) return { ok: false, error: 'no office open' };
+  if (hive.registry().agents[agentId]) return { ok: false, error: 'that agent already exists' };
+  const v = validateAgentFile(rawFile);
+  if (!v.ok || !v.file) return { ok: false, error: v.errors.join('; ') };
+  const file = v.file;
+  const c = (rawChoices && typeof rawChoices === 'object' ? rawChoices : {}) as Record<string, unknown>;
+  const project = typeof c.project === 'string' ? c.project : '';
+  const plan = planAgentImport(file, await agentImportLocal());
+  const notes: string[] = [];
+  try {
+    if (plan.grant) setAgentMcpGrant(agentId, plan.grant, plan.access ?? {});
+    if (plan.toolBlocks.length) writeConfig({ agentToolBlocks: { ...(readConfig().agentToolBlocks ?? {}), [agentId]: plan.toolBlocks } });
+    if (plan.tokenCap) setAgentTokenCap(agentId, plan.tokenCap);
+    if (c.bundle === true && plan.bundle && !plan.bundle.exists) {
+      writeConfig({ customRoleBundles: cleanCustomBundles([...(readConfig().customRoleBundles ?? []), plan.bundle.bundle]).map(({ custom: _c, ...b }) => b) });
+    }
+    if (c.memory === true && file.memory) hive.seedMemory(agentId, fillPlaceholders(file.memory, project));
+    const store = hive.officeSkillStore();
+    if (c.skills === true && store) {
+      const catalog = await fullSkillCatalog().catch(() => ({ skills: [] as CatalogSkill[] }));
+      for (const name of [...plan.skills.present, ...plan.skills.install.map((s) => s.name)]) {
+        const p = planSkillRequest({ action: 'add', skill: name, agents: [agentId] }, { state: hive.officeSkills(), catalog: catalog.skills, policy: 'catalog', agents: new Set([agentId]) });
+        if (!p.ok) { notes.push(p.message); continue; }
+        if (p.install) {
+          const dest = p.next.skills[p.install.name].dir;
+          const r = existsSync(join(store, dest)) ? { ok: true as const } : await installSkill(p.install.url, p.install.name, agentsHome(), { root: store, dir: dest });
+          if (!r.ok) { notes.push(`${name}: ${r.error}`); continue; }
+        }
+        hive.writeOfficeSkills(p.next);
+      }
+    }
+    if (c.skillFiles === true && store) {
+      for (const s of file.skills ?? []) {
+        if (!s.files?.length || !plan.skills.unavailable.includes(s.name)) continue;
+        const dir = `imported-${s.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 54)}`;
+        const w = writeSkillFiles(store, dir, s.files);
+        if (!w.ok) { notes.push(`${s.name}: ${w.error}`); continue; }
+        const state = hive.officeSkills();
+        state.skills[s.name] = { url: '', owner: 'imported', dir, agents: [agentId], addedAt: new Date().toISOString() };
+        hive.writeOfficeSkills(state);
+      }
+    }
+    try { liveWebContents()?.send('skills:officeChanged'); } catch { /* window gone */ }
+    hive.appendLog({ kind: 'agent_imported', agentId, name: plan.name });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e), notes };
+  }
+  return { ok: true, notes, config: readConfig() };
 });
 
 // IPC: "import hires…" file picker in the Add-Agent modal. Every selected file

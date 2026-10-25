@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import type { AgentProvider } from '../shared/agentProvider';
 import type { HireManifest } from '../shared/hire';
+import type { AgentFile, ExportParts, ImportPlan } from '../shared/agentFile';
 import type { TaskEvent } from '../shared/taskHistory';
 import type { TaskEdit, TaskEditError, TaskStatus } from '../shared/taskEdit';
 import type { FortressStatus } from '../main/fortress';
@@ -363,6 +364,12 @@ export interface CircuitBreakerConfig {
   repeatedToolLimit?: number;
   errorStormLimit?: number;
   tokenVelocityPerMin?: number;
+}
+
+/** An agent's own fields an export reads (the renderer's roster holds them). */
+export interface AgentFileFields {
+  id: string; name: string; description?: string; goal?: string; character?: string; accent?: string;
+  provider?: string; model?: string; command?: string; cwd?: string; worktreePath?: string;
 }
 
 export interface HarnessConfig {
@@ -1226,6 +1233,20 @@ const api = {
     error?: string;
   }> =>
     ipcRenderer.invoke('hire:openFile'),
+
+  // ─── Agent files (shared/agentFile.ts) ───────────────────────────────────
+  /** What exporting this agent with these parts would write (built in main). */
+  agentFilePreview: (agent: AgentFileFields, parts: ExportParts): Promise<{ ok: boolean; json?: string; error?: string }> =>
+    ipcRenderer.invoke('agentFile:preview', agent, parts),
+  /** Build the file again in main and save it where the human picks. */
+  agentFileSave: (agent: AgentFileFields, parts: ExportParts): Promise<{ ok: boolean; fileName?: string; error?: string }> =>
+    ipcRenderer.invoke('agentFile:save', agent, parts),
+  /** Pick an agent file; validated, with what hiring it would do here. */
+  agentFileOpen: (): Promise<{ ok: boolean; fileName?: string; file?: AgentFile; plan?: ImportPlan; error?: string }> =>
+    ipcRenderer.invoke('agentFile:open'),
+  /** Set up what the file asks for, for a new agent id, before its spawn. */
+  agentFileApply: (agentId: string, file: AgentFile, choices: { project: string; skills: boolean; skillFiles: boolean; memory: boolean; bundle: boolean }): Promise<{ ok: boolean; error?: string; notes?: string[]; config?: HarnessConfig }> =>
+    ipcRenderer.invoke('agentFile:apply', agentId, file, choices),
 
   // ─── Config changes ──────────────────────────────────────────────────────
   /** Fired whenever a setting is saved, with the full updated config. */

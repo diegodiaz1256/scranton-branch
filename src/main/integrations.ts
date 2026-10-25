@@ -140,6 +140,12 @@ export function getSecret(secretRef: string | undefined): string | undefined {
   }
 }
 
+/** Every stored secret, decrypted. MAIN-INTERNAL ONLY — never over IPC: an
+ *  agent export scrubs these out of the text it writes (shared/agentFile.ts). */
+export function allSecretValues(): string[] {
+  return Object.keys(readSecretBlob()).map((ref) => getSecret(ref)).filter((v): v is string => !!v);
+}
+
 /** Decrypted values by ciphertext: hasSecret runs per broker request. A new or
  *  changed key has a new ciphertext, so nothing stale is ever returned. */
 const decryptedCache = new Map<string, string>();

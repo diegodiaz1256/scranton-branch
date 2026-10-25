@@ -3444,6 +3444,17 @@ export class HiveManager {
     const p = join(this.agentDir(id), 'memory.md');
     return existsSync(p) ? readFileSync(p, 'utf8') : '';
   }
+  /** An imported agent's memory (shared/agentFile.ts), written before its
+   *  first spawn so ensureAgent keeps it instead of seeding the template.
+   *  Never overwrites a memory that is there. */
+  seedMemory(id: string, text: string): boolean {
+    const dir = this.agentDir(id);
+    const p = join(dir, 'memory.md');
+    if (existsSync(p)) return false;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(p, text, 'utf8');
+    return true;
+  }
   /** Whether an agent has recorded NON-TRIVIAL memory — i.e. has appended real
    *  notes beyond the boilerplate header ensureAgent seeds. Lets the voice
    *  read-layer answer "what has the team remembered" and enumerate who has

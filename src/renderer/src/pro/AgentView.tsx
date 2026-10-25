@@ -12,6 +12,7 @@ import { CustodianBadge } from './CriticalConnection';
 import { UnsandboxedBadge } from './Unsandboxed';
 import { currentTicket, spendLine } from './AgentsView';
 import { StepsView } from './StepsView';
+import { ExportAgentDialog } from './AgentFileDialogs';
 import { delegations, envelopeReturning, type Delegation, type LogMessage } from '@shared/delegations';
 
 interface Props {
@@ -47,6 +48,7 @@ export function AgentView({ agent, roster, tasks, directory, config, onOpen }: P
   const [pane, setPane] = useState<'terminal' | 'steps' | 'both'>('terminal');
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const canResume = canResumeAgent(agent);
   /** Restart only this agent's process: the rest of the office keeps running.
    *  Continues its conversation when its CLI can, else starts it fresh. Also
@@ -81,6 +83,9 @@ export function AgentView({ agent, roster, tasks, directory, config, onOpen }: P
             {restarting ? t('common.restarting') : t('pro.agent.restart')}
           </button>
         )}
+        {!agent.isGod && !agent.isAssistant && (
+          <button className="pro-btn" title={t('pro.agentFile.exportTip')} onClick={() => setExporting(true)}>{t('pro.agentFile.export')}</button>
+        )}
         <div className="pro-switch" role="group" aria-label={t('pro.agent.view')}>
           {(['terminal', 'steps', 'both'] as const).map((p) => (
             <button key={p} aria-pressed={pane === p} onClick={() => setPane(p)}>{t(`pro.agent.view_${p}`)}</button>
@@ -90,6 +95,7 @@ export function AgentView({ agent, roster, tasks, directory, config, onOpen }: P
         {restartError && <span className="pro-text" style={{ color: 'var(--cth-coral)', fontSize: 12, flexBasis: '100%' }}>{restartError}</span>}
       </div>
 
+      {exporting && <ExportAgentDialog agent={agent} onClose={() => setExporting(false)} />}
       {agent.isGod && <RoutingMap god={agent} roster={roster} tasks={tasks} directory={directory} config={config} onOpen={onOpen} />}
 
       {/* Wraps when the window is narrow: the terminal keeps the full width and
