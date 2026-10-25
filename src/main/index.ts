@@ -50,7 +50,7 @@ import { agentKind, effortArgs } from '../shared/roleModels';
 import { formatList, parseList, type PersonalList } from '../shared/lists';
 import { HiveManager, type AgentMeta, type HiveMessage, type HiveTask, type MessageAct, type TempHiring } from './hive';
 import { HookServer } from './hooks';
-import { CircuitBreaker, workTokensOf, type BreakerInput } from './breaker';
+import { CircuitBreaker, WarningDedupe, warningKey, workTokensOf, type BreakerInput } from './breaker';
 import { capStage, capDispatchNote, capWarningBody, lastOutboxMessage, lastWords } from './workerCap';
 import { UsageAlertMonitor, type UsageAlertTarget } from './usageAlerts';
 import { normalizeThresholds } from '../shared/usageWindowAlerts';
@@ -422,6 +422,8 @@ const breaker = new CircuitBreaker(() => {
   const c = readConfig();
   return { ...(c.circuitBreaker ?? {}), costCapUsd: c.costCapUsd, costCapTokens: c.costCapTokens, agentTokenCaps: c.agentTokenCaps };
 });
+/** The steer/constrain messages the breaker beat already sent, per agent. */
+const breakerWarnings = new WarningDedupe();
 // Always-on beats (decoupled from the optional heartbeat): the live fleet snapshot
 // Michael reads + the breaker beat, so guardrails + monitoring work even when the
 // heartbeat mission is disabled (it ships off).
@@ -1067,7 +1069,7 @@ function teardownPty(id: string): void {
     // Drop watchdog state so a dead agent can't get nudged or leak its grace.
     try { workerWake.forget(agentId, id); } catch { /* best-effort */ }
     // Drop breaker state so a dead agent can't leak/zombie a tripped level.
-    try { breaker.forget(agentId); } catch { /* best-effort */ }
+    try { breaker.forget(agentId); breakerWarnings.forget(agentId); } catch { /* best-effort */ }
     // A replacement using this id needs a new usage counter, not the dead PTY's.
     try { telemetry.forgetAgent(agentId); } catch { /* best-effort */ }
     // Same reason, for the Grok ledger gate: a respawned agent's first sample
@@ -2302,6 +2304,11 @@ async function runBreakerBeat(progressWindowMs: number): Promise<void> {
     if (d.action === 'none') continue;
     const name = reg.agents[d.state.agentId]?.name ?? d.state.agentId;
     const reason = d.state.reason;
+    // The same warning to the same agent goes out once per window: a level
+    // that recovers and trips again re-escalates, and resending the message
+    // each time only fills the agent's inbox.
+    if ((d.action === 'steer' || d.action === 'constrain')
+      && !breakerWarnings.shouldSend(d.state.agentId, warningKey(`Circuit breaker: ${d.action}`, reason), now)) continue;
     if (d.action === 'steer') {
       hive.send({ to: d.state.agentId, act: 'request', subject: 'Circuit breaker: steer',
         body: `Automated guardrail: ${reason}. Re-check your approach — if you're looping or stuck, STOP repeating, summarize what you've tried, and ask god for direction.` }, 'breaker');
