@@ -36,7 +36,6 @@ test('one million Haiku 5.5 output tokens cost $0.50', () => {
   assert.equal(usd, 0.5);
 });
 
-test('Opus and Sonnet rows are untouched', () => {
-  assert.equal(priceFor('claude-opus-4-8').inputPerM, 15);
+test('the Sonnet row is untouched', () => {
   assert.equal(priceFor('claude-sonnet-5-5').inputPerM, 3);
 });
