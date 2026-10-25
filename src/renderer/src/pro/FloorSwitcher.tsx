@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { FloorEntry } from '../../../preload/index';
-
-const folderName = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+import { folderName } from '@shared/folderName';
 
 /**
  * The office this window runs, under the app's name in the sidebar. Opening it

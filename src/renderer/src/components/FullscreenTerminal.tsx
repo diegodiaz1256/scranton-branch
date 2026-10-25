@@ -21,6 +21,7 @@ import { useTerminalFontSize } from './terminalFontSize';
 import { useHasTerminalDraft, disposeTerminal, reflowTerminal, notifyThemeChangeAll } from './terminalPool';
 import { useAppTheme, toggleAppTheme } from '@/design/theme';
 import type { HarnessConfig } from '@/store/config';
+import { folderName } from '@shared/folderName';
 import { useRtl } from '@/i18n/useDirection';
 
 /** Roster rail width. A fixed 232px is right on a 14" laptop but reads as a
@@ -55,13 +56,6 @@ function rosterScale(zoom: number) {
   };
 }
 
-function basename(path: string): string {
-  // Split on BOTH separators: `git:mainRepo` hands back whatever the platform
-  // uses, and a Windows `C:\work\repo` contains no '/' at all — so a '/'-only
-  // split returned the whole absolute path as the group's "name".
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
 /** cwd → main-repo basename, resolved once per path and shared by every mount.
  *  An isolated agent's cwd is its own git worktree (`…/worktrees/<agent-id>`),
  *  so naming the group after that path buckets each such agent under its own id
@@ -85,10 +79,10 @@ function repoKeyOf(agent: Agent): string {
 /** What that group is CALLED — the basename, or the project the user picked. */
 function repoLabelOf(agent: Agent): string {
   const root = repoRootByCwd.get(agent.cwd);
-  if (root) return basename(root);
+  if (root) return folderName(root);
   const project = agent.project?.trim();
   if (project) return project;
-  return basename(agent.cwd) || 'unknown';
+  return folderName(agent.cwd) || 'unknown';
 }
 
 /** Resolve every distinct cwd's repository root, then re-render. Exactly one git
@@ -810,7 +804,7 @@ function SidebarRow({
               flex: 1, minWidth: 0,
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
             }} title={agent.worktreePath || agent.cwd}>
-              {basename(agent.worktreePath || agent.cwd) || agent.project}
+              {folderName(agent.worktreePath || agent.cwd) || agent.project}
             </span>
           </div>
           <ContextBar tokens={agent.contextTokens} limit={agent.contextLimit} accent={agent.accent} />
