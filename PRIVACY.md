@@ -30,6 +30,15 @@ download (see [GitHub's privacy statement](https://docs.github.com/site-policy/p
 - **Voice and dictation**, **Slack** and **webhooks** send data to the services they name
   (OpenAI, Groq, Slack, a tunnel service), only while you have them on.
 
+## This website
+
+scranton-branch.zerogeworkshop.com is a set of static pages on GitHub Pages, with no login
+and no cookies of its own. The home page makes one other request, to GitHub's API for the
+latest release. The blog and the `/pro/` page still carry the PostHog page-view snippet
+inherited from upstream: anonymous (no person profile, IP dropped, no autocapture or
+session recording) and skipped when Do Not Track is on. PostHog may keep a random ID in a
+cookie or local storage for it.
+
 ## On your machine
 
 Settings, offices, history and memory stay in your user data folder and in the project

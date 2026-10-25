@@ -15,9 +15,6 @@
     <priority>1.0</priority>
   </url>
   <url><loc>https://scranton-branch.zerogeworkshop.com/pro/</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://scranton-branch.zerogeworkshop.com/wall.html</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://scranton-branch.zerogeworkshop.com/terms.html</loc><changefreq>yearly</changefreq><priority>0.2</priority></url>
-  <url><loc>https://scranton-branch.zerogeworkshop.com/privacy.html</loc><changefreq>yearly</changefreq><priority>0.2</priority></url>
   <url><loc>https://scranton-branch.zerogeworkshop.com/blog/</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
   <url><loc>https://scranton-branch.zerogeworkshop.com/blog/topics/</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>
   <url><loc>https://scranton-branch.zerogeworkshop.com/blog/about/</loc><changefreq>monthly</changefreq><priority>0.4</priority></url>
