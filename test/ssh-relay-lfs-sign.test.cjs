@@ -310,7 +310,9 @@ test('git commit -S through the office signer: verify-commit accepts it; off, an
   assert.equal(use.service, 'sign');
   assert.equal(use.subject, 'commit: Signed by the office');
   assert.deepEqual(use.keys, [k.fp]);
-  assert.equal(path.resolve(use.path), path.resolve(repo));
+  // The same folder, however each side spelled it (Windows' temp dir may come
+  // back in its 8.3 short form, RUNNER~1, on one side only).
+  assert.equal(fs.realpathSync.native(use.path), fs.realpathSync.native(repo));
   assert.equal(JSON.stringify(o.audit).includes('tree '), false, 'the payload is never logged');
 
   // Off (the sub-switch): a clear error, nothing signed.
