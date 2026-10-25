@@ -26,7 +26,16 @@ export interface ModelPrice {
 // the live path uses Claude's own per-model cost, so drift here is harmless.
 const OPUS: ModelPrice = { inputPerM: 15, outputPerM: 75, cacheReadPerM: 1.5, cacheWritePerM: 18.75 };
 const SONNET: ModelPrice = { inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWritePerM: 3.75 };
-const HAIKU: ModelPrice = { inputPerM: 0.8, outputPerM: 4, cacheReadPerM: 0.08, cacheWritePerM: 1.0 };
+// Haiku moved price more than once, so one row per generation: a single row
+// priced every Haiku at Haiku 3.5's $0.80/$4, eight times Haiku 5.5's list
+// price and below Haiku 4.5's. Cache rows follow the usual multipliers: reads
+// 0.1x input, 5-minute writes 1.25x. Haiku 5.5 is priced at its tier for
+// prompts up to 100K tokens; a longer prompt bills $0.50/$2.50, which this
+// per-model table cannot see, so such a request is under-estimated here.
+const HAIKU_5_5: ModelPrice = { inputPerM: 0.1, outputPerM: 0.5, cacheReadPerM: 0.01, cacheWritePerM: 0.125 };
+const HAIKU_4_5: ModelPrice = { inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1, cacheWritePerM: 1.25 };
+const HAIKU_3_5: ModelPrice = { inputPerM: 0.8, outputPerM: 4, cacheReadPerM: 0.08, cacheWritePerM: 1.0 };
+const HAIKU_3: ModelPrice = { inputPerM: 0.25, outputPerM: 1.25, cacheReadPerM: 0.03, cacheWritePerM: 0.3 };
 
 /** When the model id is unknown, assume Sonnet (the historical default). */
 const DEFAULT_PRICE: ModelPrice = SONNET;
@@ -45,9 +54,22 @@ export function normalizeModel(model: string | undefined | null): string {
 export function priceFor(model: string | undefined | null): ModelPrice {
   const m = normalizeModel(model).toLowerCase();
   if (m.includes('opus')) return OPUS;
-  if (m.includes('haiku')) return HAIKU;
+  if (m.includes('haiku')) return haikuPrice(m);
   if (m.includes('sonnet')) return SONNET;
   return DEFAULT_PRICE;
+}
+
+/** The Haiku row for a lower-cased model id. Ids carry the version either
+ *  after the family (`claude-haiku-5-5`, `claude-haiku-4-5-20251001`) or
+ *  before it (`claude-3-5-haiku-20241022`, `claude-3-haiku-20240307`). An id
+ *  that names no known version gets Haiku 4.5's row, the dearer of the two
+ *  current Haikus, so an unknown one is not under-estimated. */
+function haikuPrice(m: string): ModelPrice {
+  if (/haiku-5[-.]5/.test(m)) return HAIKU_5_5;
+  if (/haiku-4[-.]5/.test(m)) return HAIKU_4_5;
+  if (/3[-.]5-haiku/.test(m)) return HAIKU_3_5;
+  if (/3-haiku/.test(m)) return HAIKU_3;
+  return HAIKU_4_5;
 }
 
 /** Token split used by the cost estimator (matches `AgentUsage` token fields). */
