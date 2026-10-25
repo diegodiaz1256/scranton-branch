@@ -1468,6 +1468,9 @@ export class HiveManager {
       const preset = providerPreset(meta.provider ?? 'claude');
       const flag = preset.initialPromptFlag;
       const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath, opts.integrations, opts.runners, opts.connections, opts.envNames, cleanToolBlocks(opts.toolBlocks).includes('web'), opts.critical, opts.vaults, opts.lockdown?.outgoing);
+      // A first prompt does not survive a clear (main/workSwitch.ts): kept here
+      // so the next session can be pointed back at it.
+      try { writeFileSync(join(dir, 'session-prompt.md'), prompt, 'utf8'); } catch { /* best-effort */ }
       // agy, codex, and grok expose a Claude-style lifecycle-hook surface, so each
       // gets the SAME live status + Stop→inbox-drain Claude does — selected by the
       // preset's `hookBridge`. agy needs a translating shim (its hook stdin/stdout
@@ -2843,7 +2846,7 @@ export class HiveManager {
       browserLine,
       '',
       'HIVE PROTOCOL — follow it every task:',
-      `1. At the START of a task, read ${inDir('memory.md')} and EVERY file in ${inDir('inbox')} (messages other agents sent you). After handling an inbox message, move its file into ${inDir('inbox', '.done')}.`,
+      `1. At the START of a task, read ${inDir('memory.md')} and EVERY file in ${inDir('inbox')} (messages other agents sent you). After handling an inbox message, move its file into ${inDir('inbox', '.done')}.${meta.isGod ? '' : ` ${inDir('handoff.md')}, when it exists, is your own note from a previous session: read it at the start of a session (the inbox and the task board win where they disagree).`}`,
       `2. Record durable knowledge in ${inDir('memory.md')}, one dated bullet each, ${memoryInstruction(this.projectTypeOf(meta.cwd))}. Correct or remove a bullet when it stops being true: people read this per project, and stale facts mislead the next agent.`,
       `3. To ask another agent for something or share information, write ONE message JSON into ${inDir('outbox')} (schema: ${inRoot(PROTOCOL_DIR, 'messages.md')}). NEVER write into another agent's folder — the orchestrator delivers your outbox.`,
       meta.isGod

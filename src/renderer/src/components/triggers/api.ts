@@ -5,6 +5,7 @@ import {
   type ContextRule,
   type ContextTriggerConfig,
   type OrgTriggerConfig,
+  type WorkSwitchRule,
   type WebhookTrigger
 } from '@shared/triggers';
 
@@ -37,6 +38,14 @@ function fillRule(partial: Partial<ContextRule> | undefined, fallback: ContextRu
   };
 }
 
+function fillWorkSwitch(partial: Partial<WorkSwitchRule> | undefined): WorkSwitchRule {
+  const fallback = DEFAULT_CONTEXT_TRIGGER.workSwitch;
+  return {
+    enabled: typeof partial?.enabled === 'boolean' ? partial.enabled : fallback.enabled,
+    minSessionMs: typeof partial?.minSessionMs === 'number' ? partial.minSessionMs : fallback.minSessionMs
+  };
+}
+
 /** Read the context trigger, deep-filled. A half-written sub-object must never
  *  reach the number inputs as `undefined` — React would flip them uncontrolled. */
 export async function getContextTrigger(): Promise<ContextTriggerConfig> {
@@ -44,7 +53,8 @@ export async function getContextTrigger(): Promise<ContextTriggerConfig> {
     const cfg: Partial<ContextTriggerConfig> | null = await window.cth.getContextTrigger();
     return {
       compact: fillRule(cfg?.compact, DEFAULT_CONTEXT_TRIGGER.compact),
-      clear: fillRule(cfg?.clear, DEFAULT_CONTEXT_TRIGGER.clear)
+      clear: fillRule(cfg?.clear, DEFAULT_CONTEXT_TRIGGER.clear),
+      workSwitch: fillWorkSwitch(cfg?.workSwitch)
     };
   } catch {
     return DEFAULT_CONTEXT_TRIGGER;

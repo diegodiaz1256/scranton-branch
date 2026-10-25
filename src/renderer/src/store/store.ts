@@ -157,6 +157,10 @@ export interface QueuedMessage {
    *  status would otherwise latch out every future compact attempt for a
    *  compaction that never actually happened. */
   compactUsed?: number;
+  /** Queued by the app itself (the work-switch handoff, clear and resume): held
+   *  like the inbox nudge while a usage-limit stop is on screen, and queued
+   *  behind a person's messages. */
+  automatic?: true;
 }
 
 // 'files' retired in v0.3.4 (the per-agent IDE button superseded it) — a
@@ -316,7 +320,7 @@ interface State {
   /** Park a message for an agent. Returns nothing; the flush loop delivers it.
    *  `meta.instruction`, when set, is what gets typed into the PTY instead of
    *  `text` (UI/card surfaces still show `text`). */
-    enqueueMessage: (agentId: string, text: string, meta?: { slack?: { channel: string; thread_ts: string }; instruction?: string; precondition?: QueuedMessage['precondition']; compactUsed?: number }) => void;
+    enqueueMessage: (agentId: string, text: string, meta?: { slack?: { channel: string; thread_ts: string }; instruction?: string; precondition?: QueuedMessage['precondition']; compactUsed?: number; automatic?: boolean }) => void;
   /** Drop a single queued message (user removed it, or it was just delivered). */
   removeQueuedMessage: (agentId: string, messageId: string) => void;
   /** "Send now" while floor auto-delivery is paused: marks the message manual
@@ -970,10 +974,11 @@ export const useStore = create<State>((set, get) => ({
         ...(meta?.slack ? { slack: meta.slack } : {}),
         ...(meta?.instruction ? { instruction: meta.instruction } : {}),
         ...(meta?.precondition ? { precondition: meta.precondition } : {}),
-        ...(meta?.compactUsed !== undefined ? { compactUsed: meta.compactUsed } : {})
+        ...(meta?.compactUsed !== undefined ? { compactUsed: meta.compactUsed } : {}),
+        ...(meta?.automatic ? { automatic: true as const } : {})
       };
       // A person's message goes ahead of a pending inbox nudge (queueInsertIndex).
-      const automatic = isInboxNudge(trimmed) || isCompactionCommand(trimmed) || !!meta?.precondition;
+      const automatic = isInboxNudge(trimmed) || isCompactionCommand(trimmed) || !!meta?.precondition || !!meta?.automatic;
       const at = queueInsertIndex(queued, automatic);
       const nextQueue = [...queued.slice(0, at), msg, ...queued.slice(at)];
       const messageQueues = { ...s.messageQueues, [agentId]: nextQueue };

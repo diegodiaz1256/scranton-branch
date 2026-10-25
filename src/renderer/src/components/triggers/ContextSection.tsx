@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ContextRule, ContextTriggerConfig } from '@shared/triggers';
+import {
+  WORK_SWITCH_MAX_SESSION_MS, WORK_SWITCH_MIN_SESSION_MS,
+  type ContextRule, type ContextTriggerConfig, type WorkSwitchRule
+} from '@shared/triggers';
 import { getContextTrigger, setContextTrigger } from './api';
 import {
   Callout, Field, Hint, IntervalPicker, Muted, PctField, SubCard, SubHeader, Toggle,
@@ -34,7 +37,8 @@ export function ContextSection({ onSummary }: { onSummary?: (s: string) => void 
     if (!cfg) return;
     const on = [
       cfg.compact.enabled ? t('contextSection.compact') : null,
-      cfg.clear.enabled ? t('contextSection.clear') : null
+      cfg.clear.enabled ? t('contextSection.clear') : null,
+      cfg.workSwitch.enabled ? t('contextSection.workSwitch') : null
     ].filter(Boolean);
     onSummary?.(on.length ? on.join(' + ') : t('contextSection.bothOff'));
   }, [cfg, onSummary, t]);
@@ -80,7 +84,50 @@ export function ContextSection({ onSummary }: { onSummary?: (s: string) => void 
         caution={t('contextSection.clearCaution')}
         onPatch={(fields) => patch('clear', fields)}
       />
+
+      <WorkSwitchCard
+        rule={cfg.workSwitch}
+        onPatch={(fields) => commit({ ...cfg, workSwitch: { ...cfg.workSwitch, ...fields } })}
+      />
     </>
+  );
+}
+
+/** Clear on a switch of work: no cadence and no pressure bar, so not a RuleCard.
+ *  It fires on the task board, once the agent's session is old enough. */
+function WorkSwitchCard({ rule, onPatch }: { rule: WorkSwitchRule; onPatch: (fields: Partial<WorkSwitchRule>) => void }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const minutes = Math.round(rule.minSessionMs / 60_000);
+  return (
+    <SubCard>
+      <SubHeader
+        open={open}
+        onToggle={() => setOpen((o) => !o)}
+        title={t('contextSection.workSwitch')}
+        sub={t('contextSection.workSwitchBlurb')}
+        right={<Toggle on={rule.enabled} onClick={() => onPatch({ enabled: !rule.enabled })} />}
+      />
+      {!open && (
+        <Hint>
+          {rule.enabled ? t('contextSection.workSwitchHint', { minutes }) : t('contextSection.off')}
+        </Hint>
+      )}
+      {open && (
+        <div style={{ marginTop: 4 }}>
+          <Field label={t('contextSection.minSession')}>
+            <IntervalPicker
+              value={rule.minSessionMs}
+              onChange={(minSessionMs) => onPatch({ minSessionMs })}
+              minMs={WORK_SWITCH_MIN_SESSION_MS}
+              maxMs={WORK_SWITCH_MAX_SESSION_MS}
+            />
+            <Hint>{t('contextSection.minSessionHint')}</Hint>
+          </Field>
+          <Hint>{t('contextSection.workSwitchHow')}</Hint>
+        </div>
+      )}
+    </SubCard>
   );
 }
 
