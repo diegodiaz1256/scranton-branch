@@ -2128,7 +2128,7 @@
         "off": "No",
         "on": "Sí",
         "turnOn": "Activar",
-        "body": "Los agentes en un sandbox no pueden leer tu ~/.ssh. Con esto activado, cuando este agente use git por SSH (fetch, pull, push), la app ejecuta ssh por él fuera de su sandbox con tus claves y le devuelve solo la transferencia de git. Nada más pasa: ni una consola en un servidor ni otros comandos. Se aplica al momento.",
+        "body": "Los agentes en un sandbox no pueden leer tu ~/.ssh. Con esto activado, cuando este agente use git por SSH (fetch, pull, push, y los archivos de Git LFS), la app ejecuta ssh por él fuera de su sandbox con tus claves y le devuelve solo la transferencia de git. Nada más pasa: ni una consola en un servidor ni otros comandos. Se aplica al momento.",
         "warning": "El agente podrá entonces traer y subir cambios a cualquier repositorio que tu clave abra, en tu nombre. Nunca ve la clave.",
         "confirm": "¿Dejar que {{name}} use tus claves SSH a través de la oficina?",
         "unavailable": "No disponible en esta planta: los agentes de una planta de Windows no tienen sandbox del sistema, así que la oficina no puede ocultarles tus claves. Usa remotos HTTPS allí, o una planta WSL.",
@@ -2144,7 +2144,13 @@
         "auditEmpty": "Nada todavía.",
         "allowed": "permitido",
         "refused": "rechazado",
-        "exit": "salida {{code}}"
+        "exit": "salida {{code}}",
+        "sign": "Firmar commits con mi clave",
+        "signBody": "Desactivado por defecto. Activado, cuando git firme los commits o tags de este agente con una clave SSH (gpg.format=ssh), la oficina los firma por él fuera de su sandbox con tu clave, como firmas los tuyos, y solo como objetos de git (espacio de nombres \"git\"). «Preguntarme antes de cada uso» también se aplica aquí.",
+        "signConfirm": "¿Dejar que {{name}} firme commits con tu clave SSH?",
+        "signWarning": "Sus commits y tags llevarán tu firma verificada. Nunca ve la clave, y la oficina no firma nada que no sea un objeto de git.",
+        "signed": "firmado",
+        "signRequest": "petición de firma"
       }
     },
     "skills": {

@@ -21,9 +21,12 @@
  * Pure: no electron, no node.
  */
 
-/** The remote commands git runs over SSH; nothing else goes through. */
-export const GIT_SSH_SERVICES = ['git-upload-pack', 'git-receive-pack', 'git-upload-archive'] as const;
+/** The remote commands git runs over SSH, then Git LFS's two (`<path>
+ *  <upload|download>`: the HTTPS credentials for a repository's large files,
+ *  or LFS's own SSH transfer); nothing else goes through. */
+export const GIT_SSH_SERVICES = ['git-upload-pack', 'git-receive-pack', 'git-upload-archive', 'git-lfs-authenticate', 'git-lfs-transfer'] as const;
 export type GitSshService = (typeof GIT_SSH_SERVICES)[number];
+const LFS_SERVICES: readonly string[] = ['git-lfs-authenticate', 'git-lfs-transfer'];
 
 /** What the human set for one agent (Capabilities). Absent → off. */
 export interface SshRelayGrant {
@@ -31,6 +34,9 @@ export interface SshRelayGrant {
   keys?: string[];
   /** Ask the human before each use. */
   ask?: boolean;
+  /** Also sign its git commits and tags with the human's SSH key (the office
+   *  signer, md-ssh-sign). Off unless set. */
+  sign?: boolean;
 }
 export type SshRelayMap = Record<string, SshRelayGrant>;
 
@@ -42,6 +48,8 @@ export interface SshRelayRequest {
   service: GitSshService;
   /** The repository path, unquoted. */
   path: string;
+  /** Git LFS: what it is about to do. */
+  operation?: 'upload' | 'download';
   /** GIT_PROTOCOL (version=2), forwarded with SendEnv. */
   gitProtocol?: string;
 }
@@ -62,6 +70,8 @@ export interface SshRelayAuditEntry {
   reason?: string;
   /** ssh's exit code, once known. */
   exit?: number | null;
+  /** A signature (service "sign"): what was signed, never the payload. */
+  subject?: string;
 }
 
 const HOST_RE = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]{0,252})$/;
@@ -82,9 +92,9 @@ export function cleanSshRelayMap(raw: unknown): SshRelayMap {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!id || id.length > 200 || !v || typeof v !== 'object' || Array.isArray(v)) continue;
-    const g = v as { keys?: unknown; ask?: unknown };
+    const g = v as { keys?: unknown; ask?: unknown; sign?: unknown };
     const keys = Array.isArray(g.keys) ? [...new Set(g.keys.filter((k): k is string => typeof k === 'string' && FP_RE.test(k)))] : [];
-    out[id] = { ...(keys.length ? { keys } : {}), ...(g.ask === true ? { ask: true } : {}) };
+    out[id] = { ...(keys.length ? { keys } : {}), ...(g.ask === true ? { ask: true } : {}), ...(g.sign === true ? { sign: true } : {}) };
   }
   return out;
 }
@@ -165,13 +175,24 @@ export function parseSshArgv(argv: string[], gitProtocol?: string): { ok: true; 
   if (!command) return { ok: false, error: 'only git transfers go through the office: no interactive sessions' };
   const sp = command.indexOf(' ');
   const service = (sp === -1 ? command : command.slice(0, sp)) as GitSshService;
-  if (!GIT_SSH_SERVICES.includes(service)) return { ok: false, error: `only git transfers go through the office (git-upload-pack, git-receive-pack, git-upload-archive), not "${command.slice(0, 60)}"` };
-  const rest = sp === -1 ? '' : command.slice(sp + 1).trim();
-  const path = rest.startsWith("'") ? unquoteSq(rest) : (/^[A-Za-z0-9_./~+-]+$/.test(rest) ? rest : null);
+  if (!GIT_SSH_SERVICES.includes(service)) return { ok: false, error: `only git transfers go through the office (${GIT_SSH_SERVICES.join(', ')}), not "${command.slice(0, 60)}"` };
+  let rest = sp === -1 ? '' : command.slice(sp + 1).trim();
+  // Git LFS: `<path> upload|download`, the path quoted or bare.
+  let operation: 'upload' | 'download' | undefined;
+  if (LFS_SERVICES.includes(service)) {
+    const m = / (upload|download)$/.exec(rest);
+    if (!m) return { ok: false, error: `${service} takes a repository path and upload or download, nothing else` };
+    operation = m[1] as 'upload' | 'download';
+    rest = rest.slice(0, m.index).trim();
+  }
+  const path = rest.startsWith("'") ? unquoteSq(rest) : (BARE_PATH_RE.test(rest) ? rest : null);
   if (!path || path.length > 1024 || /[\0\r\n]/.test(path)) return { ok: false, error: 'bad repository path' };
   const proto = sendProto && gitProtocol && PROTO_RE.test(gitProtocol) ? gitProtocol : undefined;
-  return { ok: true, req: { host: dest, ...(user ? { user } : {}), ...(port ? { port } : {}), service, path, ...(proto ? { gitProtocol: proto } : {}) } };
+  return { ok: true, req: { host: dest, ...(user ? { user } : {}), ...(port ? { port } : {}), service, path, ...(operation ? { operation } : {}), ...(proto ? { gitProtocol: proto } : {}) } };
 }
+
+/** A repository path that needs no quoting. */
+const BARE_PATH_RE = /^[A-Za-z0-9_./~+-]+$/;
 
 /**
  * The argv for the real `ssh` the app runs outside the sandbox. Everything
@@ -200,7 +221,11 @@ export function relaySshArgv(req: SshRelayRequest, identities: string[] = []): s
   if (req.gitProtocol) args.push('-o', 'SendEnv=GIT_PROTOCOL');
   if (req.port) args.push('-p', String(req.port));
   if (req.user) args.push('-l', req.user);
-  args.push('--', req.host, `${req.service} ${quoteSq(req.path)}`);
+  // git quotes the path; git-lfs sends it bare, so a bare one stays bare for
+  // the servers that only expect that.
+  const lfs = LFS_SERVICES.includes(req.service);
+  const path = lfs && BARE_PATH_RE.test(req.path) ? req.path : quoteSq(req.path);
+  args.push('--', req.host, `${req.service} ${path}${lfs && req.operation ? ` ${req.operation}` : ''}`);
   return args;
 }
 
@@ -209,6 +234,77 @@ export function sshRelayRefusal(opts: { granted: boolean; custodian: boolean; sa
   if (opts.custodian) return 'the custodian of a critical connection never uses the human\'s SSH keys';
   if (!opts.sandboxed) return 'this agent does not run in an OS sandbox here, so the office cannot keep its keys from it (a Windows floor): use HTTPS';
   if (!opts.granted) return 'SSH keys are hidden from agents in this office. Use an HTTPS remote, or ask the human to switch on "Use my SSH keys through the office" for you in Capabilities (it applies at once)';
+  return null;
+}
+
+// ─── signing (md-ssh-sign) ───────────────────────────────────────────────────
+// With gpg.format=ssh, git runs `<gpg.ssh.program> -Y sign -n git -f <key>
+// <file>` and reads <file>.sig. A sandboxed agent's gpg.ssh.program is the
+// office's md-ssh-sign (hive.ts, as GIT_CONFIG_* in its env): it sends the
+// public key and the payload to the app, which signs outside the sandbox with
+// the human's key, in the namespace "git" only, so the agent cannot get a
+// signature for anything but git objects.
+
+/** The only namespace the office signs in. */
+export const SIGN_NAMESPACE = 'git';
+/** The largest object the office signs (a commit or tag, its message included). */
+export const MAX_SIGN_PAYLOAD = 1 << 20;
+
+/** What md-ssh-sign asks for, once checked. `pub` is a public key line, or
+ *  `keyPath` the key file git named (hidden from the agent: the app finds
+ *  that key among the human's). */
+export interface SshSignRequest {
+  namespace: typeof SIGN_NAMESPACE;
+  pub?: string;
+  keyPath?: string;
+  /** The agent's folder where git ran (for the audit). */
+  repo?: string;
+}
+
+const PUB_RE = /^((?:ssh|ecdsa|sk-ssh|sk-ecdsa)-[A-Za-z0-9@.-]{1,64}) ([A-Za-z0-9+/]{16,8192}={0,2})(?: .*)?$/;
+
+/** A public key line (`type base64 [comment]`), git's `key::` prefix dropped.
+ *  Null if it is not one (a private key never is). */
+export function parsePubKey(text: string): { type: string; blob: string; line: string } | null {
+  const line = String(text ?? '').split(/\r?\n/)[0].trim().replace(/^key::/, '');
+  const m = PUB_RE.exec(line);
+  return m ? { type: m[1], blob: m[2], line: `${m[1]} ${m[2]}` } : null;
+}
+
+/** md-ssh-sign's request read, or why it is refused. */
+export function parseSignSpec(spec: { namespace?: unknown; pub?: unknown; keyPath?: unknown; cwd?: unknown }): { ok: true; req: SshSignRequest } | { ok: false; error: string } {
+  const ns = typeof spec.namespace === 'string' ? spec.namespace : '';
+  if (ns !== SIGN_NAMESPACE) return { ok: false, error: `the office signs git objects only (namespace "git"), not "${ns.slice(0, 60)}"` };
+  const pub = typeof spec.pub === 'string' ? parsePubKey(spec.pub) : null;
+  const keyPath = typeof spec.keyPath === 'string' && spec.keyPath.length <= 1024 && !/[\0\r\n]/.test(spec.keyPath) ? spec.keyPath : undefined;
+  if (!pub && !keyPath) return { ok: false, error: 'no signing key given: set user.signingkey to your public key' };
+  const repo = typeof spec.cwd === 'string' && spec.cwd.length <= 1024 && !/[\0\r\n]/.test(spec.cwd) ? spec.cwd : undefined;
+  return { ok: true, req: { namespace: SIGN_NAMESPACE, ...(pub ? { pub: pub.line } : { keyPath }), ...(repo ? { repo } : {}) } };
+}
+
+/**
+ * What is being signed: a commit, a tag or a push certificate (all git signs
+ * in its namespace), with a line for the audit and the dialog. Null for
+ * anything else.
+ */
+export function describeSignPayload(payload: string): { kind: 'commit' | 'tag' | 'push'; subject: string } | null {
+  if (payload.length > MAX_SIGN_PAYLOAD) return null;
+  const body = (): string => {
+    const at = payload.indexOf('\n\n');
+    return (at === -1 ? '' : payload.slice(at + 2).split('\n')[0]).trim().slice(0, 200);
+  };
+  if (/^tree [0-9a-f]{40,64}\n/.test(payload)) return { kind: 'commit', subject: body() };
+  const tag = /^object [0-9a-f]{40,64}\ntype [a-z]+\ntag ([^\n]{1,200})\n/.exec(payload);
+  if (tag) return { kind: 'tag', subject: `${tag[1]}${body() ? `: ${body()}` : ''}`.slice(0, 200) };
+  if (/^certificate version 0\.1\n/.test(payload)) return { kind: 'push', subject: 'push certificate' };
+  return null;
+}
+
+/** Why an agent may not sign right now, or null. */
+export function sshSignRefusal(opts: { grant: SshRelayGrant | null; custodian: boolean; sandboxed: boolean }): string | null {
+  if (opts.custodian) return 'the custodian of a critical connection never uses the human\'s SSH keys';
+  if (!opts.sandboxed) return 'this agent does not run in an OS sandbox here, so the office does not sign for it';
+  if (!opts.grant?.sign) return 'commit signing with the human\'s SSH key is off for you: commit without -S (or with -c commit.gpgsign=false), or ask the human to switch on "Sign commits with my key" in Capabilities (it applies at once)';
   return null;
 }
 
