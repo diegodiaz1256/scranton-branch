@@ -98,9 +98,10 @@ interface PtySession {
   /** True after the child has emitted at least one frame. Automation waits for
    *  this before typing, so startup prompts cannot outrun the TUI subscription. */
   hasOutput: boolean;
-  /** WSL floors: when the agent first printed visible text (0 = not yet).
-   *  wsl.exe paints escape sequences long before the agent starts. */
-  wslVisibleAt?: number;
+  /** When the agent first printed visible text (0 = not yet). The terminal
+   *  host paints escape sequences long before the agent starts: wsl.exe, and
+   *  ConPTY on Windows (ESC[?9001h ESC[?1004h, the moment the pty opens). */
+  visibleAt: number;
   /** The distro a WSL floor's agent runs in. */
   wslDistro?: string;
   /** Output not yet sent to the window (see OUTPUT_FLUSH_MS). */
@@ -123,9 +124,23 @@ const ESCAPES = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x
 export function hasVisibleText(data: string): boolean {
   return /[^\s\x00-\x1f\x7f]/.test(data.replace(ESCAPES, ''));
 }
-/** How long a WSL agent's first visible frame must settle before automation
- *  types into it (its TUI turns on raw input a moment after painting). */
-const WSL_READY_MS = 1500;
+/** How long an agent's first visible frame must settle before automation
+ *  types into it: its TUI turns on raw input a moment after painting. */
+const READY_AFTER_VISIBLE_MS = 1500;
+
+/**
+ * May automation type into this terminal yet? Only once the agent has painted
+ * visible text and that frame has settled — on every platform, not only WSL.
+ * "Any output" was not enough on Windows: ConPTY writes its own escape
+ * sequences the instant the pty opens, so a fresh Claude Code was typed into
+ * ~0.5 s after spawn, before it read its input. The text showed up on the
+ * prompt once it started, its Enter was gone, and the screen was still blank
+ * when the app looked for the text after Enter, so it counted as sent (the
+ * orchestrator's orientation prompt sitting there until a human pressed Enter).
+ */
+export function readyToType(visibleAt: number, now: number): boolean {
+  return visibleAt > 0 && now - visibleAt >= READY_AFTER_VISIBLE_MS;
+}
 
 export interface SpawnOptions {
   id: string;
@@ -797,7 +812,8 @@ export class PtyManager {
         hasOutput: false,
         tail: '',
         owner,
-        ...(wsl ? { wslVisibleAt: 0, wslDistro: wsl.distro } : {})
+        visibleAt: 0,
+        ...(wsl ? { wslDistro: wsl.distro } : {})
       };
       this.sessions.set(opts.id, session);
 
@@ -808,7 +824,7 @@ export class PtyManager {
         session.hasOutput = true;
         // The repaint of a resize the app made is not the agent doing anything.
         if (!isRepaintEcho(session.repaintUntil, Date.now())) session.lastOutputAt = Date.now();
-        if (session.wslVisibleAt === 0 && hasVisibleText(data)) session.wslVisibleAt = Date.now();
+        if (session.visibleAt === 0 && hasVisibleText(data)) session.visibleAt = Date.now();
         // Keep only the trailing window; slice AFTER appending so a single
         // oversized write still leaves us its end (the part that explains a death).
         session.tail = (session.tail + data).slice(-TAIL_MAX);
@@ -916,7 +932,7 @@ export class PtyManager {
       command: s.command,
       pid: s.proc.pid,
       lastOutputAt: s.lastOutputAt,
-      hasOutput: s.wslVisibleAt === undefined ? s.hasOutput : s.wslVisibleAt > 0 && Date.now() - s.wslVisibleAt >= WSL_READY_MS
+      hasOutput: readyToType(s.visibleAt, Date.now())
     }));
   }
 

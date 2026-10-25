@@ -614,6 +614,12 @@ export function terminalShowsUsageLimit(ptyId: string | undefined): boolean {
   return entry.humanActedAt < entry.limitSeenAt;
 }
 
+/** When a person last typed in this terminal or sent it a message (0: never).
+ *  The submit check stops pressing Enter for the app once this moves. */
+export function terminalHumanActedAt(ptyId: string): number {
+  return pool.get(ptyId)?.humanActedAt ?? 0;
+}
+
 /** The human sent this terminal a message (the composer): that is acting on it,
  *  as much as typing in it is. */
 export function noteHumanMessage(ptyId: string): void {

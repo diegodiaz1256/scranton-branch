@@ -157,6 +157,11 @@ export function terminalShowsUsageLimit(ptyId: string | undefined): boolean {
   return !!entry.limitSeenAt && entry.humanActedAt < entry.limitSeenAt;
 }
 
+/** When a human last sent this terminal a message (0: never). */
+export function terminalHumanActedAt(ptyId: string): number {
+  return pool.get(ptyId)?.humanActedAt ?? 0;
+}
+
 /** A human sent this terminal a message (Team, a Slack reply): that is acting on it. */
 export function noteHumanMessage(ptyId: string): void {
   const entry = pool.get(ptyId);
