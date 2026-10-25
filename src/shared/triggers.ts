@@ -214,6 +214,9 @@ export interface WebhookTrigger {
   /** User-editable JSON Schema (serialised) that inbound bodies are checked against. */
   schema: string;
   createdAt: number;
+  /** Who answers: unset/'god' = the orchestrator, 'temp' = a temp,
+   *  'temp:<agent id>' = a temp cloned from that agent (shared/agentTemps.ts). */
+  answer?: string;
 }
 
 /**

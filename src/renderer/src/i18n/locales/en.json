@@ -2979,5 +2979,28 @@
     "add": "Add runner",
     "addWithSecrets_one": "Add runner and {{count}} secret",
     "addWithSecrets_other": "Add runner and {{count}} secrets"
+  },
+  "tempAnswer": {
+    "whoAnswers": "Who answers",
+    "orchestrator": "The orchestrator",
+    "temp": "A temp",
+    "cloneGroup": "A temp, clone of…",
+    "cloneOf": "A temp, clone of {{name}}",
+    "hint": "A temp does this one job and is archived when done; its result reaches the orchestrator. If every temp desk is taken, the orchestrator gets the job.",
+    "teamHint": "For a teammate's request. Only the orchestrator writes back over Team, so a temp's result goes to it to reply.",
+    "slackHint": "A temp replies in the thread itself and is archived when done. If every temp desk is taken, the orchestrator gets the message."
+  },
+  "tempQuota": {
+    "title": "Temps",
+    "desc": "A temp is a short-lived worker for one job. Besides the orchestrator, you can let any agent start its own: its temps report back to it and never get more access than it has.",
+    "atOnce": "Max temps at once",
+    "atOnceDesc": "For the whole office, whoever started them.",
+    "perAgent": "Temps per agent",
+    "perAgentFor": "Temps {{name}} may run at once",
+    "noAgents": "No agents on the floor yet.",
+    "off": "Off",
+    "n_one": "{{count}} at once",
+    "n_other": "{{count}} at once",
+    "perAgentDesc": "Off by default. An agent over its limit, or with every desk taken, is told why in its inbox. Custodians of a critical connection are not listed: they never start temps."
   }
 }

@@ -9,9 +9,10 @@ import {
 } from './api';
 import { JsonEditor } from './JsonEditor';
 import {
-  Callout, Field, Hint, MiniButton, ModePicker, Muted, SecretField, SubCard, SubHeader,
+  Callout, Field, Hint, MiniButton, ModePicker, Muted, SecretField, Select, SubCard, SubHeader,
   Toggle, inputStyle
 } from './ui';
+import { TempAnswerOptions } from '../TempAnswerOptions';
 
 /**
  * WEBHOOKS — one inbound HTTP endpoint per caller. Several share one port and
@@ -124,6 +125,7 @@ function WebhookRow({ hook, url, serverRunning, onPatch, onDelete }: {
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
+  const agents = useStore((s) => s.agents);
   const [open, setOpen] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState<'url' | 'secret' | null>(null);
@@ -235,6 +237,14 @@ function WebhookRow({ hook, url, serverRunning, onPatch, onDelete }: {
 
           <Field label={t('webhooksSection.trust')}>
             <ModePicker value={hook.mode} onChange={(mode: TriggerMode) => onPatch({ mode })} />
+          </Field>
+
+          <Field label={t('tempAnswer.whoAnswers')}>
+            <Select value={hook.answer ?? 'god'} onChange={(answer) => onPatch({ answer: answer === 'god' ? undefined : answer })} style={{ width: '100%' }}>
+              <option value="god">{agents.find((a) => a.isGod)?.name ?? t('tempAnswer.orchestrator')}</option>
+              <TempAnswerOptions agents={agents} />
+            </Select>
+            <Hint>{t('tempAnswer.hint')}</Hint>
           </Field>
 
           <Field label={t('webhooksSection.bodySchema')}>

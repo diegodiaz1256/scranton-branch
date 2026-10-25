@@ -208,6 +208,41 @@ when it arrives.`
 \`COMMANDS.md\` is the Claude Code command reference (slash commands act only on your own session).`
   },
   {
+    file: 'temps.md',
+    title: 'Starting a temp (any agent)',
+    who: 'everyone',
+    when: 'handing one whole job to a temp of your own, and how many you may run',
+    body: `A temp is a short-lived worker for ONE job: it gets the job, sends \`done\` and is archived.
+It is a fresh spend every time: do small things yourself, or ask an agent already on the floor.
+
+**Only if the human gave you temps**: *Temps per agent* (0–4, default 0 = none) in Settings →
+Autonomy & limits. Your prompt says how many you may run at once; with none, a request is refused.
+(The orchestrator uses \`spawn.md\` instead.)
+
+Write ONE JSON file into **your own** folder, \`agents/<your-id>/spawn-requests/<id>.json\`:
+
+\`\`\`json
+{
+  "objective": "the whole job, self-contained (required)",
+  "name": "display name (optional)",
+  "cwd": "default: your working folder; must be inside it",
+  "provider": "default: your engine", "model": "default: yours",
+  "isolate": true,
+  "tokenCap": 0
+}
+\`\`\`
+
+- You get \`[temp started] worker-<your-id>-<id>\`; the job reaches the temp from you and its
+  \`done\` comes back to **your** inbox. Don't sleep or poll.
+- Over your limit, or every temp desk in the office taken (*Max temps at once*), the request is
+  refused and the reason reaches your inbox.
+- A temp gets **at most your access**: your connections, tools and scopes, never more. It never
+  runs unsandboxed, never uses SSH keys or cloud logins, never holds a critical connection. A
+  custodian cannot start temps, and a temp cannot start one.
+- To let go of one of yours that never sent \`done\`: \`agents/<your-id>/archive-requests/<any>.json\`
+  with \`{"id": "worker-<your-id>-<id>"}\`. Anyone else's temp is refused.`
+  },
+  {
     file: 'spawn.md',
     title: 'Spawning a temp worker',
     who: 'orchestrator',
@@ -242,7 +277,9 @@ already on the floor first either way. A permanent member of the office: \`hire.
 **The harness archives a temp when it sends \`done\`**: no archive request for that. Only one you no
 longer need that never sent \`done\` is yours to archive: write \`archive-requests/<any-name>.json\`
 with \`{"id": "worker-<id>"}\`. The harness closes its terminal, archives it (folder, memory and
-committed work kept) and tells you in your inbox; anyone but your own temps is refused.`
+committed work kept) and tells you in your inbox; anyone but your own temps is refused (one
+another agent started is theirs: \`temps.md\`). A trigger answered by a temp sends its \`done\` to
+you: pass the result on (a webhook's card, a Team reply).`
   },
   {
     file: 'hire.md',

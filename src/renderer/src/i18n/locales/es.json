@@ -2979,5 +2979,28 @@
     "add": "Añadir runner",
     "addWithSecrets_one": "Añadir runner y {{count}} secreto",
     "addWithSecrets_other": "Añadir runner y {{count}} secretos"
+  },
+  "tempAnswer": {
+    "whoAnswers": "Quién responde",
+    "orchestrator": "El orquestador",
+    "temp": "Un temporal",
+    "cloneGroup": "Un temporal, clon de…",
+    "cloneOf": "Un temporal, clon de {{name}}",
+    "hint": "Un temporal hace este único trabajo y se archiva al terminar; su resultado llega al orquestador. Si todos los puestos de temporales están ocupados, el trabajo va al orquestador.",
+    "teamHint": "Para la petición de un compañero. Solo el orquestador responde por Equipo, así que el resultado del temporal le llega a él para contestar.",
+    "slackHint": "Un temporal responde él mismo en el hilo y se archiva al terminar. Si todos los puestos de temporales están ocupados, el mensaje va al orquestador."
+  },
+  "tempQuota": {
+    "title": "Temporales",
+    "desc": "Un temporal es un trabajador de corta duración para un solo trabajo. Además del orquestador, puedes dejar que cualquier agente inicie los suyos: sus temporales le informan a él y nunca tienen más acceso que él.",
+    "atOnce": "Máximo de temporales a la vez",
+    "atOnceDesc": "Para toda la oficina, los haya iniciado quien sea.",
+    "perAgent": "Temporales por agente",
+    "perAgentFor": "Temporales que {{name}} puede tener a la vez",
+    "noAgents": "Todavía no hay agentes en la planta.",
+    "off": "No",
+    "n_one": "{{count}} a la vez",
+    "n_other": "{{count}} a la vez",
+    "perAgentDesc": "Desactivado por defecto. Si un agente supera su límite, o todos los puestos están ocupados, se le explica el motivo en su bandeja de entrada. Los custodios de una conexión crítica no aparecen: nunca inician temporales."
   }
 }

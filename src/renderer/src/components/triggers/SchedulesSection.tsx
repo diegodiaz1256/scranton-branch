@@ -10,6 +10,7 @@ import {
 } from './ui';
 import { formatWeekly, nextWeeklyFireMs } from '@shared/weeklySchedule';
 import { useRtl } from '@/i18n/useDirection';
+import { TempAnswerOptions, tempAnswerLabel } from '../TempAnswerOptions';
 
 /**
  * SCHEDULES — recurring auto-dispatched missions. The oldest trigger type, and
@@ -107,9 +108,9 @@ export function SchedulesSection({ onSummary }: { onSummary?: (s: string) => voi
   const whenIsUsable = !mWeekly || weeklyIsUsable(mWeekly);
 
   const targetName = (to: string) =>
-    to === 'broadcast' ? t('schedulesSection.everyone')
+    tempAnswerLabel(to, agents, t) ?? (to === 'broadcast' ? t('schedulesSection.everyone')
       : to === 'god' ? (agents.find((a) => a.isGod)?.name ?? 'the orchestrator')
-        : agents.find((a) => a.id === to)?.name ?? to;
+        : agents.find((a) => a.id === to)?.name ?? to);
 
   return (
     <>
@@ -146,6 +147,7 @@ export function SchedulesSection({ onSummary }: { onSummary?: (s: string) => voi
               <option value="broadcast">{t('schedulesSection.everyone')}</option>
               <option value="god">{agents.find((a) => a.isGod)?.name ?? 'the orchestrator'}</option>
               {agents.filter((a) => !a.isGod).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              <TempAnswerOptions agents={agents} />
             </Select>
           </Field>
           <Field label={t('schedulesSection.when')}>
@@ -291,6 +293,7 @@ function MissionRow({ mission, targetName, agents, onPatch, onDelete }: {
               <option value="broadcast">{t('schedulesSection.everyone')}</option>
               <option value="god">{agents.find((a) => a.isGod)?.name ?? 'the orchestrator'}</option>
               {agents.filter((a) => !a.isGod).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              <TempAnswerOptions agents={agents} />
             </Select>
           </Field>
           <Field label={t('schedulesSection.when')}>

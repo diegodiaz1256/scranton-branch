@@ -112,6 +112,13 @@ export interface HarnessConfig {
   /** Opt-in app/voice-initiated proactive Slack posting (default OFF). Mirrors
    *  src/main/config.ts; the Slack-origin done-reply round-trip is never gated. */
   slackProactivePosting?: boolean;
+  /** "Max temps at once" for the office (shared/agentTemps.ts). Mirrors src/main/config.ts. */
+  maxConcurrentWorkers?: number;
+  /** "Temps per agent": agent id → temps it may run at once (0-4). Mirrors src/main/config.ts. */
+  agentTempQuota?: Record<string, number>;
+  /** Who answers Slack / Team: unset = the orchestrator, 'temp', 'temp:<agent id>'. */
+  slackAnswer?: string;
+  teamAnswer?: string;
   /** Free Flow voice dictation (mirrors src/main/config.ts). */
   freeflowEnabled?: boolean;
   groqApiKey?: string;
