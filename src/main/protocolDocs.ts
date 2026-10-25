@@ -9,7 +9,7 @@
  */
 
 export const GENERATED_DOC_NOTICE =
-  '<!-- Generated and managed by Munder Difflin. Local edits may be replaced during hive bootstrap. -->';
+  '<!-- Generated and managed by Scranton Branch. Local edits may be replaced during hive bootstrap. -->';
 
 export interface ProtocolDoc {
   /** File name under <hive>/protocol/. */

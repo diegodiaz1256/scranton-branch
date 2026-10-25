@@ -1,5 +1,10 @@
 # Telemetry
 
+> Scranton Branch builds send **no** events: they carry no analytics key, so the
+> client described here never starts (see [PRIVACY.md](PRIVACY.md)). This is the
+> contract the code inherits from Munder Difflin, kept because the allowlist in
+> `analytics.ts` still follows it.
+
 Munder Difflin collects a small set of **anonymous** usage events so we can
 understand adoption (how many people launch the app, whether they get a first
 agent running, which features get used) and make the product better. This

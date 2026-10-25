@@ -23,7 +23,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Munder Difflin version (if relevant)
+      label: Scranton Branch version (if relevant)
       placeholder: "0.4.6"
     validations:
       required: false

@@ -1,6 +1,6 @@
-# Munder Difflin
+# Scranton Branch
 
-> Munder Difflin gives you clones for you and your team, working 24/7. It is a free,
+> Scranton Branch gives you clones for you and your team, working 24/7. It is a free,
 > Apache-2.0-licensed, local-first multi-agent harness for CLI coding agents that turns Claude Code,
 > OpenAI Codex, Antigravity (Gemini), GitHub Copilot CLI, xAI Grok, Kimi Code, Qwen, OpenCode,
 > Crush, Gemini CLI, Cursor Agent, and pi.dev into a coordinated "office" of agents on
@@ -18,11 +18,15 @@
 ## Product
 
 - [Homepage](https://scranton-branch.zerogeworkshop.com/): features, download links, FAQ
-- [GitHub repository](https://github.com/chaitanyagiri/munder-difflin): source, issues, releases
-- [Latest release](https://github.com/chaitanyagiri/munder-difflin/releases/latest): macOS dmg, Windows setup, Linux AppImage
-- [Changelog](https://github.com/chaitanyagiri/munder-difflin/blob/main/CHANGELOG.md)
+- [GitHub repository](https://github.com/diegodiaz1256/scranton-branch): source and releases
+- [Latest release](https://github.com/diegodiaz1256/scranton-branch/releases/latest): macOS dmg, Windows setup, Linux AppImage
+- [Changelog](https://github.com/diegodiaz1256/scranton-branch/blob/main/CHANGELOG.md)
+- [Munder Difflin](https://github.com/HarnessMD/munder-difflin): the open-source project Scranton Branch began as a fork of
 
 ## Key guides
+
+The blog posts linked below were written for Munder Difflin, the open-source project
+Scranton Branch is built on, and describe it as it was then.
 
 - [What's up with Munder Difflin](https://scranton-branch.zerogeworkshop.com/blog/whats-up-with-munder-difflin/): everything shipped from v0.3.3 to v0.3.7
 - [Why our auto-update never ran](https://scranton-branch.zerogeworkshop.com/blog/why-our-auto-update-never-ran/): the v0.3.7 fix — a CommonJS export that vanished into an ESM namespace

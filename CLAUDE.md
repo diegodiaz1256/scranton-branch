@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Munder Difflin: an Electron + React desktop app that runs many CLI coding agents (Claude Code, Codex, Gemini CLI, Grok, Kimi, Qwen, OpenCode, Crush, Pi, Copilot, Cursor, Antigravity, or any custom command) as real PTY processes, visualised as an *Office*-themed pixel-art floor (Pixi.js), coordinated by an on-disk multi-agent "hive" with a privileged GOD/orchestrator agent.
+Scranton Branch (a fork of Munder Difflin, and formerly named after it): an Electron + React desktop app that runs many CLI coding agents (Claude Code, Codex, Gemini CLI, Grok, Kimi, Qwen, OpenCode, Crush, Pi, Copilot, Cursor, Antigravity, or any custom command) as real PTY processes, visualised as an *Office*-themed pixel-art floor (Pixi.js), coordinated by an on-disk multi-agent "hive" with a privileged GOD/orchestrator agent.
 
 ## Commands
 

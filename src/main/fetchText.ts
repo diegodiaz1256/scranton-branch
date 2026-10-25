@@ -57,7 +57,7 @@ function fetchBody(
     let u: URL;
     try { u = new URL(target); } catch { finish(new Error(`invalid URL: ${target}`)); return; }
     if (u.protocol !== 'https:') { finish(new Error(`refusing a non-https URL: ${u.protocol}`)); return; }
-    const req = httpsRequest(u, { method: 'GET', headers: { 'user-agent': 'munder-difflin' } }, (res) => {
+    const req = httpsRequest(u, { method: 'GET', headers: { 'user-agent': 'scranton-branch' } }, (res) => {
       const status = res.statusCode ?? 0;
       // raw.githubusercontent redirects branch aliases; follow, relative or not.
       if (status >= 300 && status < 400 && res.headers.location) {

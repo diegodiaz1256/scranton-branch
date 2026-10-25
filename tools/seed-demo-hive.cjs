@@ -148,7 +148,7 @@ function rosterAgent(member, cwd, command) {
 }
 
 function initProjectRepo(dir) {
-  writeText(path.join(dir, 'README.md'), '# Demo billing app\n\nA stand-in project for the Munder Difflin demo office.\n');
+  writeText(path.join(dir, 'README.md'), '# Demo billing app\n\nA stand-in project for the Scranton Branch demo office.\n');
   writeText(path.join(dir, 'src', 'invoices.js'), 'export function total(items) {\n  return items.reduce((sum, i) => sum + i.amountCents, 0);\n}\n');
   const git = (...args) => spawnSync('git', args, { cwd: dir, stdio: 'ignore' }).status === 0;
   return git('init', '-q', '-b', 'main')

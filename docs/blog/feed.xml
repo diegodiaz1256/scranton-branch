@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
-  <title>Munder Difflin Blog</title>
+  <title>Scranton Branch Blog</title>
   <subtitle>Guides, deep dives, and comparisons on running multi-agent Claude Code: orchestration, agent memory, automation, and the tooling landscape.</subtitle>
   <link href="https://scranton-branch.zerogeworkshop.com/blog/feed.xml" rel="self" />
   <link href="https://scranton-branch.zerogeworkshop.com/blog/" />

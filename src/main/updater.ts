@@ -214,7 +214,7 @@ function fetchReleaseBody(version: string, done: (notes: string | undefined) => 
         hostname: 'api.github.com',
         path: `/repos/${REPO}/releases/tags/v${version}`,
         method: 'GET',
-        headers: { 'User-Agent': 'munder-difflin-updater', Accept: 'application/vnd.github+json' },
+        headers: { 'User-Agent': 'scranton-branch-updater', Accept: 'application/vnd.github+json' },
         timeout: 10_000
       },
       (res) => {
@@ -246,7 +246,7 @@ function fallbackCheck(reason: string | undefined, force = false): void {
         hostname: 'api.github.com',
         path: `/repos/${REPO}/releases/latest`,
         method: 'GET',
-        headers: { 'User-Agent': 'munder-difflin-updater', Accept: 'application/vnd.github+json' },
+        headers: { 'User-Agent': 'scranton-branch-updater', Accept: 'application/vnd.github+json' },
         timeout: 10_000
       },
       (res) => {
@@ -363,7 +363,7 @@ async function runDownload(): Promise<{ ok: boolean; error?: string }> {
  *  shape instead (bold lead paragraph, then `### Fixed`) it returns ONE bullet —
  *  the lead paragraph, clipped mid-sentence. Verified against the published
  *  v0.4.4-rc.1 body: this shape yields the same 3 bullets the real toast shows. */
-const SIMULATED_NOTES = `# Munder Difflin v9.9.9
+const SIMULATED_NOTES = `# Scranton Branch v9.9.9
 
 **A local hive of Claude Code, Antigravity, Codex, Grok & Copilot agents that run themselves** —
 messaging, routing, and remembering, coordinated by your clone, Michael, who you talk to.
