@@ -440,7 +440,8 @@ export function callWrittenFiles(tool: string | undefined, input: unknown, cwd?:
   const paths = writtenPathsOf(tool, input);
   if (SHELL_TOOLS.has(tool)) {
     const inp = input as Record<string, unknown>;
-    const cmd = typeof inp.command === 'string' ? inp.command : Array.isArray(inp.command) ? (inp.command as unknown[]).join(' ') : typeof inp.cmd === 'string' ? inp.cmd : '';
+    // CommandLine: Antigravity's run_command, as the guard reads it.
+    const cmd = typeof inp.command === 'string' ? inp.command : Array.isArray(inp.command) ? (inp.command as unknown[]).join(' ') : typeof inp.cmd === 'string' ? inp.cmd : typeof inp.CommandLine === 'string' ? inp.CommandLine : '';
     paths.push(...shellWrittenPaths(cmd));
   }
   const base = cwd?.trim().replace(/[\\/]+$/, '') ?? '';
