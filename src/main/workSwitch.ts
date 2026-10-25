@@ -76,6 +76,9 @@ export interface WorkSwitchDeps {
    *  it is asked for its note, a nudge would start the new work in the session
    *  about to be cleared, and the resume sends it to the inbox anyway. */
   holdNudges(id: string, on: boolean): void;
+  /** Read the task ledger again now (when it changed), passing any switch it
+   *  shows to onSwitches before this returns. */
+  refreshLedger?(): void;
   log(line: string): void;
 }
 
@@ -159,7 +162,12 @@ export class WorkSwitchClearer {
       return;
     }
     const now = d.now();
-    if (!sessionOldEnough(this.sessions.get(s.agentId), now, rule.minSessionMs)) return;
+    const started = this.sessions.get(s.agentId);
+    if (!sessionOldEnough(started, now, rule.minSessionMs)) {
+      const age = started === undefined ? 'of unknown age' : `${Math.round((now - started) / 60_000)} min old`;
+      d.log(`[work-switch] ${s.agentId} moved ${s.from} → ${s.to}; not cleared, its session is ${age} (minimum ${Math.round(rule.minSessionMs / 60_000)} min)`);
+      return;
+    }
     const paths = d.handoffPath(s.agentId);
     if (agent.canWriteHandoff) {
       const prompt = handoffPrompt(paths.agent, this.title(s.from), this.title(s.to));
@@ -190,58 +198,84 @@ export class WorkSwitchClearer {
   /** Move every hand-off along. Cheap when nothing is pending. */
   tick(): void {
     if (!this.pending.size) return;
+    const now = this.deps.now();
+    const enabled = this.deps.rule().enabled;
+    for (const [id, p] of [...this.pending]) this.advance(id, p, now, enabled);
+  }
+
+  /**
+   * Called right before an inbox nudge goes out to this agent (the renderer's
+   * drain and main's worker-wake fallback). True means: do not send it.
+   *
+   * The orchestrator moves the card and sends the work order in the same
+   * breath, but the ledger is only read every few seconds, so the nudge used to
+   * reach the agent first: it did the new work in the session that was about to
+   * be cleared, and the clear came afterwards for nothing. So the ledger is read
+   * again right now, and a switch it shows is started on the spot. While the
+   * agent is asked for its note the nudge waits; once the clear is queued it is
+   * not needed (the resume sends the new session to the inbox).
+   */
+  beforeNudge(id: string): boolean {
     const d = this.deps;
-    const now = d.now();
-    const enabled = d.rule().enabled;
-    for (const [id, p] of [...this.pending]) {
-      try {
-        const agent = d.agent(id);
-        if (!agent || !enabled || !agent.clearCommand) {
-          if (p.prompt) d.withdraw(id, p.prompt);
-          this.end(id);
-          continue;
-        }
-        if (!p.written) {
-          const m = d.fileMtime(d.handoffPath(id).host);
-          if (m !== null && m >= p.requestedAt - MTIME_SLACK_MS) {
-            this.markWritten(id, p);
-          } else if (now - p.requestedAt >= HANDOFF_WAIT_MS) {
-            // Taken back first, so a fresh session is never asked about work it
-            // no longer remembers.
-            if (p.prompt) d.withdraw(id, p.prompt);
-            this.writeFallback(id, agent.name, p.from, p.to, 'timeout');
-            this.markWritten(id, p);
-            d.log(`[work-switch] ${id} wrote no handoff note in time; the app wrote one`);
-          } else {
-            continue;
-          }
-        }
-        const busy = d.busyReason(id);
-        if (busy) {
-          p.deferredSince ??= now;
-          if (now - p.deferredSince >= CLEAR_DEFER_MAX_MS) {
-            this.pending.delete(id);
-            d.log(`[work-switch] ${id} not cleared: ${busy} for too long`);
-          }
-          continue;
-        }
-        const paths = d.handoffPath(id);
-        d.enqueue(id, agent.clearCommand);
-        d.enqueue(id, resumePrompt({
-          handoffPath: paths.agent,
-          inboxPath: d.inboxPath(id),
-          toTitle: this.title(p.to),
-          standingPath: d.standingPath(id),
-          // A margin before the request: the work order usually lands in the
-          // same minute the card moves.
-          recentlyFiled: d.recentlyFiled(id, p.requestedAt - 10 * 60_000)
-        }));
-        this.pending.delete(id);
-        this.sessions.set(id, now);
-        d.log(`[work-switch] ${id} cleared for ${p.to}; its next session starts from the handoff note`);
-      } catch (e) {
-        d.log(`[work-switch] ${id}: ${e instanceof Error ? e.message : String(e)}`);
+    try { d.refreshLedger?.(); } catch (e) { d.log(`[work-switch] ledger: ${e instanceof Error ? e.message : String(e)}`); }
+    const p = this.pending.get(id);
+    if (!p) return false;
+    const r = this.advance(id, p, d.now(), d.rule().enabled);
+    return r === 'asking' || r === 'cleared';
+  }
+
+  private advance(id: string, p: Pending, now: number, enabled: boolean): 'asking' | 'deferred' | 'cleared' | 'ended' {
+    const d = this.deps;
+    try {
+      const agent = d.agent(id);
+      if (!agent || !enabled || !agent.clearCommand) {
+        if (p.prompt) d.withdraw(id, p.prompt);
+        this.end(id);
+        return 'ended';
       }
+      if (!p.written) {
+        const m = d.fileMtime(d.handoffPath(id).host);
+        if (m !== null && m >= p.requestedAt - MTIME_SLACK_MS) {
+          this.markWritten(id, p);
+        } else if (now - p.requestedAt >= HANDOFF_WAIT_MS) {
+          // Taken back first, so a fresh session is never asked about work it
+          // no longer remembers.
+          if (p.prompt) d.withdraw(id, p.prompt);
+          this.writeFallback(id, agent.name, p.from, p.to, 'timeout');
+          this.markWritten(id, p);
+          d.log(`[work-switch] ${id} wrote no handoff note in time; the app wrote one`);
+        } else {
+          return 'asking';
+        }
+      }
+      const busy = d.busyReason(id);
+      if (busy) {
+        p.deferredSince ??= now;
+        if (now - p.deferredSince >= CLEAR_DEFER_MAX_MS) {
+          this.pending.delete(id);
+          d.log(`[work-switch] ${id} not cleared: ${busy} for too long`);
+          return 'ended';
+        }
+        return 'deferred';
+      }
+      const paths = d.handoffPath(id);
+      d.enqueue(id, agent.clearCommand);
+      d.enqueue(id, resumePrompt({
+        handoffPath: paths.agent,
+        inboxPath: d.inboxPath(id),
+        toTitle: this.title(p.to),
+        standingPath: d.standingPath(id),
+        // A margin before the request: the work order usually lands in the
+        // same minute the card moves.
+        recentlyFiled: d.recentlyFiled(id, p.requestedAt - 10 * 60_000)
+      }));
+      this.pending.delete(id);
+      this.sessions.set(id, now);
+      d.log(`[work-switch] ${id} cleared for ${p.to}; its next session starts from the handoff note`);
+      return 'cleared';
+    } catch (e) {
+      d.log(`[work-switch] ${id}: ${e instanceof Error ? e.message : String(e)}`);
+      return 'deferred';
     }
   }
 }

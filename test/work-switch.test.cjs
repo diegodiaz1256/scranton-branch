@@ -111,6 +111,7 @@ function harness(over = {}) {
     enqueue: (id, text) => queue.push({ id, text }),
     withdraw: (id, text) => withdrawn.push({ id, text }),
     holdNudges: (id, on) => holds.push(on),
+    refreshLedger: () => over.refreshLedger?.(c),
     log: (l) => logs.push(l)
   });
   return {
@@ -128,6 +129,88 @@ test('a session younger than the minimum is left alone', () => {
   h.advance(59 * 60_000);
   h.c.onSwitches(SWITCH);
   h.c.tick();
+  assert.deepEqual(h.queue, []);
+});
+
+test('a switch skipped for a young session says so in the log', () => {
+  const h = harness();
+  h.c.noteSessionStart('dev', h.now);
+  h.advance(20 * 60_000);
+  h.c.onSwitches(SWITCH);
+  assert.deepEqual(h.queue, []);
+  assert.ok(h.logs.some((l) => /dev moved A → B; not cleared, its session is 20 min old \(minimum 60 min\)/.test(l)), h.logs.join('\n'));
+});
+
+// The orchestrator moves the card and sends the work order at the same moment.
+// The periodic ledger read has not seen the move yet when the inbox nudge is
+// about to go out: the nudge must re-read the ledger and wait for the handoff,
+// or the agent does B in the session that is about to be cleared.
+function simultaneous(over = {}) {
+  const board = { prev: [card('A', 'dev', 'doing'), card('B', 'dev', 'todo')], now: null, current: {} };
+  board.read = (c) => {
+    if (!board.now) return;
+    const r = detectWorkSwitches(board.current, board.prev, board.now);
+    board.current = r.current;
+    board.prev = board.now;
+    board.now = null;
+    c.onSwitches(r.switches);
+  };
+  const h = harness({ ...over, refreshLedger: board.read });
+  board.read(h.c); // the periodic read learned where everyone is
+  h.c.noteSessionStart('dev', h.now);
+  h.advance(2 * 3_600_000);
+  // Card move and work order land together; no periodic read in between.
+  board.now = [card('A', 'dev', 'done'), card('B', 'dev', 'doing')];
+  return h;
+}
+
+test('a nudge sent with the card move waits for the handoff instead of reaching the old session', () => {
+  const h = simultaneous();
+  assert.equal(h.c.beforeNudge('dev'), true, 'the nudge is held');
+  assert.equal(h.queue.length, 1);
+  assert.ok(isWorkSwitchMessage(h.queue[0].text), 'the handoff request goes out instead');
+  assert.equal(h.c.holdsNudges('dev'), true);
+  // Still asking: later nudges wait too.
+  h.advance(4000);
+  assert.equal(h.c.beforeNudge('dev'), true);
+  // The note is written; the next nudge queues the clear and the resume at once
+  // (not on the next tick), and is itself not needed: the resume names the inbox.
+  h.files.set('H:/agents/dev/handoff.md', { text: '# note', m: h.now });
+  h.advance(1000);
+  assert.equal(h.c.beforeNudge('dev'), true);
+  assert.deepEqual(h.queue.slice(1).map((m) => m.text.split(' ')[0]), ['/clear', '[work']);
+  assert.match(h.queue[2].text, /inbox/);
+  // A new session with no switch: nudges go out as usual.
+  assert.equal(h.c.beforeNudge('dev'), false);
+});
+
+test('the same race on an engine that cannot be asked: note, clear and resume before the nudge', () => {
+  const h = simultaneous({ agent: { canWriteHandoff: false, clearCommand: '/new' } });
+  assert.equal(h.c.beforeNudge('dev'), true);
+  assert.ok(h.files.get('H:/agents/dev/handoff.md'), 'the app wrote the note');
+  assert.deepEqual(h.queue.map((m) => m.text.split(' ')[0]), ['/new', '[work']);
+});
+
+test('a nudge with no switch on the board, or one deferred on a sign-off, still goes out', () => {
+  // Nothing moved on the board.
+  const quiet = harness({ refreshLedger: () => {} });
+  quiet.c.noteSessionStart('dev', quiet.now);
+  quiet.advance(2 * 3_600_000);
+  assert.equal(quiet.c.beforeNudge('dev'), false);
+  assert.deepEqual(quiet.queue, []);
+  // Note written, but a rejection from the human must still reach it.
+  const h = simultaneous();
+  assert.equal(h.c.beforeNudge('dev'), true);
+  h.files.set('H:/agents/dev/handoff.md', { text: '# note', m: h.now });
+  h.state.busy = "waiting for the human's sign-off";
+  h.advance(1000);
+  assert.equal(h.c.beforeNudge('dev'), false);
+});
+
+test('a young session is not held up by the race check', () => {
+  const h = simultaneous();
+  h.c.noteSessionStart('dev', h.now - 10 * 60_000);
+  assert.equal(h.c.beforeNudge('dev'), false);
   assert.deepEqual(h.queue, []);
 });
 
