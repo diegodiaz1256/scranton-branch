@@ -133,6 +133,10 @@ interface AgentBreakerState {
   lastUserPromptAt: number;
   /** Consecutive beats the no-progress condition held (debounce counter). */
   noProgressBeats: number;
+  /** The agent's work tokens (workTokensOf) when the breaker last escalated
+   *  it, or null when it is healthy or the sample was unknown. A trip with no
+   *  work spent since then is "obeyed" and does not escalate again. */
+  warnedAtWork: number | null;
 }
 
 export class CircuitBreaker {
@@ -160,7 +164,7 @@ export class CircuitBreaker {
       s = {
         level: 'healthy', reason: '', lastSample: null, repeatKey: null, repeatCount: 0,
         errorCount: 0, compactingUntil: 0, lastDistinctToolAt: 0, lastUserPromptAt: 0,
-        noProgressBeats: 0
+        noProgressBeats: 0, warnedAtWork: null
       };
       this.agents.set(agentId, s);
     }
@@ -304,8 +308,20 @@ export class CircuitBreaker {
       if (input.sample) s.lastSample = input.sample;
 
       const ceiling: BreakerLevel = cfg.hardStop ? 'stopped' : 'constrained';
+      const work = input.sample ? workTokensOf(input.sample) : null;
+      // A counter that went backwards (new session, app restart) is a new
+      // baseline, not new work.
+      if (work !== null && s.warnedAtWork !== null && work < s.warnedAtWork) s.warnedAtWork = work;
+      // Obeyed: the agent was warned and has spent no work tokens since. The
+      // caps are cumulative, so they keep tripping after the agent stops, and
+      // escalating an agent that already did what the warning asked punishes
+      // it for the past. It holds its level until it spends again.
+      const obeyed = trip.tripping && s.level !== 'healthy'
+        && work !== null && s.warnedAtWork !== null && work <= s.warnedAtWork;
       let target = s.level;
-      if (trip.tripping) {
+      if (obeyed) {
+        // hold: no escalation, and no recovery either while the trip stands
+      } else if (trip.tripping) {
         target = LEVELS[Math.min(rank(s.level) + 1, rank(ceiling))];
       } else {
         target = LEVELS[Math.max(rank(s.level) - 1, 0)]; // recover one level
@@ -313,7 +329,11 @@ export class CircuitBreaker {
       const changed = target !== s.level;
       const escalated = rank(target) > rank(s.level);
       s.level = target;
-      s.reason = trip.tripping ? trip.reason : (changed ? 'recovering — signals cleared' : s.reason);
+      if (escalated) s.warnedAtWork = work;
+      else if (target === 'healthy') s.warnedAtWork = null;
+      s.reason = obeyed
+        ? `${trip.reason} — obeyed: no new work since the warning`
+        : trip.tripping ? trip.reason : (changed ? 'recovering — signals cleared' : s.reason);
 
       decisions.push({
         state: { agentId: input.agentId, level: target, reason: s.reason, ts: nowMs },
@@ -412,5 +432,41 @@ export class CircuitBreaker {
       }
     }
     return { tripping: false, reason: '' };
+  }
+}
+
+/** How long an identical breaker warning to the same agent is suppressed. */
+export const WARNING_DEDUPE_MS = 10 * 60_000;
+
+/** What makes two warnings "the same": the subject and the reason with its
+ *  figures blanked. A cap reason carries running totals ("top spender
+ *  $4.12", "9× identical tool call") that change every beat, so comparing the
+ *  raw text would never find a repeat. */
+export function warningKey(subject: string, reason: string): string {
+  return `${subject}\n${reason.replace(/\d[\d,.]*/g, '#')}`;
+}
+
+/** Per-agent memory of the warnings the breaker beat sent. A level that
+ *  recovers and trips again re-escalates, and each escalation used to post the
+ *  same message to the agent's inbox; this lets the beat send it once per
+ *  window instead. */
+export class WarningDedupe {
+  private sent = new Map<string, Map<string, number>>();
+
+  constructor(private windowMs = WARNING_DEDUPE_MS) {}
+
+  /** True when this warning should go out now (and records it as sent);
+   *  false when the same one went to this agent within the window. */
+  shouldSend(agentId: string, key: string, now = Date.now()): boolean {
+    let seen = this.sent.get(agentId);
+    if (!seen) { seen = new Map(); this.sent.set(agentId, seen); }
+    for (const [k, at] of seen) if (now - at >= this.windowMs) seen.delete(k);
+    if (seen.has(key)) return false;
+    seen.set(key, now);
+    return true;
+  }
+
+  forget(agentId: string): void {
+    this.sent.delete(agentId);
   }
 }

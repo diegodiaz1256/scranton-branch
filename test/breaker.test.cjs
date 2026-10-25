@@ -29,7 +29,7 @@ const js = ts.transpileModule(fs.readFileSync(SRC, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText;
 fs.writeFileSync(path.join(out, 'breaker.js'), js, 'utf8');
-const { CircuitBreaker } = require(path.join(out, 'breaker.js'));
+const { CircuitBreaker, WarningDedupe, warningKey, WARNING_DEDUPE_MS } = require(path.join(out, 'breaker.js'));
 
 let failures = 0;
 function test(name, fn) {
@@ -446,6 +446,115 @@ test('a healthy beat de-escalates one level', () => {
   b.recordToolUse('a', 'Read', { file: 'new' });       // distinct call clears the loop
   const d = beat(b, 'a', null, true, T0 + BEAT);
   assert.equal(d.state.level, 'healthy');
+});
+
+// ── obeyed: a warned agent that stopped spending is not escalated ───────────
+// The caps are cumulative, so once an agent crosses one the trip stands on
+// every later beat even after the agent stopped. Escalating it then (steer →
+// constrain on the very next beat) punished it for work it had already ended.
+
+test('an agent that stopped after the steer is not constrained (obeyed)', () => {
+  const b = makeBreaker({ agentTokenCaps: { a: 1_000 } });
+  const s = sample('a', T0, 400, 700); // 1,100 work tokens: over the cap
+  const d1 = beat(b, 'a', s, true, T0);
+  assert.equal(d1.state.level, 'steering');
+  assert.equal(d1.action, 'steer');
+  for (let i = 1; i <= 3; i++) {
+    const d = beat(b, 'a', { ...s, ts: T0 + i * BEAT }, true, T0 + i * BEAT); // no new tokens
+    assert.equal(d.state.level, 'steering', `beat ${i}: ${d.state.reason}`);
+    assert.equal(d.action, 'none');
+    assert.match(d.state.reason, /obeyed/);
+  }
+});
+
+test('an agent that spends again after the steer is escalated', () => {
+  const b = makeBreaker({ agentTokenCaps: { a: 1_000 } });
+  beat(b, 'a', sample('a', T0, 400, 700), true, T0);                       // → steering
+  beat(b, 'a', sample('a', T0 + BEAT, 400, 700), true, T0 + BEAT);         // obeyed, held
+  const d = beat(b, 'a', sample('a', T0 + 2 * BEAT, 900, 700), true, T0 + 2 * BEAT); // spends
+  assert.equal(d.state.level, 'constrained');
+  assert.equal(d.action, 'constrain');
+  assert.doesNotMatch(d.state.reason, /obeyed/);
+});
+
+test('obeyed also holds at constrained, and the reason keeps the trip', () => {
+  const b = makeBreaker({ agentTokenCaps: { a: 1_000 } });
+  beat(b, 'a', sample('a', T0, 400, 700), true, T0);                       // → steering
+  beat(b, 'a', sample('a', T0 + BEAT, 500, 700), true, T0 + BEAT);         // → constrained
+  const d = beat(b, 'a', sample('a', T0 + 2 * BEAT, 500, 700), true, T0 + 2 * BEAT);
+  assert.equal(d.state.level, 'constrained');
+  assert.equal(d.action, 'none');
+  assert.match(d.state.reason, /^token limit: .* obeyed/);
+});
+
+test('a counter that went backwards is a new baseline, not new work', () => {
+  const b = makeBreaker();
+  for (let i = 0; i < 8; i++) b.recordToolUse('a', 'Bash', { cmd: 'same' });
+  beat(b, 'a', sample('a', T0, 1_000, 1_000), true, T0);                   // → steering (loop)
+  const d2 = beat(b, 'a', sample('a', T0 + BEAT, 10, 10), true, T0 + BEAT); // session restarted
+  assert.equal(d2.state.level, 'steering');
+  assert.match(d2.state.reason, /obeyed/);
+  const d3 = beat(b, 'a', sample('a', T0 + 2 * BEAT, 50, 10), true, T0 + 2 * BEAT); // spends from there
+  assert.equal(d3.state.level, 'constrained');
+});
+
+test('with no usage sample the ladder escalates as before', () => {
+  const b = makeBreaker();
+  for (let i = 0; i < 8; i++) b.recordToolUse('a', 'Bash', { cmd: 'same' });
+  beat(b, 'a', null, true, T0);
+  const d = beat(b, 'a', null, true, T0 + BEAT);
+  assert.equal(d.state.level, 'constrained');
+  assert.equal(d.action, 'constrain');
+});
+
+test('recovering to healthy clears the obeyed baseline', () => {
+  const b = makeBreaker();
+  for (let i = 0; i < 8; i++) b.recordToolUse('a', 'Bash', { cmd: 'same' });
+  beat(b, 'a', sample('a', T0, 100, 100), true, T0);                       // → steering
+  b.recordToolUse('a', 'Read', { file: 'new' });
+  assert.equal(beat(b, 'a', sample('a', T0 + BEAT, 100, 100), true, T0 + BEAT).state.level, 'healthy');
+  for (let i = 0; i < 8; i++) b.recordToolUse('a', 'Bash', { cmd: 'again' });
+  const d = beat(b, 'a', sample('a', T0 + 2 * BEAT, 100, 100), true, T0 + 2 * BEAT);
+  assert.equal(d.state.level, 'steering');
+  assert.equal(d.action, 'steer', 'a fresh trip is a fresh warning');
+});
+
+// ── the same warning goes to an agent once per 10 minutes ────────────────────
+
+test('an identical warning is not resent within 10 minutes', () => {
+  const w = new WarningDedupe();
+  const k = warningKey('Circuit breaker: steer', 'looping: 8× identical tool call (Bash)');
+  assert.equal(WARNING_DEDUPE_MS, 600_000);
+  assert.equal(w.shouldSend('a', k, T0), true);
+  assert.equal(w.shouldSend('a', k, T0 + BEAT), false);
+  assert.equal(w.shouldSend('a', k, T0 + WARNING_DEDUPE_MS - 1), false);
+  assert.equal(w.shouldSend('a', k, T0 + WARNING_DEDUPE_MS), true);
+});
+
+test('running totals in the reason do not make a warning new', () => {
+  const a = warningKey('Circuit breaker: steer', 'cost cap: floor total over $5 (top spender $4.12)');
+  const b = warningKey('Circuit breaker: steer', 'cost cap: floor total over $5 (top spender $4.87)');
+  assert.equal(a, b);
+  const w = new WarningDedupe();
+  assert.equal(w.shouldSend('a', a, T0), true);
+  assert.equal(w.shouldSend('a', b, T0 + BEAT), false);
+});
+
+test('a different warning, or another agent, still goes out', () => {
+  const w = new WarningDedupe();
+  const steer = warningKey('Circuit breaker: steer', 'looping: 8× identical tool call (Bash)');
+  assert.equal(w.shouldSend('a', steer, T0), true);
+  assert.equal(w.shouldSend('a', warningKey('Circuit breaker: constrain', 'looping: 9× identical tool call (Bash)'), T0), true);
+  assert.equal(w.shouldSend('a', warningKey('Circuit breaker: steer', 'error storm: 5 consecutive api errors/retries'), T0), true);
+  assert.equal(w.shouldSend('b', steer, T0), true);
+});
+
+test('forget lets a restarted agent be warned again', () => {
+  const w = new WarningDedupe();
+  const k = warningKey('Circuit breaker: steer', 'token velocity 80000/min > 60000/min');
+  w.shouldSend('a', k, T0);
+  w.forget('a');
+  assert.equal(w.shouldSend('a', k, T0 + BEAT), true);
 });
 
 process.exit(failures ? 1 : 0);
