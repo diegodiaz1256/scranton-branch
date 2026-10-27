@@ -266,7 +266,13 @@ jobs:
   publish:
     name: Publish release
     needs: [version, build, server]
-    if: needs.version.outputs.release == 'true'
+    # Not held back by one platform's build: GitHub's macOS arm64 runners can go
+    # a whole day without capacity ("not acquired by Runner … even after multiple
+    # attempts"), and Windows and Linux users waited for nothing. The check below
+    # still requires Windows, Linux and the server; "Re-run failed jobs" later
+    # builds the Mac and runs this job again, which adds its files to the same
+    # release (action-gh-release updates an existing one).
+    if: ${{ !cancelled() && needs.version.outputs.release == 'true' && needs.version.result == 'success' && needs.server.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -274,6 +280,18 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+
+      - name: Require the Windows and Linux builds
+        shell: bash
+        run: |
+          ok=1
+          for want in '*-win-x64-setup.exe' '*.AppImage' 'latest.yml' 'latest-linux.yml'; do
+            if [ -z "$(find artifacts -type f -name "$want" | head -1)" ]; then echo "::error::missing $want"; ok=0; fi
+          done
+          [ "$ok" = 1 ] || exit 1
+          if [ -z "$(find artifacts -type f -name '*.dmg' | head -1)" ]; then
+            echo "::warning::No macOS build in this run: publishing without it. Re-run the failed jobs to add it."
+          fi
 
       - name: Flatten + merge checksums
         run: |
