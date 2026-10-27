@@ -7,7 +7,7 @@ import { ensureKilled, hardKillTree } from './procKill';
 import { expandTilde } from './fs';
 import { buildPtyEnv } from './ptyEnv';
 import { homedir } from 'node:os';
-import { linuxizeText, parseWslPath, spillLongArgs, toLinuxPath, wslCommand } from './wsl';
+import { agentWslPlace, linuxizeText, spillLongArgs, toLinuxPath, wslCommand } from './wsl';
 import { spawnSize, type PtySize } from '../shared/ptySize';
 import { isRepaintEcho, repaintEchoUntil } from '../shared/ptyRepaint';
 import { appEnv } from '../shared/envName';
@@ -158,6 +158,9 @@ export interface SpawnOptions {
    *  MUST contain no embedded double-quotes (it is wrapped verbatim on Windows).
    *  `command` is still recorded for display but is not executed. */
   shellScript?: string;
+  /** A WSL floor's distro: the agent runs there even when `cwd` is a Windows
+   *  folder (wsl.ts agentWslPlace). */
+  wslDistro?: string;
 }
 
 /**
@@ -673,7 +676,7 @@ export class PtyManager {
       const isWin = process.platform === 'win32';
       // A WSL floor (main/wsl.ts): the agent runs inside the distro, so none of
       // the Windows command resolution below applies.
-      const wsl = isWin ? parseWslPath(opts.cwd) : null;
+      const wsl = isWin ? agentWslPlace(opts.cwd, opts.wslDistro) : null;
       const lower = resolved.toLowerCase();
       const directExe = lower.endsWith('.exe') || lower.endsWith('.com');
       const needsCmd = isWin && !directExe && !wsl;

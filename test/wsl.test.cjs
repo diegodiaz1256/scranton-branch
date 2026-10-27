@@ -117,3 +117,19 @@ test('.wslconfig turns on mirrored networking however the line is written', () =
   assert.ok(!wslconfigMirrored('[wsl2]\nnetworkingMode=nat\n'));
   assert.ok(!wslconfigMirrored('[wsl2]\n# networkingMode=mirrored\n'));
 });
+
+test('on a WSL floor an agent with a Windows folder runs in the distro', () => {
+  const { agentWslPlace } = loadTs('src/main/wsl.ts');
+  assert.deepEqual(agentWslPlace('C:\\Users\\d\\My Repo', 'Ubuntu'), { distro: 'Ubuntu', linuxPath: '/mnt/c/Users/d/My Repo' });
+  assert.deepEqual(agentWslPlace('\\\\wsl.localhost\\Debian\\home\\d\\r', 'Ubuntu'), { distro: 'Debian', linuxPath: '/home/d/r' });
+  assert.equal(agentWslPlace('C:\\Users\\d\\repo', null), null, 'a Windows floor keeps Windows agents');
+  assert.equal(agentWslPlace('relative\\x', 'Ubuntu'), null);
+});
+
+test('a WSL floor agent in a Windows folder has its Claude transcripts in the distro', () => {
+  const { claudeProjects } = loadTs('src/main/transcript.ts');
+  const r = claudeProjects('D:\\work\\app', 'win32', () => '\\\\wsl.localhost\\Ubuntu\\home\\d', 'Ubuntu');
+  assert.equal(r.cwd, '/mnt/d/work/app');
+  assert.equal(r.root, '\\\\wsl.localhost\\Ubuntu\\home\\d\\.claude\\projects');
+  assert.equal(claudeProjects('D:\\work\\app', 'win32', () => 'x', null).cwd, 'D:\\work\\app');
+});
