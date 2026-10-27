@@ -4,7 +4,7 @@ import { MarkdownPreview } from '@/markdown/MarkdownPreview';
 import { MermaidDiagram } from '@/markdown/MermaidDiagram';
 import { confluenceToMarkdown } from '@shared/confluenceWiki';
 import { DELIVERABLE_SORTS, compareDeliverables, ticketQuery, type DeliverableSort } from '@shared/deliverableSort';
-import { DELIVERABLE_VIEWS, bundleAssets, folderTree, groupByAgent, groupByTask, taskOfFolder, type DeliverableView, type FolderNode, type OrgEntry, type OrgGroup, type TaskInfo } from '@shared/deliverableOrganize';
+import { DELIVERABLE_VIEWS, bundleAssets, isDeliverableLike, folderTree, groupByAgent, groupByTask, taskOfFolder, type DeliverableView, type FolderNode, type OrgEntry, type OrgGroup, type TaskInfo } from '@shared/deliverableOrganize';
 import { canOpenExternally, deliverablePaths, parseDelimited, previewKind, splitPath, extOf } from '@shared/deliverables';
 import { PREVIEW_BUDGET, headOf, piecesWithin, splitMarkdown } from '@shared/previewChunks';
 import { useStore, type Agent } from '@/store/store';
@@ -73,6 +73,7 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
+  const [showAllFiles, setShowAllFiles] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
   const reload = () => setReloadTick((n) => n + 1);
   // Arriving from a task's "Open": show that task's deliverables only.
@@ -84,11 +85,18 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
 
   useEffect(() => {
     let alive = true;
-    const load = () => { void window.cth.deliverablesList().then((d) => { if (alive) setData(d); }).catch(() => {}); };
+    let soon: ReturnType<typeof setTimeout> | undefined;
+    const load = () => { void window.cth.deliverablesList().then((d) => {
+      if (!alive) return;
+      setData(d);
+      // The list came before its authors (a first git log): fetch them shortly.
+      clearTimeout(soon);
+      if (d.authorsPending) soon = setTimeout(load, 1500);
+    }).catch(() => {}); };
     load();
     // Not faster: on a WSL floor every listing crosses \\wsl.localhost.
     const id = setInterval(load, 10_000);
-    return () => { alive = false; clearInterval(id); };
+    return () => { alive = false; clearInterval(id); clearTimeout(soon); };
   }, [reloadTick]);
 
   // Names by agent id. The orchestrator is not in every roster list: fall back to the whole floor.
@@ -215,14 +223,19 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
   // "DUN-12" in the search: that ticket's deliverables, not DUN-120's too.
   const ticket = ticketQuery(q);
   const filtering = !!(q || typeFilter || byFilter);
+  // research/ also holds what agents left on the way (logs, json, scripts):
+  // listed only on request, or when that kind of file is the filter.
+  const isClutter = (i: Item): boolean => !!i.rel && !isDeliverableLike(i.name) && !i.taskIds.length;
+  const clutter = useMemo(() => items.filter((i) => isClutter(i) && (showHidden || !i.hidden)).length, [items, showHidden]);
   const shownItems = useMemo(() => items.filter((i) =>
     (showHidden || !i.hidden)
+    && (showAllFiles || !!typeFilter || !isClutter(i))
     && (!focusTask || i.taskIds.includes(focusTask))
     && (!ticket || i.taskIds.some((id) => (taskInfo.get(id)?.key ?? id).toLowerCase() === ticket))
     && (!q || ticket || `${i.name} ${i.folder} ${i.by ?? ''} ${i.abs} ${i.taskIds.map((id) => taskInfo.get(id)?.label ?? '').join(' ')}`.toLowerCase().includes(q))
     && (!typeFilter || (extOf(i.name) || 'file') === typeFilter)
     && (!byFilter || i.authors.includes(byFilter))
-  ), [items, showHidden, focusTask, ticket, q, typeFilter, byFilter, taskInfo]);
+  ), [items, showHidden, showAllFiles, focusTask, ticket, q, typeFilter, byFilter, taskInfo]);
   const cmp = useMemo(() => compareDeliverables(sort), [sort]);
   const entries = useMemo(() => bundleAssets(shownItems, cmp), [shownItems, cmp]);
   const current = selected && shownItems.some((i) => i.abs === selected) ? selected : entries[0]?.item.abs ?? null;
@@ -314,6 +327,11 @@ export function DeliverablesView({ tasks: rawTasks, roster: rawRoster }: { tasks
         <span className="pro-sub">{t('pro.dlv.sub')}</span>
         {data?.dir && (
           <div className="pro-head-end" style={{ gap: 6, flexWrap: 'wrap' }}>
+            {(clutter > 0 || showAllFiles) && (
+              <button className="pro-btn" aria-pressed={showAllFiles} onClick={() => setShowAllFiles((v) => !v)}>
+                {showAllFiles ? t('pro.dlv.documentsOnly') : t('pro.dlv.showAllFiles', { count: clutter })}
+              </button>
+            )}
             {(hidden.size > 0 || showHidden) && (
               <button className="pro-btn" aria-pressed={showHidden} onClick={() => setShowHidden((v) => !v)}>
                 {showHidden ? t('pro.dlv.hideHidden') : t('pro.dlv.showHidden', { count: hidden.size })}

@@ -127,9 +127,9 @@ import { LIST_MODELS, SIGN_IN, authProviders, piOwnModels, cleanCustomProviders,
 import { diffTasks, snapshotOf, type TaskEvent, type TaskSnapshot } from '../shared/taskHistory';
 import type { TaskEdit } from '../shared/taskEdit';
 import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, deliverablePaths, isInside, linkFor, recordElsewhere, writtenFiles, type DeliverableLink, type ElsewhereWrite } from '../shared/deliverables';
-import { isDeliverableLike } from '../shared/deliverableOrganize';
+import { isDeliverableLike, isElsewhereDeliverable } from '../shared/deliverableOrganize';
 import { matchDeliverable } from '../shared/deliverableMatch';
-import { scanDeliverables } from './deliverableScan';
+import { findArgs, parseFindListing, repoCheck, scanDeliverables, type ScanOptions } from './deliverableScan';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, hasPlaceholderHost, probeSpecFor } from '../shared/integrations';
 import { RosterStore } from './roster';
 import { buildWorkerLaunch, workerRequestProblem } from './workerLaunch';
@@ -6355,6 +6355,14 @@ function readElsewhereWrites(root: string): ElsewhereWrite[] {
     return Array.isArray(raw.files) ? raw.files.filter((f): f is ElsewhereWrite => !!f && typeof f.path === 'string' && typeof f.ts === 'number') : [];
   } catch { return []; }
 }
+/** The paths "Written elsewhere" lists: documents outside the office, not in
+ *  a repo or worktree (the project's own code and docs) or a temp folder. */
+function elsewhereDeliverables(paths: string[], root: string): string[] {
+  const docs = paths.filter((p) => !isInside(p, root) && isElsewhereDeliverable(p));
+  if (!docs.length) return docs;
+  const inRepo = repoCheck([homedir(), agentsHome()]);
+  return docs.filter((p) => !inRepo(p));
+}
 function recordElsewhereWrites(root: string, agentId: string, paths: string[], ts: number): void {
   const before = readElsewhereWrites(root);
   const name = hive.registry().agents?.[agentId]?.name ?? agentId;
@@ -6395,7 +6403,7 @@ hookServer.onStep = (agentId, e) => {
   const host = written.map((p) => (wsl ? fromLinuxPath(p, wsl.distro, () => distroHomeUnc(wsl.distro)) : p));
   // Documents written anywhere else (the hive's own files aside) are kept too,
   // so "written elsewhere" outlives the session.
-  const elsewhere = host.filter((p) => !isInside(p, root) && isDeliverableLike(p));
+  const elsewhere = elsewhereDeliverables(host, root);
   if (elsewhere.length) recordElsewhereWrites(root, agentId, elsewhere, e.ts ?? Date.now());
   const paths = host.filter((p) => isInside(p, research));
   if (!paths.length) return;
@@ -6422,7 +6430,9 @@ ipcMain.handle('deliverables:list', async () => {
   const toHost = (p: string): string => (wsl ? fromLinuxPath(p, wsl.distro, () => distroHomeUnc(wsl.distro)) : p);
   const { stat } = await import('node:fs/promises');
   const dir = join(root, DELIVERABLES_DIR);
-  const { files, total, truncated } = await scanDeliverables(dir, { skipTop: ['hires'] });
+  const started = Date.now();
+  const { files, total, truncated } = await scanResearch(dir, wsl);
+  const scanMs = Date.now() - started;
   // An agent's own hive folder (memory, inbox) is bookkeeping, not a deliverable.
   const agentsDir = join(root, 'agents');
   const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
@@ -6432,19 +6442,46 @@ ipcMain.handle('deliverables:list', async () => {
       .filter((f) => !norm(f.path).startsWith(norm(agentsDir) + '/'))
       .map((f) => ({ ...f, agentId: a.id, name: a.name }))
   ).sort((x, y) => y.ts - x.ts).slice(0, 200);
-  // Who changed each research/ file, from its git history (agents only).
+  // Who changed each research/ file, from its git history (agents only). The
+  // list does not wait for a history not read yet (a git log, through wsl.exe
+  // on a WSL floor): it comes with `authorsPending` and the view asks again.
   let authors: Record<string, { authors: string[]; last: string; lastTs: string }> = {};
-  try { authors = await hive.fileAuthorsAsync(DELIVERABLES_DIR); } catch { /* no history yet */ }
+  const history = hive.fileAuthorsAsync(DELIVERABLES_DIR).catch(() => ({}));
+  const authorsPending = !(await Promise.race([history.then(() => true), new Promise<false>((r) => setTimeout(() => r(false), 300))]));
+  if (!authorsPending) authors = await history;
   // Written elsewhere: the kept list plus this session's, documents only; a
-  // file deleted since drops out.
-  const kept = recordElsewhere(readElsewhereWrites(root), written
-    .filter((w) => !isInside(w.path, root) && isDeliverableLike(w.path))
+  // file deleted since (or no longer counted) drops out.
+  const sessionDocs = new Set(elsewhereDeliverables(written.map((w) => w.path), root));
+  const keptAll = recordElsewhere(readElsewhereWrites(root), written
+    .filter((w) => sessionDocs.has(w.path))
     .map((w) => ({ path: w.path, agentId: w.agentId, name: w.name, ts: w.ts, created: w.created })));
+  const allowed = new Set(elsewhereDeliverables(keptAll.map((w) => w.path), root));
+  const kept = keptAll.filter((w) => allowed.has(w.path));
   const elsewhere = (await Promise.all(kept.slice(-200).map(async (w) => {
     try { const s = await stat(w.path); return s.isFile() ? { ...w, size: s.size, mtime: s.mtimeMs } : null; } catch { return null; }
   }))).filter((w): w is NonNullable<typeof w> => !!w).reverse();
-  return { root, dir, distro: wsl?.distro ?? null, files, total, truncated, written, elsewhere, links: readDeliverableLinks(), hidden: readHiddenDeliverables(), authors };
+  // A slow listing says where the time went (log.jsonl), so it can be found on the machine it happens on.
+  const ms = Date.now() - started;
+  if (ms > 1500) try { hive.appendLog({ kind: 'deliverables-slow', ms, scanMs, files: total, elsewhere: kept.length, wsl: !!wsl, authorsPending }); } catch { /* best-effort */ }
+  return { root, dir, distro: wsl?.distro ?? null, files, total, truncated, written, elsewhere, links: readDeliverableLinks(), hidden: readHiddenDeliverables(), authors, authorsPending };
 });
+/** research/ newest first. On a WSL floor one `find` inside the distro does
+ *  the walk; if that fails, the walk over \\wsl.localhost. */
+async function scanResearch(dir: string, wsl: { distro: string } | null): ReturnType<typeof scanDeliverables> {
+  const opts: ScanOptions = { skipTop: ['hires'] };
+  const inDistro = wsl ? parseWslPath(dir) : null;
+  if (inDistro) {
+    try {
+      const out = await runInDistroAsync(inDistro.distro, 'find', findArgs(inDistro.linuxPath, opts), '/');
+      return parseFindListing(out, dir, opts);
+    } catch (e) {
+      // No research/ yet is an empty list, not a reason to walk over \\wsl.localhost.
+      if (/No such file/i.test(String((e as { stderr?: unknown }).stderr ?? e))) return { files: [], total: 0, truncated: false };
+      console.warn('[deliverables] find in the distro failed, walking the folder instead:', e);
+    }
+  }
+  return scanDeliverables(dir, opts);
+}
 /** A deliverable path as the hive repo names it, or null when outside research/. */
 function deliverableRel(p: unknown): string | null {
   const root = hive.enabled() ? hive.root() : null;
