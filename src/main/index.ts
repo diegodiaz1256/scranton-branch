@@ -93,7 +93,7 @@ import * as integrations from './integrations';
 import { applyMissionRequest, type MissionLike } from '../shared/missionRequests';
 import { cleanCustomBundles } from '../shared/roleBundles';
 import { Factories } from './factories';
-import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toLinuxPath, toWslUnc, mirroredNetworking, parseWslPath, probeInDistro, WSL_INSTALL, wslAgentTmpDir } from './wsl';
+import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toLinuxPath, toWslUnc, mirroredNetworking, distroMirrored, parseWslPath, probeInDistro, WSL_INSTALL, wslAgentTmpDir } from './wsl';
 import { WslBridge } from './wslBridge';
 import { appImageRelaunch } from './appImageLauncher';
 import { McpServers } from './mcpServers';
@@ -5014,12 +5014,14 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // directly ONLY with mirrored networking. Otherwise some other program
       // holds that port and agents would hand it their tokens and API keys:
       // refuse to start rather than point the agent there.
-      const mirrored = mirroredNetworking();
+      // Asked of the distro only when a port is taken (wslinfo costs a wsl.exe call).
+      let mirrored: boolean | undefined;
       for (const l of listeners) {
         spawnStep(opts.id, `WSL bridge: ${l.name}`);
         const p = await bridge.ensure(l);
         spawnStep(opts.id, `WSL bridge: ${l.name} → ${p}`);
         if (l.name === 'hooks' && typeof p === 'number') opts.env = { ...(opts.env ?? {}), HIVE_SOCK: `tcp://127.0.0.1:${p}` };
+        if (p === 'direct' && mirrored === undefined) mirrored = await distroMirrored(wslLoc.distro);
         if (typeof p === 'number' || (p === 'direct' && mirrored)) continue;
         console.warn(`[wsl-bridge] ${l.name}: ${p}`);
         const what = l.name.split(':')[0];
