@@ -1,10 +1,9 @@
-# Scranton Branch 1.3.1
+# Scranton Branch 1.3.2
 
 ## What's new
 
-- **pi agents on WSL start again.** pi's hive prompt and its sandbox made the `wsl.exe` command line longer than Windows allows, and the agent never started ("error 206"), restoring an old pi session included. Long arguments now reach the distro through the environment.
-- **Mirrored networking is recognised.** A WSL already running with mirrored networking was told "port already in use inside WSL" on every retry unless `.wslconfig` spelled it exactly. The app now asks the distro itself.
-- **Deliverables lists deliverables.** "Written elsewhere" keeps documents and tables only, never files inside a repo, a worktree or a temp folder. research/ keeps logs, json and scripts behind "Show all files". On a WSL floor the list opens faster: one search inside the distro, and it no longer waits for the authors' history.
+- **pi agents on a WSL floor start, whatever their folder.** An agent given a Windows folder (`C:\…`) on a WSL floor was started on Windows while the office had prepared it for the distro, and pi's sandbox ended in "the command line is too long". A WSL floor's agents now all run in its distro, a Windows folder as `/mnt/c/…`.
+- **pi sessions restore.** pi saves a session only once its model has answered; restoring an agent whose session was never saved asked pi for a file that did not exist, and it closed at once. It now starts fresh.
 
 ## License
 
@@ -14,6 +13,7 @@ From 1.0.0 Scranton Branch is licensed under the **Apache License 2.0**. If you 
 
 | Version | Highlights |
 |---|---|
+| 1.3.1 | pi agents start on WSL again, mirrored networking recognised, Deliverables lists documents and opens faster. |
 | 1.3.0 | Any agent can start temps, agents export to a file, context cleared on a task switch, prompts no longer sit unsent. |
 | 1.2.1 | Project folder names on Windows and WSL, costs closer to real, a quieter breaker, no standup on new installs. |
 | 1.2.0 | Agents cannot escape the sandbox, SSH keys and cloud logins hidden, critical connections, Deliverables redone. |
@@ -54,26 +54,26 @@ From 1.0.0 Scranton Branch is licensed under the **Apache License 2.0**. If you 
 ### macOS
 | | |
 |---|---|
-| Universal (Apple Silicon + Intel) | [`Scranton-Branch-1.3.1-mac-universal.dmg`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.1-mac-universal.dmg) |
+| Universal (Apple Silicon + Intel) | [`Scranton-Branch-1.3.2-mac-universal.dmg`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.2-mac-universal.dmg) |
 
 ### Windows
 | | |
 |---|---|
-| Installer (x64), *recommended* | [`Scranton-Branch-1.3.1-win-x64-setup.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.1-win-x64-setup.exe) |
-| Portable (x64, no install) | [`Scranton-Branch-1.3.1-win-x64-portable.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.1-win-x64-portable.exe) |
+| Installer (x64), *recommended* | [`Scranton-Branch-1.3.2-win-x64-setup.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.2-win-x64-setup.exe) |
+| Portable (x64, no install) | [`Scranton-Branch-1.3.2-win-x64-portable.exe`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.2-win-x64-portable.exe) |
 
 ### Linux
 | | |
 |---|---|
-| AppImage (x86_64) | [`Scranton-Branch-1.3.1-linux-x86_64.AppImage`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.1-linux-x86_64.AppImage) |
-| Server, no GUI (x64) | [`scranton-branch-server-1.3.1-linux-x64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.3.1-linux-x64.tar.gz) |
-| Server, no GUI (arm64) | [`scranton-branch-server-1.3.1-linux-arm64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.3.1-linux-arm64.tar.gz) |
+| AppImage (x86_64) | [`Scranton-Branch-1.3.2-linux-x86_64.AppImage`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/Scranton-Branch-1.3.2-linux-x86_64.AppImage) |
+| Server, no GUI (x64) | [`scranton-branch-server-1.3.2-linux-x64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.3.2-linux-x64.tar.gz) |
+| Server, no GUI (arm64) | [`scranton-branch-server-1.3.2-linux-arm64.tar.gz`](https://github.com/diegodiaz1256/scranton-branch/releases/latest/download/scranton-branch-server-1.3.2-linux-arm64.tar.gz) |
 
 Server: unpack, then run `sudo ./install.sh`. Setup, Docker and secrets are in [SERVER.md](https://github.com/diegodiaz1256/scranton-branch/blob/main/SERVER.md).
 
 Builds are not code-signed yet: macOS asks you to allow the app in System Settings → Privacy & Security, and Windows SmartScreen asks you to confirm ("More info" → "Run anyway").
 
-Source: [`v1.3.1`](https://github.com/diegodiaz1256/scranton-branch/archive/refs/tags/v1.3.1.tar.gz)
+Source: [`v1.3.2`](https://github.com/diegodiaz1256/scranton-branch/archive/refs/tags/v1.3.2.tar.gz)
 
 ## About Scranton Branch
 
