@@ -1,3 +1,3 @@
-- Any agent can start temps, with a quota you set.
-- Export an agent to a file without secrets, and import it.
-- Context cleared on a task switch, with a handoff note; prompts no longer sit unsent.
+- pi agents on WSL start again, and their old sessions restore (no more error 206).
+- WSL with mirrored networking is detected even when .wslconfig doesn't say so.
+- Deliverables lists documents, not repo files or scratch, and opens faster on WSL.
