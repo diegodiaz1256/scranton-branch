@@ -67,6 +67,15 @@ const DELIVERABLE_LIKE = new Set([...DOCUMENTS, 'mmd', 'mermaid', 'csv', 'tsv', 
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'mp4', 'webm', 'mov', 'mp3', 'wav']);
 export const isDeliverableLike = (name: string): boolean => DELIVERABLE_LIKE.has(extOf(name));
 
+/** What "Written elsewhere" keeps: documents and tables an agent wrote outside
+ *  the office. Not notes, pictures or media (screenshots, scratch files), and
+ *  nothing in a temp folder. Files inside a repo are left out by the caller,
+ *  which can look for `.git` on disk: that is the project's code and docs. */
+const ELSEWHERE_LIKE = new Set([...DOCUMENTS, 'mmd', 'mermaid', 'csv', 'tsv', 'xlsx', 'ods']);
+const TEMP_DIR = /(^|\/)(tmp|temp|var\/folders)\//i;
+export const isElsewhereDeliverable = (path: string): boolean =>
+  ELSEWHERE_LIKE.has(extOf(path)) && !TEMP_DIR.test(path.replace(/\\/g, '/'));
+
 const dirOf = (rel: string): string => { const i = rel.lastIndexOf('/'); return i < 0 ? '' : rel.slice(0, i); };
 const stem = (name: string): string => { const i = name.lastIndexOf('.'); return (i > 0 ? name.slice(0, i) : name).toLowerCase(); };
 // html first: it is what a proposal or report is usually written to be read as.

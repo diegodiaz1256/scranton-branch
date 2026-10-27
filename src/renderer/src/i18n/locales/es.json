@@ -2756,6 +2756,8 @@
       "openFailed": "No se pudo abrir.",
       "showAll": "Ver todo",
       "noneForTask": "Aún no hay nada para esta tarea.",
+      "showAllFiles": "Mostrar todos los archivos ({{count}} más)",
+      "documentsOnly": "Solo documentos",
       "showHidden": "Mostrar ocultos ({{count}})",
       "hideHidden": "Ocultar ocultos",
       "hiddenTag": "oculto",
