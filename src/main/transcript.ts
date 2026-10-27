@@ -2,7 +2,7 @@ import { closeSync, cpSync, existsSync, fstatSync, mkdirSync, openSync, readSync
 import os from 'node:os';
 import path from 'node:path';
 import { estimateCostUsd, normalizeModel } from './pricing';
-import { distroHomeUnc, parseWslPath } from './wsl';
+import { agentWslPlace, distroHomeUnc, wslFloorDistro } from './wsl';
 
 /** Where Claude Code keeps transcripts for an agent that runs in `cwd`, and
  *  `cwd` as Claude itself spells it. An agent on a WSL floor runs inside the
@@ -11,9 +11,11 @@ import { distroHomeUnc, parseWslPath } from './wsl';
 export function claudeProjects(
   cwd: string,
   platform: string = process.platform,
-  homeOf: (distro: string) => string | null = distroHomeUnc
+  homeOf: (distro: string) => string | null = distroHomeUnc,
+  floorDistro: string | null = wslFloorDistro()
 ): { root: string; cwd: string } {
-  const w = platform === 'win32' ? parseWslPath(cwd) : null;
+  // A Windows folder on a WSL floor too: that agent runs in the distro (/mnt/c/…).
+  const w = platform === 'win32' ? agentWslPlace(cwd, floorDistro) : null;
   const home = w ? homeOf(w.distro) : null;
   if (w && home) return { root: path.win32.join(home, '.claude', 'projects'), cwd: w.linuxPath };
   return { root: path.join(os.homedir(), '.claude/projects'), cwd };

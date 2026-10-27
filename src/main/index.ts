@@ -93,7 +93,7 @@ import * as integrations from './integrations';
 import { applyMissionRequest, type MissionLike } from '../shared/missionRequests';
 import { cleanCustomBundles } from '../shared/roleBundles';
 import { Factories } from './factories';
-import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toLinuxPath, toWslUnc, mirroredNetworking, distroMirrored, parseWslPath, probeInDistro, WSL_INSTALL, wslAgentTmpDir } from './wsl';
+import { createWslOffice, describeWslError, distroHomeUnc, fromLinuxPath, runInDistroAsync, listDistros, toLinuxPath, toWslUnc, mirroredNetworking, distroMirrored, parseWslPath, agentWslPlace, setWslFloorSource, probeInDistro, WSL_INSTALL, wslAgentTmpDir } from './wsl';
 import { WslBridge } from './wslBridge';
 import { appImageRelaunch } from './appImageLauncher';
 import { McpServers } from './mcpServers';
@@ -129,6 +129,7 @@ import type { TaskEdit } from '../shared/taskEdit';
 import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, deliverablePaths, isInside, linkFor, recordElsewhere, writtenFiles, type DeliverableLink, type ElsewhereWrite } from '../shared/deliverables';
 import { isDeliverableLike, isElsewhereDeliverable } from '../shared/deliverableOrganize';
 import { matchDeliverable } from '../shared/deliverableMatch';
+import { piSessionSaved } from './piSession';
 import { findArgs, parseFindListing, repoCheck, scanDeliverables, type ScanOptions } from './deliverableScan';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, hasPlaceholderHost, probeSpecFor } from '../shared/integrations';
 import { RosterStore } from './roster';
@@ -398,6 +399,8 @@ const hive = new HiveManager(
 );
 // Hive commits run queued and async in the app, never blocking this thread.
 hive.setAsyncCommits(true);
+// A WSL floor's agents run in its distro whatever their folder (transcripts follow).
+setWslFloorSource(() => hive.wslRoot()?.distro);
 // #7C — operator control state (pause/gate/steer/halt), read by the HookServer
 // when deciding hook returns.
 const control = new ControlRegistry();
@@ -4413,7 +4416,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     const place: PiSandboxPlace = wslFloor ? 'wsl' : process.platform === 'linux' ? 'linux' : process.platform === 'darwin' ? 'mac' : 'windows';
     try { hive.appendLog({ kind: 'spawn-refused', agentId: opts.hive.id, reason: 'pi without an OS sandbox (piRequireSandbox)' }); } catch { /* log is best-effort */ }
     const res = ptyManager.spawn(
-      { id: opts.id, cwd: opts.cwd, command: opts.command, cols: opts.cols, rows: opts.rows, shellScript: piNoSandboxScript(place, wslFloor?.distro) },
+      { id: opts.id, cwd: opts.cwd, command: opts.command, cols: opts.cols, rows: opts.rows, shellScript: piNoSandboxScript(place, wslFloor?.distro), wslDistro: wslFloor?.distro },
       owner
     );
     syncKeepAwake();
@@ -4436,7 +4439,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // isn't archived and no worktree is torn down) before the relaunch takes over.
   {
     const bin = opts.command.trim().split(/\s+/)[0] || opts.command;
-    const onWsl = process.platform === 'win32' && !!parseWslPath(opts.cwd);
+    const onWsl = process.platform === 'win32' && !!agentWslPlace(opts.cwd, hive.wslRoot()?.distro);
     // Another agent is already installing this CLI: wait for it instead of
     // starting a second install over the same files.
     const inFlight = bin && !opts.noAutoInstall && !onWsl ? installsInFlight.get(bin) : undefined;
@@ -4828,7 +4831,14 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // silently ignored it and started a brand-new empty session.
     const typedSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
     const sid = typedSid || (opts.resume === true ? hive.lastSession(opts.hive.id) : undefined);
-    if (sid && rf) {
+    // pi saves a session only once its model has answered: an id it reported but
+    // never wrote makes `pi --session <id>` exit ("No session found"), and the
+    // restored agent died at once. Start it fresh instead.
+    const piDir = (opts.env ?? {}).PI_CODING_AGENT_DIR;
+    if (sid && rf && provider === 'pi' && piDir && !piSessionSaved(piDir, sid)) {
+      console.warn(`[resume] pi session "${sid}" was never saved - starting fresh`);
+      if (typedSid) resumeNotFound = true;
+    } else if (sid && rf) {
       const args = opts.args ?? [];
       if (!args.includes(rf)) { args.push(rf, sid); opts.args = args; didResume = true; }
     } else if (sid && rsub) {
@@ -4997,7 +5007,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // telemetry through this distro's bridge (wslBridge.ts) — no mirrored
   // networking needed. The hook server is a named pipe on Windows, so agents get
   // the bridge's TCP port instead.
-  const wslLoc = process.platform === 'win32' ? parseWslPath(opts.cwd) : null;
+  const wslLoc = process.platform === 'win32' ? agentWslPlace(opts.cwd, hive.wslRoot()?.distro) : null;
   if (wslLoc) {
     try {
       const bridge = wslBridgeFor(wslLoc.distro);
@@ -5050,7 +5060,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     }
   }
   spawnStep(opts.id, 'starting the terminal');
-  const res = ptyManager.spawn(opts, owner);
+  const res = ptyManager.spawn({ ...opts, wslDistro: hive.wslRoot()?.distro }, owner);
   spawnStep(opts.id, res.ok ? 'started' : `failed: ${res.error}`);
   if (res.ok) analytics.track('agent_spawned', { provider });
   else analytics.track('agent_spawn_failed', { provider, reason: spawnFailReason(res.error) });

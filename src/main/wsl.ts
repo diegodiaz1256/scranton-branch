@@ -32,6 +32,26 @@ export function parseWslPath(p: string | null | undefined): WslLocation | null {
   return { distro: m[2], linuxPath };
 }
 
+/** Where an agent with this folder runs: in the distro of a `\\wsl.localhost\…`
+ *  folder, or, on a WSL floor (`floorDistro`), in that distro for a Windows
+ *  folder too (C:\x → /mnt/c/x). A floor's agents all run in its distro: the hive
+ *  sets them up for it (hooks, bubblewrap), so starting one on Windows because
+ *  its folder is C:\… ran pi's bubblewrap through cmd.exe ("the command line is
+ *  too long"). The folder stays a Windows path for the app, which cannot reach
+ *  /mnt/c through \\wsl.localhost. */
+export function agentWslPlace(cwd: string | null | undefined, floorDistro?: string | null): WslLocation | null {
+  const w = parseWslPath(cwd);
+  if (w) return w;
+  if (!floorDistro || !cwd || !/^[A-Za-z]:[\\/]/.test(cwd.trim())) return null;
+  return { distro: floorDistro, linuxPath: toLinuxPath(cwd.trim(), floorDistro) ?? cwd };
+}
+
+let floorDistroSource: () => string | null | undefined = () => null;
+/** Where code without the hive at hand (transcripts) learns the floor's distro. */
+export function setWslFloorSource(source: () => string | null | undefined): void { floorDistroSource = source; }
+/** The open floor's distro when it is a WSL floor (on Windows), else null. */
+export function wslFloorDistro(): string | null { try { return floorDistroSource() ?? null; } catch { return null; } }
+
 export function isWslPath(p: string | null | undefined): boolean {
   return parseWslPath(p) !== null;
 }
