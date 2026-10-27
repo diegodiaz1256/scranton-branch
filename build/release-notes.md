@@ -1,2 +1,3 @@
 - pi agents in a Windows folder on a WSL floor start again, inside the distro.
 - Restoring a pi agent whose session was never saved starts it fresh.
+- Claude agents in a Windows folder on a WSL floor keep their cost and history.
