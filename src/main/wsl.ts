@@ -132,6 +132,39 @@ const WSL_SETUP = [
 ];
 export const WSL_PRELUDE = [...WSL_SETUP, 'exec "$@"'].join('; ');
 
+/** Arguments longer than this ride in the environment instead of argv. */
+export const WSL_ARG_SPILL = 2000;
+/** One variable's share of a spilled argument (Windows caps a variable at 32767). */
+const WSL_ARG_CHUNK = 16000;
+const SPILL_MARK = '@@md-env-arg:';
+/** WSL_PRELUDE that first puts spilled arguments back together: a mark
+ *  `@@md-env-arg:NAME:N` becomes the concatenation of NAME_0..NAME_{N-1},
+ *  which are then unset so the agent's own processes never see them. */
+export const WSL_PRELUDE_SPILLED = [
+  ...WSL_SETUP,
+  `a=(); for x in "$@"; do case "$x" in "${SPILL_MARK}"*) n="\${x#${SPILL_MARK}}"; v=""; for ((i=0; i<\${n##*:}; i++)); do k="\${n%:*}_$i"; v+="\${!k}"; unset "$k"; done; a+=("$v");; *) a+=("$x");; esac; done`,
+  'exec "${a[@]}"'
+].join('; ');
+
+/** Long arguments out of argv. wsl.exe's whole command line is capped at
+ *  32767 characters by CreateProcess, and node-pty escapes every quote and
+ *  newline on top: pi's hive prompt (a positional argument) plus its
+ *  bubblewrap sandbox went past it, and the agent never started ("error
+ *  206", ERROR_FILENAME_EXCED_RANGE). Each long one becomes a mark in argv
+ *  and its text goes in MD_ARG_<i>_<chunk>, handed over through WSLENV, so
+ *  the caller must pass the returned env to wslCommand and to the process. */
+export function spillLongArgs(args: string[]): { args: string[]; env: Record<string, string> } {
+  const env: Record<string, string> = {};
+  const out = args.map((a, i) => {
+    if (a.length <= WSL_ARG_SPILL) return a;
+    const name = `MD_ARG_${i}`;
+    let n = 0;
+    for (let at = 0; at < a.length; at += WSL_ARG_CHUNK) env[`${name}_${n++}`] = a.slice(at, at + WSL_ARG_CHUNK);
+    return `${SPILL_MARK}${name}:${n}`;
+  });
+  return { args: out, env };
+}
+
 /**
  * Run a shell `command` inside `distro` with secrets in its environment, for
  * runners (envVault.ts). The values never go on a command line (other
@@ -217,9 +250,11 @@ export function wslCommand(
 ): { file: string; args: string[]; env: Record<string, string> } {
   const vars = Object.fromEntries(Object.entries(env).filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k)));
   const names = Object.keys(vars);
+  // Arguments put through spillLongArgs (whose env the caller passes here) are rebuilt first.
+  const prelude = args.some((a) => a.startsWith(SPILL_MARK)) ? WSL_PRELUDE_SPILLED : WSL_PRELUDE;
   return {
     file: 'wsl.exe',
-    args: ['-d', distro, '--cd', cwd, '--exec', 'bash', '-lc', WSL_PRELUDE, 'bash', file, ...args],
+    args: ['-d', distro, '--cd', cwd, '--exec', 'bash', '-lc', prelude, 'bash', file, ...args],
     env: names.length ? { ...vars, WSLENV: [...names, ...(inherited ? [inherited] : [])].join(':') } : {}
   };
 }

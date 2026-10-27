@@ -6,7 +6,7 @@ import { resolveCommand, userShellPath } from './shellEnv';
 import { expandTilde } from './fs';
 import { projectDir } from './transcript';
 import { ensureKilled } from './procKill';
-import { linuxizeText, parseWslPath, wslCommand } from './wsl';
+import { linuxizeText, parseWslPath, spillLongArgs, wslCommand } from './wsl';
 
 /**
  * Shared helper: run a HIDDEN interactive claude session (ephemeral PTY) and
@@ -140,7 +140,8 @@ export function runHiddenClaude(prompt: string, opts: HiddenClaudeOptions): Prom
     if (wsl) {
       const env: Record<string, string> = {};
       for (const [k, v] of Object.entries(opts.env ?? {})) if (typeof v === 'string') env[k] = linuxizeText(v, wsl.distro);
-      const inv = wslCommand(wsl.distro, wsl.linuxPath, binary, args.map((a) => linuxizeText(a, wsl.distro)), env);
+      const spilled = spillLongArgs(args.map((a) => linuxizeText(a, wsl.distro)));
+      const inv = wslCommand(wsl.distro, wsl.linuxPath, binary, spilled.args, { ...env, ...spilled.env });
       spawnFile = inv.file;
       spawnArgs = inv.args;
       wslEnv = inv.env;

@@ -7,7 +7,7 @@ import { ensureKilled, hardKillTree } from './procKill';
 import { expandTilde } from './fs';
 import { buildPtyEnv } from './ptyEnv';
 import { homedir } from 'node:os';
-import { linuxizeText, parseWslPath, toLinuxPath, wslCommand } from './wsl';
+import { linuxizeText, parseWslPath, spillLongArgs, toLinuxPath, wslCommand } from './wsl';
 import { spawnSize, type PtySize } from '../shared/ptySize';
 import { isRepaintEcho, repaintEchoUntil } from '../shared/ptyRepaint';
 import {
@@ -690,7 +690,8 @@ export class PtyManager {
         const args = typeof opts.shellScript === 'string'
           ? ['-lc', opts.shellScript]
           : (opts.args ?? []).map((a) => linuxizeText(a, wsl.distro));
-        const inv = wslCommand(wsl.distro, wsl.linuxPath, cmd, args, env);
+        const spilled = spillLongArgs(args);
+        const inv = wslCommand(wsl.distro, wsl.linuxPath, cmd, spilled.args, { ...env, ...spilled.env });
         file = inv.file;
         spawnArgs = inv.args;
         wslEnv = inv.env;
