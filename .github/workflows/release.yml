@@ -76,11 +76,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS is off for now: GitHub's macOS arm64 runners have had no
-          # capacity (the job sat ~15 min in the queue, then was dropped), and
-          # every release waited for it. Put these two lines back to ship it again.
-          # - os: macos-latest
-          #   args: --mac
+          - os: macos-latest
+            args: --mac
           - os: windows-2022
             args: --win
           - os: ubuntu-24.04
