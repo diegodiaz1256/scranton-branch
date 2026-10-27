@@ -108,3 +108,12 @@ test('a WSL agent\'s Claude transcripts live in the distro home, keyed by the Li
   const plain = claudeProjects('/home/d/x', 'linux', () => { throw new Error('no wsl here'); });
   assert.equal(plain.cwd, '/home/d/x');
 });
+
+test('.wslconfig turns on mirrored networking however the line is written', () => {
+  const { wslconfigMirrored } = loadTs('src/main/wsl.ts');
+  assert.ok(wslconfigMirrored('[wsl2]\nnetworkingMode=mirrored\n'));
+  assert.ok(wslconfigMirrored('[wsl2]\r\nnetworkingMode = "Mirrored"  # set by IT\r\n'));
+  assert.ok(wslconfigMirrored("[wsl2]\nnetworkingmode='mirrored' ; note\n"));
+  assert.ok(!wslconfigMirrored('[wsl2]\nnetworkingMode=nat\n'));
+  assert.ok(!wslconfigMirrored('[wsl2]\n# networkingMode=mirrored\n'));
+});

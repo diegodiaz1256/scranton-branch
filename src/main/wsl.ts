@@ -351,11 +351,30 @@ export function createWslOffice(distro: string, name: string): { ok: boolean; pa
   }
 }
 
+/** Does this .wslconfig text turn on mirrored networking? Quotes and a
+ *  trailing comment are allowed, as WSL itself reads them. */
+export function wslconfigMirrored(cfg: string): boolean {
+  return /^\s*networkingMode\s*=\s*["']?mirrored["']?\s*(?:[#;].*)?$/im.test(cfg);
+}
+
 /** Does .wslconfig turn on mirrored networking (agents reach the app on localhost)? */
 export function mirroredNetworking(): boolean {
   try {
-    const cfg = readFileSync(join(homedir(), '.wslconfig'), 'utf8');
-    return /^\s*networkingMode\s*=\s*mirrored\s*$/im.test(cfg);
+    return wslconfigMirrored(readFileSync(join(homedir(), '.wslconfig'), 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+/** Is the distro actually running with mirrored networking? .wslconfig is
+ *  not the only way to turn it on (the WSL Settings app, a company policy),
+ *  and a laptop already mirrored was told "port already in use inside WSL"
+ *  on every retry until the line was added to the file. `wslinfo` (WSL 2.0+)
+ *  answers from the running distro; when it is missing, .wslconfig decides. */
+export async function distroMirrored(distro: string): Promise<boolean> {
+  if (mirroredNetworking()) return true;
+  try {
+    return (await runInDistroAsync(distro, 'wslinfo', ['--networking-mode'])).trim().toLowerCase() === 'mirrored';
   } catch {
     return false;
   }
