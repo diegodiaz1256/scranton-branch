@@ -1,3 +1,2 @@
-- pi agents on WSL start again, and their old sessions restore (no more error 206).
-- WSL with mirrored networking is detected even when .wslconfig doesn't say so.
-- Deliverables lists documents, not repo files or scratch, and opens faster on WSL.
+- pi agents in a Windows folder on a WSL floor start again, inside the distro.
+- Restoring a pi agent whose session was never saved starts it fresh.
