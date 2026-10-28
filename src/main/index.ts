@@ -98,6 +98,9 @@ import { WslBridge } from './wslBridge';
 import { appImageRelaunch } from './appImageLauncher';
 import { McpServers } from './mcpServers';
 import { EnvVault, fingerprintOf, type ProposalAnswer } from './envVault';
+import { readRunnerCode } from './runnerCode';
+import { runHiddenClaude } from './hiddenClaude';
+import { explainRunnerPrompt, type RunnerCodeFile } from '../shared/runnerCode';
 import { addConnection, connectionAccessFor, setConnectionAccess, connectionKeyStored, connectionLaunchEnv, instancesOf, listConnections, removeConnection, renameConnection, serviceOf, setConnectionEnabled, setConnectionScope, setConnectionSecret, testConnection } from './connections';
 import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
@@ -721,8 +724,8 @@ ipcMain.handle('fortress:uninstall', () => {
 
 // Environment & secrets (envVault.ts): agents use secrets, never see them.
 /** Runner proposals waiting for the human in the window, by id. */
-interface RunnerProposalRequest { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[] }
-const pendingProposals = new Map<string, { req: RunnerProposalRequest; settle: (a: ProposalAnswer) => void }>();
+interface RunnerProposalRequest { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[]; files: RunnerCodeFile[] }
+const pendingProposals = new Map<string, { req: RunnerProposalRequest; cwd?: string; settle: (a: ProposalAnswer) => void; explain?: Promise<{ ok: boolean; text?: string; error?: string }> }>();
 
 const envVault = new EnvVault({
   readVars: () => readConfig().envVars ?? [],
@@ -746,17 +749,20 @@ const envVault = new EnvVault({
     refocusAfterDialog(win);
     return response === 0 ? 'once' : response === 1 ? 'always' : 'deny';
   },
-  approveProposal: async ({ proposal, agentName, missing }) => {
+  approveProposal: async ({ proposal, agentName, missing, cwd }) => {
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
     // In the app's own window: translated, and the human can create the
     // secrets the runner needs right there (renderer: RunnerProposalModal).
     if (win && !win.webContents.isDestroyed()) {
       const id = randomUUID();
-      const req: RunnerProposalRequest = { id, agentName, proposal, missing };
+      // The code the command runs, read now from the agent's folder (confined
+      // to it), so the human reads what they are approving.
+      const files = await readRunnerCode(cwd, proposal.command).catch(() => []);
+      const req: RunnerProposalRequest = { id, agentName, proposal, missing, files };
       return new Promise<ProposalAnswer>((resolve) => {
         const timer = setTimeout(() => settle(false), 15 * 60_000);
         const settle = (a: ProposalAnswer) => { clearTimeout(timer); pendingProposals.delete(id); resolve(a); };
-        pendingProposals.set(id, { req, settle });
+        pendingProposals.set(id, { req, cwd, settle });
         try { win.webContents.send('env:proposal', req); } catch { settle(false); return; }
         if (win.isMinimized()) win.restore();
         win.flashFrame(true);
@@ -964,7 +970,9 @@ const integrationBroker = new IntegrationBroker({
     propose: (workerId, proposal) => {
       const agentId = ptyToAgent.get(workerId);
       const name = (agentId && hive.registry().agents?.[agentId]?.name) || agentId || workerId;
-      return envVault.proposeRunner(proposal, { agentName: name });
+      // Its folder is the one the app started it in, never a path it names.
+      const cwd = ptyManager.list().find((p) => p.id === workerId)?.cwd;
+      return envVault.proposeRunner(proposal, { agentName: name, cwd });
     },
     run: async (workerId, runnerId) => {
       // The worktree is the one the app started this agent in — never a path
@@ -5486,6 +5494,40 @@ ipcMain.handle('env:proposalAnswer', (_evt, id: unknown, answer: unknown) => {
   }
   p.settle({ ok: a.ok === true, secrets });
   return { ok: true };
+});
+// "Explain": a hidden one-shot session reads the proposal (and the code shown
+// with it) and returns a plain-language explanation for the window. It only
+// informs: approving still takes the human's click. One run per proposal.
+ipcMain.handle('env:proposalExplain', (_evt, id: unknown, lang: unknown) => {
+  const p = typeof id === 'string' ? pendingProposals.get(id) : undefined;
+  if (!p) return { ok: false, error: 'gone' };
+  if (!p.explain) {
+    p.explain = (async () => {
+      const cfg = readConfig();
+      const command = cfg.defaultCommand || 'claude';
+      // The hidden session drives Claude Code's TUI and transcript; other
+      // engines have no such one-shot here yet.
+      if (!isClaudeProvider(inferAgentProvider(command, undefined))) return { ok: false, error: 'needsClaude' };
+      const cwd = p.cwd && existsSync(p.cwd) ? p.cwd : app.getPath('userData');
+      const prompt = explainRunnerPrompt({
+        agentName: p.req.agentName, ...p.req.proposal, files: p.req.files,
+        language: typeof lang === 'string' ? lang : cfg.uiLanguage
+      });
+      const r = await runHiddenClaude(prompt, {
+        // The configured default model; the CLI's own default when unset.
+        model: cfg.defaultModel || 'sonnet',
+        cwd,
+        command,
+        // Read-only: it may look at the folder, never change it, run commands or go online.
+        disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch', 'Task', 'Agent'],
+        timeoutMs: 180_000
+      });
+      return r.ok && r.text ? { ok: true, text: r.text } : { ok: false, error: r.error ?? 'no answer' };
+    })().catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    // A failed run may be tried again.
+    void p.explain.then((r) => { if (!r.ok) p.explain = undefined; });
+  }
+  return p.explain;
 });
 ipcMain.handle('env:opStatus', () => new Promise((resolve) => {
   // Is the 1Password CLI installed? (Signing in happens through the desktop app.)
