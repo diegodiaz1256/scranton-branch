@@ -97,6 +97,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   // the rest of the wizard reads `plain` to swap copy registers.
   const [audience, setAudience] = useState<Audience | undefined>();
   const plain = audience === 'non-technical';
+  // Easy vs Full mode, offered on the last screen to non-technical users only
+  // (src/shared/uiMode.ts). Everyone else keeps Full mode by not writing it.
+  const [uiMode, setUiMode] = useState<'easy' | 'full'>('easy');
 
   const [home, setHome] = useState<string>('');
   const [repos, setRepos] = useState<string[]>([]);
@@ -221,6 +224,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     const next = await window.cth.updateConfig({
       onboardingComplete: true,
       audience: audience ?? 'technical',
+      ...(plain ? { uiMode } : {}),
       harnessHome, // the same trimmed value we just mkdir'd, not the raw field
       registeredRepos: repos,
       autoMode,
@@ -614,6 +618,34 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
             {step === 'permissions' && (
               <>
+                {/* EASY MODE — only for someone who said they are not technical.
+                    Pre-picked Easy; Full is one click, and Settings can change it. */}
+                {plain && (
+                  <>
+                    <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 10, color: 'var(--cth-ink-700)' }}>
+                      {t('onboarding.uiMode.head')}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <PersonaCard
+                        icon="sparkle"
+                        title={t('onboarding.uiMode.easyTitle')}
+                        desc={t('onboarding.uiMode.easyDesc')}
+                        selected={uiMode === 'easy'}
+                        onClick={() => setUiMode('easy')}
+                      />
+                      <PersonaCard
+                        icon="gear"
+                        title={t('onboarding.uiMode.fullTitle')}
+                        desc={t('onboarding.uiMode.fullDesc')}
+                        selected={uiMode === 'full'}
+                        onClick={() => setUiMode('full')}
+                      />
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>{t('onboarding.uiMode.note')}</div>
+                    <div style={{ height: 1, background: 'var(--cth-ink-300)', margin: '2px 0' }} />
+                  </>
+                )}
+
                 {/* AUTONOMY — merged from the old "auto mode" step (item 5). One choice
                     that maps to each engine's flag (item 6): autoMode → claude
                     bypassPermissions / codex -a never -s workspace-write (sandbox kept),

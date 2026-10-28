@@ -194,6 +194,10 @@ export interface HarnessConfig {
    *  flag lingo, 'non-technical' explains each concept in plain language. Unset =
    *  not yet chosen (treated as technical for any incidental copy). */
   audience?: 'technical' | 'non-technical';
+  /** How much of the app is on show: 'easy' keeps the daily screens in view and
+   *  folds the rest under "Advanced"; 'full' shows everything. Unset = derived
+   *  from `audience` by resolveUiMode() (src/shared/uiMode.ts). */
+  uiMode?: 'easy' | 'full';
   /** Folder where the harness keeps its own state (agent metadata, logs). */
   harnessHome: string | null;
   /** Recently-opened hive home folders (most-recent first), surfaced by the

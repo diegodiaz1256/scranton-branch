@@ -378,6 +378,8 @@ export interface HarnessConfig {
   /** Onboarding audience ('technical' | 'non-technical'); drives onboarding copy.
    *  Mirrors src/main/config.ts. */
   audience?: 'technical' | 'non-technical';
+  /** Easy vs Full mode (unset = from audience). Mirrors src/main/config.ts. */
+  uiMode?: 'easy' | 'full';
   harnessHome: string | null;
   /** Recently-opened hive home folders (most-recent first). Mirrors src/main/config.ts. */
   recentHives?: string[];

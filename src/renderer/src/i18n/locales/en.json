@@ -208,7 +208,8 @@
       "autonomyBudgets": "Autonomy & limits",
       "connections": "Tools, Slack & webhooks",
       "voice": "Voice",
-      "memoryKnowledge": "Memory & knowledge"
+      "memoryKnowledge": "Memory & knowledge",
+      "advanced": "Advanced settings"
     },
     "changeHome": {
       "newHome": "New home folder",
@@ -241,7 +242,12 @@
       "languageDesc": "Choose the language for the app interface. English is the default.",
       "dangerZone": "DANGER ZONE",
       "dangerDesc": "Reset wipes {{godName}}'s memories, the entire hive (every agent, message, task, and the board), the semantic-memory palace, and all settings - then takes you back to onboarding.",
-      "resetStartOver": "reset & start over"
+      "resetStartOver": "reset & start over",
+      "uiMode": "Easy mode or Full mode",
+      "uiModeEasy": "Easy mode",
+      "uiModeFull": "Full mode",
+      "uiModeEasyDesc": "Easy mode shows only the everyday screens. Everything else is still there, folded under Advanced.",
+      "uiModeFullDesc": "Full mode shows every screen and every setting."
     },
     "agentsModels": {
       "defaultModel": "Default agent model",
@@ -812,7 +818,15 @@
     },
     "errPickHome": "Pick a harness home folder first.",
     "errCreateHome": "could not create harness home",
-    "errEngineNotInstalled": "{{label}} is not installed. Install it and press \"check again\", or pick another engine."
+    "errEngineNotInstalled": "{{label}} is not installed. Install it and press \"check again\", or pick another engine.",
+    "uiMode": {
+      "head": "HOW MUCH SHOULD THE APP SHOW?",
+      "easyTitle": "Easy mode",
+      "easyDesc": "Just the essentials: talk to your orchestrator, follow tasks, see results and your team. The rest waits under Advanced.",
+      "fullTitle": "Full mode",
+      "fullDesc": "Every screen and setting in view, for when you want to tinker.",
+      "note": "You can switch any time in Settings, General."
+    }
   },
   "officeCards": {
     "god": "Orchestrator",
@@ -1756,7 +1770,8 @@
       "group_setup": "Setup",
       "hideMenu": "Hide the menu",
       "showMenu": "Show the menu",
-      "menu": "Menu"
+      "menu": "Menu",
+      "group_advanced": "Advanced"
     },
     "state": {
       "needsYou": "Needs you",
@@ -1897,7 +1912,10 @@
       "restartTip": "Restart only this agent's process. The rest of the office keeps running.",
       "restartConfirm": "Restart {{name}}?",
       "restartDetailResume": "Its process is stopped and started again, continuing the same conversation. Changed environment variables apply from now on.",
-      "restartDetailFresh": "Its process is stopped and started again. Its CLI cannot continue a conversation, so it starts a fresh one. Changed environment variables apply from now on."
+      "restartDetailFresh": "Its process is stopped and started again. Its CLI cannot continue a conversation, so it starts a fresh one. Changed environment variables apply from now on.",
+      "showTerminal": "Show terminal",
+      "hideTerminal": "Hide terminal",
+      "showTerminalTip": "The raw console the agent works in. You can type to it there."
     },
     "tasks": {
       "summary": "{{doing}} in progress · {{blocked}} blocked",

@@ -14,6 +14,7 @@ import { currentTicket, spendLine } from './AgentsView';
 import { StepsView } from './StepsView';
 import { ExportAgentDialog } from './AgentFileDialogs';
 import { delegations, envelopeReturning, type Delegation, type LogMessage } from '@shared/delegations';
+import { isEasyMode } from '@shared/uiMode';
 
 interface Props {
   agent: Agent;
@@ -45,7 +46,9 @@ export function AgentView({ agent, roster, tasks, directory, config, onOpen }: P
   const cap = config.agentTokenCaps?.[agent.id];
   const servers = effectiveServers(config, agent.id);
   // The terminal is for typing to the agent; the steps are for reading what it is doing.
-  const [pane, setPane] = useState<'terminal' | 'steps' | 'both'>('terminal');
+  // Easy mode opens on the readable steps, with the terminal one click away.
+  const easy = isEasyMode(config);
+  const [pane, setPane] = useState<'terminal' | 'steps' | 'both'>(() => (easy ? 'steps' : 'terminal'));
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -86,11 +89,17 @@ export function AgentView({ agent, roster, tasks, directory, config, onOpen }: P
         {!agent.isGod && !agent.isAssistant && (
           <button className="pro-btn" title={t('pro.agentFile.exportTip')} onClick={() => setExporting(true)}>{t('pro.agentFile.export')}</button>
         )}
+        {easy ? (
+          <button className="pro-btn" aria-pressed={pane !== 'steps'} title={t('pro.agent.showTerminalTip')} onClick={() => setPane(pane === 'steps' ? 'both' : 'steps')}>
+            {pane === 'steps' ? t('pro.agent.showTerminal') : t('pro.agent.hideTerminal')}
+          </button>
+        ) : (
         <div className="pro-switch" role="group" aria-label={t('pro.agent.view')}>
           {(['terminal', 'steps', 'both'] as const).map((p) => (
             <button key={p} aria-pressed={pane === p} onClick={() => setPane(p)}>{t(`pro.agent.view_${p}`)}</button>
           ))}
         </div>
+        )}
         </div>
         {restartError && <span className="pro-text" style={{ color: 'var(--cth-coral)', fontSize: 12, flexBasis: '100%' }}>{restartError}</span>}
       </div>

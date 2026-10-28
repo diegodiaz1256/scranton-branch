@@ -208,7 +208,8 @@
       "autonomyBudgets": "Autonomía y límites",
       "connections": "Herramientas, Slack y webhooks",
       "voice": "Voz",
-      "memoryKnowledge": "Memoria y conocimiento"
+      "memoryKnowledge": "Memoria y conocimiento",
+      "advanced": "Ajustes avanzados"
     },
     "changeHome": {
       "newHome": "Nueva carpeta principal",
@@ -241,7 +242,12 @@
       "languageDesc": "Elige el idioma de la interfaz. El inglés es el predeterminado.",
       "dangerZone": "ZONA DE PELIGRO",
       "dangerDesc": "Borrar elimina los recuerdos de {{godName}}, toda la colmena (cada agente, mensaje, tarea y el tablero), el palacio de memoria semántica y todos los ajustes, y te devuelve a la configuración inicial.",
-      "resetStartOver": "borrar y empezar de nuevo"
+      "resetStartOver": "borrar y empezar de nuevo",
+      "uiMode": "Modo fácil o modo completo",
+      "uiModeEasy": "Modo fácil",
+      "uiModeFull": "Modo completo",
+      "uiModeEasyDesc": "El modo fácil muestra solo las pantallas del día a día. Todo lo demás sigue ahí, plegado en Avanzado.",
+      "uiModeFullDesc": "El modo completo muestra todas las pantallas y todos los ajustes."
     },
     "agentsModels": {
       "defaultModel": "Modelo predeterminado de los agentes",
@@ -812,7 +818,15 @@
     },
     "errPickHome": "Elige primero la carpeta de la oficina.",
     "errCreateHome": "no se pudo crear la carpeta de la oficina",
-    "errEngineNotInstalled": "{{label}} no está instalado. Instálalo y pulsa «comprobar de nuevo», o elige otro motor."
+    "errEngineNotInstalled": "{{label}} no está instalado. Instálalo y pulsa «comprobar de nuevo», o elige otro motor.",
+    "uiMode": {
+      "head": "¿CUÁNTO DEBE MOSTRAR LA APP?",
+      "easyTitle": "Modo fácil",
+      "easyDesc": "Solo lo esencial: habla con tu orquestador, sigue las tareas, mira los resultados y tu equipo. Lo demás espera en Avanzado.",
+      "fullTitle": "Modo completo",
+      "fullDesc": "Todas las pantallas y ajustes a la vista, para cuando quieras trastear.",
+      "note": "Puedes cambiarlo cuando quieras en Ajustes, General."
+    }
   },
   "officeCards": {
     "god": "Orquestador",
@@ -1756,7 +1770,8 @@
       "group_setup": "Configuración",
       "hideMenu": "Ocultar el menú",
       "showMenu": "Mostrar el menú",
-      "menu": "Menú"
+      "menu": "Menú",
+      "group_advanced": "Avanzado"
     },
     "state": {
       "needsYou": "Te necesita",
@@ -1897,7 +1912,10 @@
       "restartTip": "Reinicia solo el proceso de este agente. El resto de la oficina sigue funcionando.",
       "restartConfirm": "¿Reiniciar a {{name}}?",
       "restartDetailResume": "Su proceso se detiene y vuelve a arrancar, continuando la misma conversación. Las variables de entorno cambiadas se aplican desde ahora.",
-      "restartDetailFresh": "Su proceso se detiene y vuelve a arrancar. Su CLI no puede continuar una conversación, así que empieza una nueva. Las variables de entorno cambiadas se aplican desde ahora."
+      "restartDetailFresh": "Su proceso se detiene y vuelve a arrancar. Su CLI no puede continuar una conversación, así que empieza una nueva. Las variables de entorno cambiadas se aplican desde ahora.",
+      "showTerminal": "Mostrar terminal",
+      "hideTerminal": "Ocultar terminal",
+      "showTerminalTip": "La consola en bruto donde trabaja el agente. Ahí también puedes escribirle."
     },
     "tasks": {
       "summary": "{{doing}} en curso · {{blocked}} bloqueadas",
