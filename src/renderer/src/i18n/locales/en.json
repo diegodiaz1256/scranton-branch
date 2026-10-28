@@ -1771,7 +1771,9 @@
       "hideMenu": "Hide the menu",
       "showMenu": "Show the menu",
       "menu": "Menu",
-      "group_advanced": "Advanced"
+      "group_advanced": "Advanced",
+      "group_easyOffice": "Your office",
+      "group_easyAccess": "What agents can reach"
     },
     "state": {
       "needsYou": "Needs you",
@@ -2917,6 +2919,127 @@
     "god": {
       "badge": "Orchestrator",
       "tip": "{{godName}} is the orchestrator (the \"god agent\"): it reads your requests, hands the work to the right agents, keeps them coordinated and only brings you what needs you."
+    },
+    "easy": {
+      "whatLabel": "What is this?",
+      "whenLabel": "When would I use it?",
+      "showAll": "Show all options",
+      "hideAll": "Hide all options",
+      "allTitle": "All options",
+      "nav": {
+        "automations": "Routines",
+        "memory": "What it remembers",
+        "skills": "Know-how",
+        "connections": "Apps you connect",
+        "capabilities": "What agents may do",
+        "environment": "Passwords & keys",
+        "providers": "AI engines",
+        "mcp": "Extra tools",
+        "team": "Other offices",
+        "factories": "Production lines",
+        "temps": "Temps"
+      },
+      "page": {
+        "automations": {
+          "what": "Jobs the office starts by itself: at a set time, when a message arrives, or when something changes.",
+          "when": "When you want something done every morning, or every time a customer writes, without asking each time."
+        },
+        "memory": {
+          "what": "What the office has learned and kept: notes, decisions and facts your agents can look up later.",
+          "when": "Leave it on so agents remember past work. Open it to check what they know."
+        },
+        "skills": {
+          "what": "Ready-made know-how you teach your agents, such as how to write a report or check a document.",
+          "when": "When you want a job done your way every time, instead of explaining it again."
+        },
+        "connections": {
+          "what": "The outside apps your agents may use for you, such as GitHub, Notion or Jira.",
+          "when": "When you want an agent to read or update one of your apps. Each app needs its key once, and agents never see it."
+        },
+        "capabilities": {
+          "what": "What each agent is allowed to use and do. Every agent starts fenced in, working only in its own folders.",
+          "when": "When an agent needs one of your apps, or you want to see who can do what."
+        },
+        "environment": {
+          "what": "Passwords and settings your agents can use without ever seeing them.",
+          "when": "When an agent needs a password to log in somewhere, for example a website or a database."
+        },
+        "providers": {
+          "what": "The AI services that power your agents, and the keys that pay for them.",
+          "when": "Only when you want to use an AI service other than the one you signed in to at setup."
+        },
+        "mcp": {
+          "what": "Extra tools for your agents that a technical person adds by hand.",
+          "when": "Only if someone gave you a tool to add. Otherwise you can leave this page alone."
+        },
+        "team": {
+          "what": "Link your office with other people's offices so your agents can pass each other work.",
+          "when": "When you work with someone who also uses this app."
+        },
+        "factories": {
+          "what": "Fixed step-by-step lines: a series of agents that turn something you give them into a finished result.",
+          "when": "When the same multi-step job comes up again and again and should always follow the same steps."
+        },
+        "temps": {
+          "what": "Short-lived helpers that do one job and leave.",
+          "when": "Your agents hire them by themselves. Come here only to see them or send them home."
+        }
+      },
+      "conn": {
+        "connected": "Connected ✓",
+        "needsKey": "Needs its key",
+        "off": "Off",
+        "summary": "{{connected}} of {{total}} apps connected",
+        "none": "No apps set up yet.",
+        "signoff": "You approve every result",
+        "signoffTip": "A critical connection: nothing an agent makes with it leaves without your sign-off.",
+        "setUp": "Connect an app"
+      },
+      "caps": {
+        "role": "Role",
+        "roleTip": "A role is a ready-made set of apps the agent may use. It applies the next time the agent starts.",
+        "officeDefault": "Office default",
+        "custom": "Custom (see all options)",
+        "canUse": "Can use: {{names}}",
+        "usesNothing": "Uses no outside apps",
+        "fenced": "Works inside its safety fence ✓",
+        "fencedTip": "The safety fence (sandbox) keeps the agent inside its own folders.",
+        "power_unsandboxed": "⚠ Works outside its safety fence",
+        "power_unsandboxedTip": "Runs without the sandbox: it can read and change anything your user can.",
+        "power_docker": "⚠ Can run programs with full control of this computer",
+        "power_dockerTip": "Docker access. On most computers Docker is as powerful as the administrator.",
+        "power_sshKeys": "Uses your code-site login keys",
+        "power_sshKeysTip": "SSH keys, used through the app; the agent never sees them.",
+        "power_cloudLogins": "Can read your cloud logins",
+        "power_cloudLoginsTip": "Cloud command-line logins in your home folder (AWS, Google Cloud, Azure...).",
+        "power_roam": "Can save files outside its folders",
+        "powersNote": "Extra powers are changed under all options, and each one asks you to confirm first.",
+        "noAgents": "No agents yet."
+      },
+      "env": {
+        "summary_one": "{{count}} password saved. Agents can use it but never see it.",
+        "summary_other": "{{count}} passwords saved. Agents can use them but never see them.",
+        "settings": "Other settings: {{count}}",
+        "none": "No passwords saved yet.",
+        "kind_secret": "Password",
+        "kind_op": "From 1Password",
+        "kind_plain": "Setting",
+        "add": "Add a password"
+      },
+      "memory": {
+        "label": "Remember past work",
+        "state_checking": "Checking...",
+        "state_on": "On ✓ Agents remember past work.",
+        "state_off": "Off. Agents start every job from scratch.",
+        "state_preparing": "Getting ready: downloading what it needs.",
+        "state_notInstalled": "Not set up on this computer yet. Settings, Prerequisites can install it.",
+        "turnOn": "Turn on",
+        "turnOff": "Turn off"
+      },
+      "skills": {
+        "installed": "Know-how your agents have",
+        "findMore": "Find more know-how"
+      }
     }
   },
   "hivePicker": {

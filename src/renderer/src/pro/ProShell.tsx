@@ -27,7 +27,9 @@ import { ProvidersView } from './ProvidersView';
 import { DeliverablesView } from './DeliverablesView';
 import { BootBanner } from './BootBanner';
 import { NowView } from './NowView';
-import { EASY_NAV_ESSENTIALS, isEasyMode, splitForEasyMode } from '@shared/uiMode';
+import { isEasyMode } from '@shared/uiMode';
+import { EASY_NAV_ADVANCED, EASY_NAV_GROUPS, EASY_PAGE_DECISIONS, type EasyNavGroup } from '@shared/easyConfig';
+import { EasyPage } from './EasyConfig';
 import './pro.css';
 
 /** Sections in the sidebar; their names are `pro.nav.<id>`. */
@@ -55,13 +57,11 @@ const NAV_GROUPS: Array<{ id: string; label?: string; items: ProSection[] }> = [
   { id: 'office', label: 'group_office', items: ['automations', 'memory', 'skills', 'team', 'factories'] },
   { id: 'setup', label: 'group_setup', items: ['capabilities', 'connections', 'environment', 'providers', 'mcp'] }
 ];
-/** Easy mode (src/shared/uiMode.ts): the daily pages on top, the agents under
- *  them, and every other page (Temps included) in one "Advanced" group, folded
- *  until opened. The same pages as Full mode, none removed. */
+/** Easy mode (src/shared/easyConfig.ts): the daily pages on top, then the
+ *  settings a non-technical owner does use, in two plain-named groups, the
+ *  agents, and the expert pages (Temps included) folded under "Advanced".
+ *  The same pages as Full mode, none removed. */
 const ALL_ITEMS: { id: ProSection; icon: ProIconName }[] = [...TOP, { id: 'temps', icon: 'temps' }];
-const EASY_SPLIT = splitForEasyMode(ALL_ITEMS.map((i) => i.id), EASY_NAV_ESSENTIALS);
-const EASY_MAIN = { id: 'main', items: EASY_SPLIT.essential };
-const EASY_ADVANCED = { id: 'advanced', label: 'group_advanced', items: EASY_SPLIT.advanced };
 const LS_GROUPS = 'cth.proNavGroups';
 function readGroups(): Record<string, boolean> {
   try { const v = JSON.parse(window.localStorage.getItem(LS_GROUPS) ?? '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
@@ -95,8 +95,9 @@ export function ProShell({ config }: { config: HarnessConfig }) {
     try { window.localStorage.setItem(LS_SIDE_HIDDEN, v ? '0' : '1'); } catch { /* noop */ }
     return !v;
   });
-  const toggleGroup = (id: string): void => setOpenGroups((g) => {
-    const next = { ...g, [id]: !g[id] };
+  /** `def`: the group's state before it was ever toggled (Easy groups start open). */
+  const toggleGroup = (id: string, def = false): void => setOpenGroups((g) => {
+    const next = { ...g, [id]: !(g[id] ?? def) };
     try { window.localStorage.setItem(LS_GROUPS, JSON.stringify(next)); } catch { /* private window */ }
     return next;
   });
@@ -116,20 +117,22 @@ export function ProShell({ config }: { config: HarnessConfig }) {
   };
 
   const easy = isEasyMode(config);
-  const renderGroup = (g: { id: string; label?: string; items: ProSection[] }): JSX.Element => {
-    const items = ALL_ITEMS.filter((i) => g.items.includes(i.id));
+  const renderGroup = (g: EasyNavGroup): JSX.Element => {
+    // In the group's own order (Easy groups order their pages themselves).
+    const items = g.items.map((id) => ALL_ITEMS.find((i) => i.id === id)).filter((i): i is { id: ProSection; icon: ProIconName } => !!i);
     // The group holding the open page stays open, whatever was saved.
-    const open = !g.label || openGroups[g.id] || items.some((i) => i.id === section);
+    const open = !g.label || (openGroups[g.id] ?? !!g.defaultOpen) || items.some((i) => i.id === section);
     return (
       <div key={g.id} style={{ display: 'contents' }}>
         {g.label && (
-          <button className="pro-nav pro-nav-group" aria-expanded={open} onClick={() => toggleGroup(g.id)}>
+          <button className="pro-nav pro-nav-group" aria-expanded={open} onClick={() => toggleGroup(g.id, !!g.defaultOpen)}>
             <span aria-hidden style={{ width: 16, textAlign: 'center' }}>{open ? '▾' : '▸'}</span> {t(`pro.nav.${g.label}`)}
           </button>
         )}
         {open && items.map((item) => (
           <button key={item.id} className="pro-nav" aria-current={section === item.id} onClick={() => go(item.id)} style={g.label ? { paddingInlineStart: 22 } : undefined}>
-            <ProIcon name={item.icon} /> {t(`pro.nav.${item.id}`)}
+            {/* Easy mode names the settings pages in plain words. */}
+            <ProIcon name={item.icon} /> {easy ? t(`pro.easy.nav.${item.id}`, { defaultValue: t(`pro.nav.${item.id}`) }) : t(`pro.nav.${item.id}`)}
             {item.id === 'inbox' && openAsks > 0 && <span className="pro-nav-end"><span className="pro-count">{openAsks}</span></span>}
           </button>
         ))}
@@ -157,6 +160,11 @@ export function ProShell({ config }: { config: HarnessConfig }) {
     case 'agents': page = <AgentsView roster={roster} tasks={tasks} directory={directory} asking={asking} config={config} onOpen={openAgent} />; break;
     default: page = <AgentView agent={agentInView!} roster={roster} tasks={tasks} directory={directory} config={config} onOpen={openAgent} />;
   }
+  // Easy mode: a configuration page opens with its plain explanation and its
+  // few decisions; the page above is unchanged, behind "Show all options".
+  if (easy && section && section in EASY_PAGE_DECISIONS) {
+    page = <EasyPage key={section} page={section} full={page} config={config} roster={roster} />;
+  }
 
   return (
     <div className="pro-root">
@@ -169,7 +177,7 @@ export function ProShell({ config }: { config: HarnessConfig }) {
           </span>
           <button className="pro-side-toggle" title={t('pro.nav.hideMenu')} aria-label={t('pro.nav.hideMenu')} onClick={toggleSide}>«</button>
         </div>
-        {(easy ? [EASY_MAIN] : NAV_GROUPS).map(renderGroup)}
+        {(easy ? EASY_NAV_GROUPS : NAV_GROUPS).map(renderGroup)}
 
         <div className="pro-side-label">{t('pro.nav.agents')}</div>
         <button className="pro-nav" aria-current={section === 'agents'} onClick={() => go('agents')}>
@@ -206,7 +214,7 @@ export function ProShell({ config }: { config: HarnessConfig }) {
           );
         })}
         {easy ? (
-          <><div aria-hidden style={{ height: 4, flexShrink: 0 }} />{renderGroup(EASY_ADVANCED)}</>
+          <><div aria-hidden style={{ height: 4, flexShrink: 0 }} />{renderGroup(EASY_NAV_ADVANCED)}</>
         ) : (
           <button className="pro-nav" style={{ marginTop: 4 }} aria-current={section === 'temps'} onClick={() => go('temps')}>
             <ProIcon name="temps" /> {t('pro.nav.temps')}

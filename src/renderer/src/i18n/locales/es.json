@@ -1771,7 +1771,9 @@
       "hideMenu": "Ocultar el menú",
       "showMenu": "Mostrar el menú",
       "menu": "Menú",
-      "group_advanced": "Avanzado"
+      "group_advanced": "Avanzado",
+      "group_easyOffice": "Tu oficina",
+      "group_easyAccess": "A qué pueden acceder"
     },
     "state": {
       "needsYou": "Te necesita",
@@ -2917,6 +2919,127 @@
     "god": {
       "badge": "Orquestador",
       "tip": "{{godName}} es el orquestador (el «god agent»): lee tus peticiones, reparte el trabajo entre los agentes, los coordina y solo te trae lo que te necesita."
+    },
+    "easy": {
+      "whatLabel": "¿Qué es esto?",
+      "whenLabel": "¿Cuándo lo uso?",
+      "showAll": "Ver todas las opciones",
+      "hideAll": "Ocultar todas las opciones",
+      "allTitle": "Todas las opciones",
+      "nav": {
+        "automations": "Rutinas",
+        "memory": "Lo que recuerda",
+        "skills": "Conocimientos",
+        "connections": "Apps conectadas",
+        "capabilities": "Qué pueden hacer",
+        "environment": "Contraseñas y claves",
+        "providers": "Motores de IA",
+        "mcp": "Herramientas extra",
+        "team": "Otras oficinas",
+        "factories": "Líneas de producción",
+        "temps": "Temporales"
+      },
+      "page": {
+        "automations": {
+          "what": "Trabajos que la oficina empieza sola: a una hora fija, cuando llega un mensaje o cuando algo cambia.",
+          "when": "Cuando quieres que algo se haga cada mañana, o cada vez que escribe un cliente, sin pedirlo cada vez."
+        },
+        "memory": {
+          "what": "Lo que la oficina ha aprendido y guardado: notas, decisiones y datos que tus agentes pueden consultar después.",
+          "when": "Déjala encendida para que los agentes recuerden el trabajo anterior. Ábrela para ver qué saben."
+        },
+        "skills": {
+          "what": "Conocimientos listos para enseñar a tus agentes, como escribir un informe o revisar un documento.",
+          "when": "Cuando quieres que un trabajo se haga a tu manera siempre, sin volver a explicarlo."
+        },
+        "connections": {
+          "what": "Las apps externas que tus agentes pueden usar por ti, como GitHub, Notion o Jira.",
+          "when": "Cuando quieres que un agente lea o actualice una de tus apps. Cada app necesita su clave una vez, y los agentes nunca la ven."
+        },
+        "capabilities": {
+          "what": "Qué puede usar y hacer cada agente. Todos empiezan dentro de una zona segura, trabajando solo en sus carpetas.",
+          "when": "Cuando un agente necesita una de tus apps, o quieres ver quién puede hacer qué."
+        },
+        "environment": {
+          "what": "Contraseñas y ajustes que tus agentes pueden usar sin llegar a verlos.",
+          "when": "Cuando un agente necesita una contraseña para entrar en algún sitio, por ejemplo una web o una base de datos."
+        },
+        "providers": {
+          "what": "Los servicios de IA que mueven a tus agentes, y las claves con que se pagan.",
+          "when": "Solo si quieres usar un servicio de IA distinto del que conectaste al empezar."
+        },
+        "mcp": {
+          "what": "Herramientas extra para tus agentes que añade a mano una persona técnica.",
+          "when": "Solo si alguien te dio una herramienta para añadir. Si no, puedes ignorar esta página."
+        },
+        "team": {
+          "what": "Une tu oficina con las de otras personas para que vuestros agentes se pasen trabajo.",
+          "when": "Cuando trabajas con alguien que también usa esta app."
+        },
+        "factories": {
+          "what": "Líneas fijas paso a paso: una serie de agentes que convierten lo que les das en un resultado terminado.",
+          "when": "Cuando el mismo trabajo de varios pasos se repite y debe seguir siempre los mismos pasos."
+        },
+        "temps": {
+          "what": "Ayudantes de un solo trabajo que se van al terminar.",
+          "when": "Tus agentes los contratan solos. Ven aquí solo para verlos o mandarlos a casa."
+        }
+      },
+      "conn": {
+        "connected": "Conectada ✓",
+        "needsKey": "Le falta la clave",
+        "off": "Apagada",
+        "summary": "{{connected}} de {{total}} apps conectadas",
+        "none": "Aún no hay apps configuradas.",
+        "signoff": "Apruebas cada resultado",
+        "signoffTip": "Una conexión crítica: nada de lo que un agente haga con ella sale sin tu visto bueno.",
+        "setUp": "Conectar una app"
+      },
+      "caps": {
+        "role": "Rol",
+        "roleTip": "Un rol es un conjunto de apps listo que el agente puede usar. Se aplica la próxima vez que el agente arranque.",
+        "officeDefault": "Lo de la oficina",
+        "custom": "Personalizado (ver todas las opciones)",
+        "canUse": "Puede usar: {{names}}",
+        "usesNothing": "No usa apps externas",
+        "fenced": "Trabaja dentro de su zona segura ✓",
+        "fencedTip": "La zona segura (sandbox) mantiene al agente dentro de sus carpetas.",
+        "power_unsandboxed": "⚠ Trabaja fuera de su zona segura",
+        "power_unsandboxedTip": "Funciona sin sandbox: puede leer y cambiar todo lo que tu usuario puede.",
+        "power_docker": "⚠ Puede ejecutar programas con control total de este equipo",
+        "power_dockerTip": "Acceso a Docker. En la mayoría de equipos Docker tiene el poder del administrador.",
+        "power_sshKeys": "Usa tus claves de acceso a sitios de código",
+        "power_sshKeysTip": "Claves SSH, usadas a través de la app; el agente nunca las ve.",
+        "power_cloudLogins": "Puede leer tus sesiones en la nube",
+        "power_cloudLoginsTip": "Sesiones de línea de comandos en la nube de tu carpeta personal (AWS, Google Cloud, Azure...).",
+        "power_roam": "Puede guardar archivos fuera de sus carpetas",
+        "powersNote": "Los permisos extra se cambian en todas las opciones, y cada uno te pide confirmación antes.",
+        "noAgents": "Aún no hay agentes."
+      },
+      "env": {
+        "summary_one": "{{count}} contraseña guardada. Los agentes pueden usarla pero nunca verla.",
+        "summary_other": "{{count}} contraseñas guardadas. Los agentes pueden usarlas pero nunca verlas.",
+        "settings": "Otros ajustes: {{count}}",
+        "none": "Aún no hay contraseñas guardadas.",
+        "kind_secret": "Contraseña",
+        "kind_op": "De 1Password",
+        "kind_plain": "Ajuste",
+        "add": "Añadir una contraseña"
+      },
+      "memory": {
+        "label": "Recordar el trabajo anterior",
+        "state_checking": "Comprobando...",
+        "state_on": "Encendida ✓ Los agentes recuerdan el trabajo anterior.",
+        "state_off": "Apagada. Los agentes empiezan cada trabajo desde cero.",
+        "state_preparing": "Preparándose: descargando lo que necesita.",
+        "state_notInstalled": "Aún no está instalada en este equipo. Ajustes, Requisitos puede instalarla.",
+        "turnOn": "Encender",
+        "turnOff": "Apagar"
+      },
+      "skills": {
+        "installed": "Conocimientos que tienen tus agentes",
+        "findMore": "Buscar más conocimientos"
+      }
     }
   },
   "hivePicker": {
