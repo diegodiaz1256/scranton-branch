@@ -28,3 +28,19 @@ export async function answerOpenQuestion(task: HiveTask, open: HumanQA, text: st
   }, 'human');
   return humanQA;
 }
+
+/**
+ * Put the open question on a card aside WITHOUT answering it: it is marked
+ * dismissed (no made-up answer), stays in the card's history, and the card
+ * stays blocked; the orchestrator can ask again. The same rule as the Ask me
+ * board's ✕. Resolves whether it was written.
+ */
+export async function dismissOpenQuestion(task: HiveTask, open: HumanQA): Promise<boolean> {
+  const humanQA = (task.humanQA ?? []).map((e) =>
+    e === open || (e.q === open.q && !e.a && !e.dismissedAt)
+      ? { ...e, dismissedAt: new Date().toISOString() }
+      : e
+  );
+  const result = await window.cth.hivePatchTask(task.id, { humanQA });
+  return !!result.ok;
+}

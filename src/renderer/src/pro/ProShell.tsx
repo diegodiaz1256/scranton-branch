@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { APP_NAME, LAYOUT_LABELS } from '@shared/fork';
 import { FloorSwitcher } from './FloorSwitcher';
@@ -27,11 +27,14 @@ import { ProvidersView } from './ProvidersView';
 import { DeliverablesView } from './DeliverablesView';
 import { BootBanner } from './BootBanner';
 import { NowView } from './NowView';
-import { EASY_NAV_ESSENTIALS, isEasyMode, splitForEasyMode } from '@shared/uiMode';
+import { ThreadView } from './ThreadView';
+import { EASY_HOME, EASY_NAV_ESSENTIALS, isEasyMode, splitForEasyMode } from '@shared/uiMode';
 import './pro.css';
 
 /** Sections in the sidebar; their names are `pro.nav.<id>`. */
 const TOP: { id: ProSection; icon: ProIconName }[] = [
+  // Easy mode only (Full mode's groups below do not list it): the readable thread.
+  { id: 'thread', icon: 'thread' },
   { id: 'now', icon: 'now' },
   { id: 'tasks', icon: 'tasks' },
   { id: 'inbox', icon: 'inbox' },
@@ -74,6 +77,8 @@ function readGroups(): Record<string, boolean> {
  * back and forth never touches a running agent.
  */
 const LS_SIDE_HIDDEN = 'cth.pro.sideHidden';
+/** Easy mode opens on the thread once per app start, whatever page was left open. */
+let landed = false;
 
 export function ProShell({ config }: { config: HarnessConfig }) {
   const { t } = useTranslation();
@@ -105,6 +110,13 @@ export function ProShell({ config }: { config: HarnessConfig }) {
   // in PRO left every worker from the last session unrestored.
   useRestoreTeam(config);
 
+  const easy = isEasyMode(config);
+  useEffect(() => {
+    if (landed) return;
+    landed = true;
+    if (easy) setView({ kind: 'section', section: EASY_HOME });
+  }, []); // once, at the first mount
+
   // An agent view whose agent left the floor falls back to the roster.
   const agentInView = view.kind === 'agent' ? roster.find((a) => a.id === view.agentId) : undefined;
   const section: ProSection | null = view.kind === 'section' ? view.section : agentInView ? null : 'agents';
@@ -115,7 +127,6 @@ export function ProShell({ config }: { config: HarnessConfig }) {
     setView({ kind: 'agent', agentId: id });
   };
 
-  const easy = isEasyMode(config);
   const renderGroup = (g: { id: string; label?: string; items: ProSection[] }): JSX.Element => {
     const items = ALL_ITEMS.filter((i) => g.items.includes(i.id));
     // The group holding the open page stays open, whatever was saved.
@@ -130,7 +141,7 @@ export function ProShell({ config }: { config: HarnessConfig }) {
         {open && items.map((item) => (
           <button key={item.id} className="pro-nav" aria-current={section === item.id} onClick={() => go(item.id)} style={g.label ? { paddingInlineStart: 22 } : undefined}>
             <ProIcon name={item.icon} /> {t(`pro.nav.${item.id}`)}
-            {item.id === 'inbox' && openAsks > 0 && <span className="pro-nav-end"><span className="pro-count">{openAsks}</span></span>}
+            {(item.id === 'inbox' || item.id === 'thread') && openAsks > 0 && <span className="pro-nav-end"><span className="pro-count">{openAsks}</span></span>}
           </button>
         ))}
       </div>
@@ -139,6 +150,7 @@ export function ProShell({ config }: { config: HarnessConfig }) {
 
   let page: JSX.Element;
   switch (section) {
+    case 'thread': page = <ThreadView tasks={tasks} roster={roster} onOpen={openAgent} />; break;
     case 'now': page = <NowView />; break;
     case 'tasks': page = <TasksView tasks={tasks} roster={roster} />; break;
     case 'inbox': page = <InboxView tasks={tasks} />; break;

@@ -30,13 +30,28 @@ export function isEasyMode(cfg: UiModeConfig | null | undefined): boolean {
 
 /**
  * Sidebar pages Easy mode keeps in view (the Pro shell's section ids).
+ *  - thread: the conversation with the orchestrator, readable (the first page).
  *  - now: what the office is doing, in sentences.
  *  - tasks: the jobs and who owns them; questions waiting on you live here.
  *  - inbox: the conversations, including the chat with the orchestrator.
  *  - deliverables: what the agents produced.
  * The agent list (your team) stays too; it is not a nav group item.
  */
-export const EASY_NAV_ESSENTIALS = ['now', 'tasks', 'inbox', 'deliverables'] as const;
+export const EASY_NAV_ESSENTIALS = ['thread', 'now', 'tasks', 'inbox', 'deliverables'] as const;
+
+/** The page Easy mode opens on. */
+export const EASY_HOME = 'thread' as const;
+
+/**
+ * The layout to switch to at start, or null to leave it: Easy mode lands in
+ * the Manager layout (where its sidebar and thread live) as long as no layout
+ * was ever chosen on this machine (stored = the saved choice, null if none).
+ * An explicit choice, Classic included, always stands.
+ */
+export function landingLayout(stored: string | null | undefined, cfg: UiModeConfig | null | undefined): 'pro' | null {
+  if (stored === 'classic' || stored === 'pro') return null;
+  return isEasyMode(cfg) ? 'pro' : null;
+}
 
 /** Settings sections Easy mode keeps in view; the rest fold under "Advanced settings". */
 export const EASY_SETTINGS_ESSENTIALS = ['General', 'Autonomy & Budgets'] as const;
