@@ -134,7 +134,7 @@ export function anonOptions(s: AnonSettings, d: AnonDictionary): AnonymizeOption
  * confirmation and audit line). The generic config write (config:set, which
  * other code paths and agent-driven actions reach) drops them.
  */
-export const HUMAN_ONLY_CONFIG_KEYS = ['agentUnsandboxed', 'agentSshRelay', 'agentCloudCredentials', 'anonymize'] as const;
+export const HUMAN_ONLY_CONFIG_KEYS = ['agentUnsandboxed', 'agentSshRelay', 'agentCloudCredentials', 'agentDocker', 'anonymize'] as const;
 
 export function stripHumanOnly<T extends Record<string, unknown>>(patch: T | null | undefined): Partial<T> {
   const out: Record<string, unknown> = { ...(patch ?? {}) };

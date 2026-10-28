@@ -67,11 +67,75 @@ test('a plain click on a deliverable opens Deliverables (Pro layout), Ctrl/Cmd-c
   const body = pool.slice(pool.indexOf('async function activatePath'), pool.indexOf('function registerMarkdownLinkProvider'));
   assert.match(body, /const toIde = !!event && \(event\.metaKey \|\| event\.ctrlKey\);/);
   assert.match(body, /toIde \? null : await window\.cth\.deliverablesMatch\(hit\.path\)/);
-  assert.match(body, /setFocusDeliverable\(deliverable\);[\s\S]*?setLayout\('pro'\);[\s\S]*?section: 'deliverables'[\s\S]*?return;[\s\S]*?openFileInIde\(hit\.path\)/);
-  assert.match(pool, /void activatePath\(abs, action, event\);/);
+  assert.match(body, /if \(deliverable\) \{\s*await openInDeliverables\(deliverable\);\s*return;[\s\S]*?openFileInIde\(hit\.path\)/);
+  assert.match(body, /async function openInDeliverables[\s\S]*?setFocusDeliverable\(deliverable\);[\s\S]*?setLayout\('pro'\);[\s\S]*?section: 'deliverables'/);
+  assert.match(pool, /void activatePath\(abs, action, event, rel \?\? undefined\);/);
   const view = read('src/renderer/src/pro/DeliverablesView.tsx');
   assert.match(view, /setQuery\(''\); setTypeFilter\(''\); setByFilter\(''\); setFocusTask\(null\);/);
   assert.match(view, /setSelected\(hit\.abs\);\s*setReveal\(hit\.abs\);/);
   assert.match(view, /scrollIntoView\(\{ block: 'center' \}\)/);
-  assert.match(read('src/main/index.ts'), /ipcMain\.handle\('deliverables:match'[\s\S]*?matchDeliverable\(p, \{ researchDir: join\(root, DELIVERABLES_DIR\), distro, known \}\)/);
+  assert.match(read('src/main/index.ts'), /ipcMain\.handle\('deliverables:match'[\s\S]*?matchDeliverable\(p, index\)/);
+});
+
+// An office from an older version, on disk: the orchestrator runs in the office
+// folder (not the hive), so `research/...` it printed (relative to the hive, as
+// its prompt spells it) or wrote (relative to itself) is not under its folder's
+// research/ — and before the prompt named the hive's folder, some of it really
+// landed in <office>/research/.
+const os = require('node:os');
+function oldOffice() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sb old office '));
+  const hive = path.join(home, 'hive');
+  const put = (p) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, '# r\n'); };
+  put(path.join(hive, 'research', 'DUN-12', 'report.md'));
+  put(path.join(home, 'research', 'pricing.md'));
+  put(path.join(home, 'research', 'hires', 'pam.json'));
+  put(path.join(home, 'proj', 'README.md'));
+  return {
+    home, hive,
+    index: { researchDir: path.join(hive, 'research'), distro: null, known: [], legacyDirs: [path.join(home, 'research')] },
+    cleanup: () => fs.rmSync(home, { recursive: true, force: true })
+  };
+}
+
+test('an old office: a hive-relative path the orchestrator printed opens in Deliverables', (t) => {
+  const { matchRelativeDeliverable } = loadTs('src/shared/deliverableMatch.ts');
+  const o = oldOffice();
+  t.after(o.cleanup);
+  // The orchestrator's folder is the office; the file is in the hive's research/.
+  const hit = matchRelativeDeliverable('research/DUN-12/report.md', o.index, [o.home, o.hive, o.home], fs.existsSync);
+  assert.equal(hit, path.join(o.hive, 'research', 'DUN-12', 'report.md'));
+  // A worker in a project printed the same: its folder first, then the hive.
+  assert.equal(matchRelativeDeliverable('research/DUN-12/report.md', o.index, [path.join(o.home, 'proj'), o.hive, o.home], fs.existsSync), hit);
+  // Nothing that is not on disk, nothing that is not a deliverable.
+  assert.equal(matchRelativeDeliverable('research/DUN-99/report.md', o.index, [o.home, o.hive, o.home], fs.existsSync), null);
+  assert.equal(matchRelativeDeliverable('README.md', o.index, [path.join(o.home, 'proj'), o.hive, o.home], fs.existsSync), null);
+  // Absolute paths are matchDeliverable's (the renderer already found them).
+  assert.equal(matchRelativeDeliverable(hit, o.index, [o.home], fs.existsSync), null);
+});
+
+test('an old office: its own research/ folder is a deliverables folder too', (t) => {
+  const o = oldOffice();
+  t.after(o.cleanup);
+  const legacy = path.join(o.home, 'research', 'pricing.md');
+  assert.equal(matchDeliverable(legacy, o.index), legacy);
+  const { matchRelativeDeliverable } = loadTs('src/shared/deliverableMatch.ts');
+  assert.equal(matchRelativeDeliverable('research/pricing.md', o.index, [o.home, o.hive, o.home], fs.existsSync), legacy);
+  // Hire proposals stay out there as well.
+  assert.equal(matchDeliverable(path.join(o.home, 'research', 'hires', 'pam.json'), o.index), null);
+  // A new office (no legacy folder) is unchanged: <office>/research is nothing.
+  assert.equal(matchDeliverable(legacy, { ...o.index, legacyDirs: undefined }), null);
+});
+
+test('main and the terminal wire the old-office fallback', () => {
+  const main = read('src/main/index.ts');
+  const handler = main.slice(main.indexOf("ipcMain.handle('deliverables:match'"), main.indexOf("ipcMain.handle('hive:keepHumanPrompt'"));
+  assert.match(handler, /legacyDirs: legacyResearchDirs\(\)/);
+  assert.match(handler, /matchRelativeDeliverable\(p, index, \[cwd, root, home\]/);
+  const list = main.slice(main.indexOf("ipcMain.handle('deliverables:list'"), main.indexOf('async function scanResearch'));
+  assert.match(list, /legacyResearchDirs\(\)/);
+  const pool = read('src/renderer/src/components/terminalPool.ts');
+  const body = pool.slice(pool.indexOf('async function activatePath'), pool.indexOf('function registerMarkdownLinkProvider'));
+  // A relative token that is not under the agent's folder asks main before giving up.
+  assert.match(body, /if \(!res \|\| !res\.exists\) \{[\s\S]*?deliverablesMatch\(rel\.token, rel\.cwd\)/);
 });

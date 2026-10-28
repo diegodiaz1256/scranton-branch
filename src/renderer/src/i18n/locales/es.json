@@ -273,6 +273,7 @@
     },
     "autonomy": {
       "autonomy": "Autonomía",
+      "whoCanAdd": "Quién puede añadir agentes",
       "autoOn": "Autónomo: los agentes actúan sin preguntar",
       "autoOff": "Preguntar antes: los agentes esperan a que apruebes las herramientas",
       "autoDesc": "Se aplica a los agentes nuevos (el comando de cada agente puede cambiarlo).",
@@ -2233,6 +2234,20 @@
         "notFound": "(no existe donde se ejecutan los agentes)",
         "none": "Ninguna permitida: todas las sesiones de arriba están ocultas para este agente.",
         "restart": "Reinicia el agente para que el cambio se aplique."
+      },
+      "docker": {
+        "title": "Docker: {{name}}",
+        "body": "Los agentes en sandbox no pueden llegar al daemon de Docker: su socket les está cerrado. Actívalo para que este agente pueda ejecutar comandos docker. Se aplica cuando el agente se reinicia.",
+        "warning": "Docker le da a este agente root en esta máquina (o en toda la distro de WSL): con un comando como docker run -v /:/host puede leer y cambiar cualquier archivo y salir por completo de su sandbox. En Linux también puede conectarse a cualquier otro socket local. Permítelo solo a un agente de confianza, y solo mientras su tarea lo necesite.",
+        "toggle": "Permitir Docker",
+        "confirm": "¿Dar Docker a {{name}}, y con él root en esta máquina?",
+        "allow": "Permitir Docker",
+        "unavailable": "No disponible en esta planta: los agentes de aquí no tienen sandbox de sistema, así que nada les cierra Docker de entrada.",
+        "custodian": "No para el custodio de una conexión crítica: nunca llega a Docker.",
+        "notFound": "(no se encontró ningún socket de Docker donde se ejecutan los agentes)",
+        "scope": "Para agentes en el sandbox de Claude Code o en el de la oficina (pi, Antigravity). Un agente sin sandbox ya llega a Docker si tu usuario puede.",
+        "off": "Desactivado: el sandbox de este agente le mantiene Docker cerrado.",
+        "restart": "Reinicia el agente para que el cambio se aplique."
       }
     },
     "skills": {
@@ -3124,7 +3139,24 @@
     "decline": "Rechazar",
     "add": "Añadir runner",
     "addWithSecrets_one": "Añadir runner y {{count}} secreto",
-    "addWithSecrets_other": "Añadir runner y {{count}} secretos"
+    "addWithSecrets_other": "Añadir runner y {{count}} secretos",
+    "code": "El código que ejecuta",
+    "codeNone": "El comando no nombra ningún script: lo que ejecuta es el comando de arriba.",
+    "codeScript": "script \"{{name}}\"",
+    "codeTruncated": "Recortado: solo se muestra el principio.",
+    "codeSnapshot": "Leído cuando el agente lo pidió. Si los ficheros cambian después, se te vuelve a preguntar antes de ejecutarlo.",
+    "codeError_missing": "No está en la carpeta del agente.",
+    "codeError_outside": "Fuera de la carpeta del agente: no se muestra.",
+    "codeError_binary": "No es un fichero de texto: no se muestra.",
+    "codeError_tooLarge": "Demasiado grande para mostrarlo.",
+    "codeError_unreadable": "No se pudo leer.",
+    "explain": "Explícamelo",
+    "explaining": "Un agente lo está leyendo…",
+    "explanation": "En palabras sencillas",
+    "explainNote": "Lo escribe una IA a partir del código de arriba: puede equivocarse. No se aprueba nada hasta que hagas clic.",
+    "explainFailed": "No se pudo obtener la explicación: {{error}}",
+    "explainNeedsClaude": "Las explicaciones usan Claude Code, y el motor por defecto (Ajustes) es otro.",
+    "explainGone": "Esta propuesta ya no está en espera."
   },
   "tempAnswer": {
     "whoAnswers": "Quién responde",

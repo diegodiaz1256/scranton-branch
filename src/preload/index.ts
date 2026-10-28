@@ -12,6 +12,7 @@ export type { FloorEntry } from '../main/floors';
 export type FortressStatusView = FortressStatus & { enabled: boolean; bytes: number };
 import type { RateLimits } from '../shared/rateLimits';
 import type { AnonState } from '../shared/anonSettings';
+import type { RunnerCodeFile } from '../shared/runnerCode';
 import type { ActiveUsageAlert } from '../shared/usageWindowAlerts';
 export type { HireManifest } from '../shared/hire';
 import type { IntegrationRecord, IntegrationTemplate } from '../shared/integrations';
@@ -44,7 +45,7 @@ export type McpTransportView = { kind: 'stdio'; command: string; args: string[] 
 /** A subagent an agent's Claude started (main/subagents.ts). */
 export interface SubagentView { id: string; parentId: string; type: string; description: string; startedAt: number; endedAt?: number; ok?: boolean }
 /** A runner an agent proposed, waiting for the human (main: approveProposal). */
-export interface RunnerProposalView { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[] }
+export interface RunnerProposalView { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[]; /** The code the command runs, read from the agent's folder. */ files?: RunnerCodeFile[] }
 export interface McpMineView { id: string; name: string; transport: McpTransportView; env: Record<string, string>; secretEnv: string[]; headers: Record<string, string>; secretHeaders: string[]; enabled: boolean; agents: string[] | null; source?: string; secretsStored: Record<string, boolean>; headersStored: Record<string, boolean> }
 export interface McpFoundView { source: string; file: string; name: string; transport: McpTransportView; env: Array<{ name: string; secret: boolean; value?: string }>; headers: Array<{ name: string; secret: boolean; value?: string }>; imported: boolean; agent?: string; suggest: { kind: 'connection' | 'builtin'; id: string; label: string } | null }
 export interface McpOverviewView { agentId: string; name: string; provider: string; servers: Array<{ name: string; id: string; origin: 'connection' | 'builtin' | 'yours' | 'office'; access?: 'none' | 'read' | 'readwrite' }> }
@@ -474,6 +475,9 @@ export interface HarnessConfig {
    *  override, categories. Human-only (anon:setSettings); the dictionary is
    *  not here (encrypted in the app's data folder, anonStore.ts). */
   anonymize?: import('../shared/anonSettings').AnonSettings;
+  /** Agents the human let reach the Docker socket (shared/agentDocker.ts): agent
+   *  id → true. Set only through docker:set, never a generic config write. */
+  agentDocker?: Record<string, true>;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'mine' | 'catalog';
@@ -1118,7 +1122,8 @@ const api = {
   /** Where an HTML deliverable renders from (a sandboxed md-dlv:// URL), or null. */
   deliverablesFileUrl: (path: string): Promise<string | null> => ipcRenderer.invoke('deliverables:fileUrl', path),
   /** A clicked terminal path as the deliverable it is (spelled as the list spells it), or null. */
-  deliverablesMatch: (path: string): Promise<string | null> => ipcRenderer.invoke('deliverables:match', path),
+  /** `cwd`: `path` is relative to it and was not found there (see deliverables:match). */
+  deliverablesMatch: (path: string, cwd?: string): Promise<string | null> => ipcRenderer.invoke('deliverables:match', path, cwd),
   /** A deliverable's committed versions, newest first (author = the agent). */
   deliverablesHistory: (path: string): Promise<Array<{ hash: string; ts: string; author: string; subject: string }>> => ipcRenderer.invoke('deliverables:history', path),
   /** A deliverable's text as it was in one of those versions. */
@@ -1654,6 +1659,13 @@ const api = {
     ipcRenderer.invoke('anon:addSecret', value),
   anonClearSecrets: (): Promise<{ ok: boolean; error?: string; secretCount: number }> =>
     ipcRenderer.invoke('anon:clearSecrets'),
+  // Docker (Capabilities, shared/agentDocker.ts): whether agents here have an
+  // OS sandbox that keeps it from them and a Docker socket was found, and the
+  // human's switch for one agent.
+  dockerStatus: (): Promise<{ available: boolean; present: boolean }> =>
+    ipcRenderer.invoke('docker:status'),
+  dockerSet: (agentId: string, on: boolean): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('docker:set', agentId, on),
   // Manager → Connections (keyed MCP servers). WRITE-ONLY like the integrations:
   // `connectionsList` reports only whether each field is stored.
   /** Save the user's own role bundles; resolves to what was kept after validation. */
@@ -1696,6 +1708,9 @@ const api = {
   envProposalsPending: (): Promise<RunnerProposalView[]> => ipcRenderer.invoke('env:proposalsPending'),
   envProposalAnswer: (id: string, answer: { ok: boolean; secrets?: Record<string, { kind: 'secret' | 'op'; value: string }> }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('env:proposalAnswer', id, answer),
+  /** Ask an agent to explain a proposal in plain language (never approves it). */
+  envProposalExplain: (id: string, lang: string): Promise<{ ok: boolean; text?: string; error?: string }> =>
+    ipcRenderer.invoke('env:proposalExplain', id, lang),
   onEnvProposal: (cb: (req: RunnerProposalView) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, req: RunnerProposalView) => cb(req);
     ipcRenderer.on('env:proposal', listener);

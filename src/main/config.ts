@@ -255,6 +255,9 @@ export interface HarnessConfig {
    *  override, categories. Human-only (anon:setSettings); the dictionary is
    *  not here (encrypted in the app's data folder, anonStore.ts). */
   anonymize?: AnonSettings;
+  /** Agents the human let reach the Docker socket (shared/agentDocker.ts): agent
+   *  id → true. Set only through docker:set, never a generic config write. */
+  agentDocker?: Record<string, true>;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'catalog';

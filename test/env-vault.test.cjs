@@ -136,9 +136,10 @@ test('an agent can propose a runner; it exists only once the human approves it',
   yes.v.setVar({ name: 'NODE_ENV', kind: 'plain', value: 'dev' });
   assert.deepEqual(yes.v.secretNames(), ['DATABASE_URL'], 'names only, and never a plain variable');
 
-  const r = await yes.v.proposeRunner({ name: 'Migrate DB', command: 'npm run migrate', secrets: ['DATABASE_URL'], description: 'apply the new table' }, { agentName: 'Jim' });
+  const r = await yes.v.proposeRunner({ name: 'Migrate DB', command: 'npm run migrate', secrets: ['DATABASE_URL'], description: 'apply the new table' }, { agentName: 'Jim', cwd: '/work/jim' });
   assert.deepEqual(r, { ok: true, id: 'migrate-db' });
   assert.equal(yes.asked[0].agentName, 'Jim');
+  assert.equal(yes.asked[0].cwd, '/work/jim', "the prompt knows the agent's folder, to show the code");
   assert.equal(yes.asked[0].proposal.command, 'npm run migrate', 'the human sees the exact command');
   assert.deepEqual(yes.runners[0].secrets, ['DATABASE_URL']);
   assert.equal(yes.runners[0].approval, 'on-change', 'still asked again after the worktree changes');

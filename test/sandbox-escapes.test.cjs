@@ -53,7 +53,9 @@ async function claudeAgent(t, extra = {}) {
 
 test('a Claude agent may not run commands outside its sandbox', async (t) => {
   const { settings } = await claudeAgent(t);
-  assert.equal(settings.sandbox.enabled, true);
+  // Windows: off (Claude Code's own Windows sandbox needs an elevated install);
+  // the block stays written, closed, for when it comes on.
+  assert.equal(settings.sandbox.enabled, process.platform !== 'win32');
   assert.equal(settings.sandbox.allowUnsandboxedCommands, false);
   assert.equal(settings.sandbox.excludedCommands, undefined, 'no command is let out of it');
   assert.notEqual(settings.sandbox.filesystem.disabled, true);
