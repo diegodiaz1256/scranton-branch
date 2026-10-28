@@ -127,7 +127,8 @@ test('no OS sandbox (a Windows floor): nothing to hide them with, and no prompt 
 test('main: only cloudCreds:set changes it (custodian refused, logged); the generic config write drops it; a custodian spawns with none', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
   const update = src.slice(src.indexOf("ipcMain.handle('config:update'"), src.indexOf("ipcMain.handle('config:setAgentMcpGrant'"));
-  assert.match(update, /agentCloudCredentials: _cloudCreds,[^}]*\.\.\.safePatch \} = patch/);
+  assert.match(update, /const safePatch = stripHumanOnly\(patch\)/);
+  assert.ok(require('./load-ts.cjs')('src/shared/anonSettings.ts').HUMAN_ONLY_CONFIG_KEYS.includes('agentCloudCredentials'));
   const set = src.slice(src.indexOf("ipcMain.handle('cloudCreds:set'"));
   assert.match(set.slice(0, 1500), /isCustodian\(/);
   assert.match(set.slice(0, 1500), /appendLog\(\{ kind: 'cloud-credentials'/);

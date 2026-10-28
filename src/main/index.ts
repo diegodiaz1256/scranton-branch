@@ -33,8 +33,14 @@ import { initAutoUpdater, abortPendingRestart, repairAppImageLaunchers } from '.
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
 import {
   readConfig, writeConfig, setAgentTokenCap, setAgentMcpGrant, resetConfig, onConfigWritten, ensureHarnessHome, ensureClaudePermissionsAccepted,
-  modelForRole, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
+  modelForRole, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, configCodec, type HarnessConfig, type ScheduledMission
 } from './config';
+import { AnonProxy } from './anonProxy';
+import { AnonStore } from './anonStore';
+import {
+  anonCoverage, anonEnabledFor, anonSpawnDecision, anonStatusOf, cleanAnonSettings, cleanDictionary, stripHumanOnly,
+  type AnonAgentStatus, type AnonCoverage, type AnonSpawnDecision, type AnonUncoveredReason
+} from '../shared/anonSettings';
 import { listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde } from './fs';
 import { DELIVERABLE_SCHEME, DeliverableFiles } from './deliverableFiles';
 import { normalizeWeekly, weeklyDelayMs } from '../shared/weeklySchedule';
@@ -158,6 +164,7 @@ import {
   nonInteractiveEnvForProvider,
   providerPreset,
   installInfoForProvider,
+  bridgeOf,
   type AgentProvider
 } from '../shared/agentProvider';
 import { buildMissingCliScript, chooseInstallRung } from './cliInstall';
@@ -970,6 +977,99 @@ ipcMain.handle('sshRelay:set', (_evt, agentId: unknown, grant: unknown) => {
   writeConfig({ agentSshRelay: map });
   try { hive.appendLog({ kind: 'ssh-relay', agentId, name: a.name, on: grant !== null, keys: map[agentId]?.keys ?? [], ask: !!map[agentId]?.ask, sign: !!map[agentId]?.sign, by: 'human' }); } catch { /* the config change stands */ }
   return { ok: true };
+});
+
+// ─── Anonymization (anonProxy.ts, shared/anonSettings.ts) ───────────────────
+// A loopback proxy between an agent's CLI and its model API: the model sees
+// codenames, the CLI the real names. Settings are human-only (anon:* handlers;
+// config:set drops them). The dictionary and each office's pseudonym map live
+// encrypted in the app's data folder, never in a repo.
+const anonStore = new AnonStore(join(app.getPath('userData'), 'anonymize'), configCodec);
+let anonDict = anonStore.readDictionary();
+const anonProxy = new AnonProxy({
+  settings: () => cleanAnonSettings(readConfig().anonymize),
+  dictionary: () => anonDict,
+  loadMap: (office) => anonStore.loadMap(office),
+  saveMap: (office, map) => anonStore.saveMap(office, map),
+  log: (m) => console.log(m)
+});
+/** Each agent's anonymization at its last start (Privacy view, agent panel). */
+const anonStatuses = new Map<string, { status: AnonAgentStatus; reason?: AnonUncoveredReason; at: number }>();
+const ANON_REASON_TEXT: Record<AnonUncoveredReason, string> = {
+  'endpoint-fixed': 'its CLI talks to an endpoint the app cannot redirect',
+  'cloud-platform': 'Claude Code runs on Bedrock/Vertex/Foundry here',
+  'model-provider': 'its model is not one of your own providers the app configures',
+  'unknown-cli': 'it is a custom command'
+};
+/**
+ * Anonymization for one spawn, once its coverage is known. Starts the proxy
+ * when needed; a refusal is the error the spawn returns (fail closed).
+ */
+async function anonDecide(agentId: string, coverage: AnonCoverage): Promise<{ decision: AnonSpawnDecision; error?: string }> {
+  const s = cleanAnonSettings(readConfig().anonymize);
+  const enabled = anonEnabledFor(s, agentId) && !!hive.root();
+  let proxyUp = false;
+  if (enabled && coverage.covered === true) {
+    try { await anonProxy.start(); proxyUp = true; } catch (e) { console.error('[anon] proxy did not start:', e instanceof Error ? e.message : e); }
+  }
+  const decision = anonSpawnDecision({ enabled, coverage, proxyUp, refuseUncovered: s.refuseUncovered });
+  anonStatuses.set(agentId, { status: anonStatusOf(decision), ...(decision.action === 'uncovered' || (decision.action === 'refuse' && decision.reason) ? { reason: (decision as { reason: AnonUncoveredReason }).reason } : {}), at: Date.now() });
+  if (decision.action === 'refuse') {
+    try { hive.appendLog({ kind: 'spawn-refused', agentId, reason: `anonymization: ${decision.why}` }); } catch { /* log is best-effort */ }
+    return {
+      decision,
+      error: decision.why === 'proxy-down'
+        ? 'Not started: anonymization is on for this agent and the anonymization proxy could not start, so its model calls would go out unanonymized. Try again; if it keeps failing, turn anonymization off for it in Privacy.'
+        : `Not started: anonymization is on and this agent cannot be covered (${ANON_REASON_TEXT[decision.reason ?? 'unknown-cli']}). Privacy is set to refuse agents it cannot cover.`
+    };
+  }
+  return { decision };
+}
+/** NO_PROXY with loopback added, so a corporate proxy in the env never gets the loopback call. */
+function withNoProxy(env: Record<string, string> | undefined): Record<string, string> {
+  const add = (v: string | undefined): string => [...new Set([...(v ?? '').split(',').map((x) => x.trim()).filter(Boolean), '127.0.0.1', 'localhost'])].join(',');
+  return { ...(env ?? {}), NO_PROXY: add(env?.NO_PROXY ?? process.env.NO_PROXY), no_proxy: add(env?.no_proxy ?? process.env.no_proxy) };
+}
+ipcMain.handle('anon:get', () => {
+  const s = cleanAnonSettings(readConfig().anonymize);
+  return {
+    settings: s,
+    // Secret values never go back to the renderer: their count only.
+    dictionary: { terms: anonDict.terms, ticketPrefixes: anonDict.ticketPrefixes, secretCount: anonDict.secrets.length },
+    dictionaryError: anonStore.dictionaryError,
+    encrypted: configCodec.available(),
+    proxy: anonProxy.url() ? 'running' as const : 'stopped' as const,
+    statuses: Object.fromEntries(anonStatuses)
+  };
+});
+ipcMain.handle('anon:setSettings', (_evt, raw: unknown) => {
+  const next = cleanAnonSettings(raw);
+  const prev = cleanAnonSettings(readConfig().anonymize);
+  writeConfig({ anonymize: next });
+  anonProxy.invalidate();
+  if (prev.enabled !== next.enabled) { try { hive.appendLog({ kind: 'anonymize', on: next.enabled === true, by: 'human' }); } catch { /* best-effort */ } }
+  return { ok: true, settings: next };
+});
+/** Terms and ticket prefixes; known secrets are kept as they are (anon:addSecret / anon:clearSecrets). */
+ipcMain.handle('anon:setDictionary', (_evt, raw: unknown) => {
+  const r = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const next = cleanDictionary({ terms: r.terms, ticketPrefixes: r.ticketPrefixes, secrets: anonDict.secrets });
+  const res = anonStore.writeDictionary(next);
+  if (res.ok) { anonDict = next; anonProxy.invalidate(); }
+  return res;
+});
+ipcMain.handle('anon:addSecret', (_evt, value: unknown) => {
+  if (typeof value !== 'string' || value.length < 4 || value.length > 4096) return { ok: false, error: 'A secret must be 4 to 4096 characters.' };
+  const next = cleanDictionary({ ...anonDict, secrets: [...anonDict.secrets, value] });
+  const res = anonStore.writeDictionary(next);
+  if (res.ok) { anonDict = next; anonProxy.invalidate(); }
+  return { ...res, secretCount: anonDict.secrets.length };
+});
+ipcMain.handle('anon:clearSecrets', () => {
+  const next = cleanDictionary({ ...anonDict, secrets: [] });
+  const res = anonStore.writeDictionary(next);
+  if (res.ok) { anonDict = next; anonProxy.invalidate(); }
+  return { ...res, secretCount: anonDict.secrets.length };
 });
 
 const integrationBroker = new IntegrationBroker({
@@ -4603,7 +4703,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // directly: it used to be set on process.env, which every agent spawned after it
   // inherited (and kept after the field was cleared). (Crush's baseUrlEnv is an inert sentinel used ONLY as this
   // upstream source; its real routing is the per-agent CRUSH_GLOBAL_CONFIG base_url.)
-  const proxyUpstream = opts.hive && (provider === 'crush' || provider === 'qwen')
+  let proxyUpstream = opts.hive && (provider === 'crush' || provider === 'qwen')
     ? readConfig().providerBaseUrls?.[provider]?.trim() || undefined
     : undefined;
   // Certificates (Settings → AI Engines): the CA bundle and/or "don't verify",
@@ -4624,6 +4724,10 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // Set when the agent's recorded session ran in another folder or role
   // (sessionResume.ts): a restore then starts fresh instead of resuming it.
   let freshReason: string | null = null;
+  /** The anonymization proxy route this agent's model calls go to (if any). */
+  let anonRoute: string | undefined;
+  /** Anonymization is on but cannot cover this agent: why (said in its terminal). */
+  let anonNotice: string | undefined;
   if (opts.hive && hive.enabled()) {
     // REST integrations for EVERY hive agent, not only god-hired temps: a broker
     // capability token keyed by this PTY id (teardownPty revokes it on exit),
@@ -4662,6 +4766,28 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     const spawnVaults = await prepareVaults(opts.hive.id, provider);
     // Read before ensureAgent records this spawn's folder and role.
     freshReason = freshSessionReason(hive.sessionContext(opts.hive.id), { cwd: opts.cwd, custodian: !!spawnVaults.custodian });
+    // Anonymization (anonProxy.ts). opencode and pi are decided below, once
+    // their model is known. Claude Code: its base URL, also in its --settings
+    // env (which beats the user's and the project's settings.json). qwen/crush:
+    // their proxy bridge forwards to the anonymization proxy instead of the
+    // real upstream. Covered + no proxy = not started (fail closed).
+    if (provider !== 'opencode' && provider !== 'pi') {
+      spawnStep(opts.id, 'anonymization');
+      const settingsEnv = claudeProvider ? hive.claudeSettingsEnv(opts.cwd) : {};
+      const bridge = bridgeOf(provider);
+      const upstream = claudeProvider
+        ? settingsEnv.ANTHROPIC_BASE_URL || opts.env?.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com'
+        : bridge?.kind === 'proxy'
+          ? proxyUpstream || process.env[bridge.baseUrlEnv] || (bridge.api === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1')
+          : undefined;
+      const coverage = anonCoverage(claudeProvider ? 'claude' : provider, { env: { ...process.env, ...(opts.env ?? {}), ...settingsEnv }, upstream });
+      const { decision, error } = await anonDecide(opts.hive.id, coverage);
+      if (error) { try { integrationBroker.revoke(opts.id); } catch { /* best-effort */ } return { ok: false, error }; }
+      if (decision.action === 'proxy' && upstream && hive.root()) {
+        anonRoute = anonProxy.addRoute(opts.hive.id, hive.root()!, upstream, proxyTls);
+        if (decision.route === 'hive-proxy') proxyUpstream = anonRoute;
+      } else if (decision.action === 'uncovered') anonNotice = ANON_REASON_TEXT[decision.reason];
+    }
     try {
       spawnStep(opts.id, 'preparing the agent in the hive');
       const inj = await hive.ensureAgent(
@@ -4706,6 +4832,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           unsandboxed: runsUnsandboxed(readConfig().agentUnsandboxed, readConfig().criticalCustodians, opts.hive.id),
           // Its sandboxed shell may reach this broker port (sb-api, sb-run…).
           brokerUrl: opts.env?.SB_BROKER_URL,
+          anonymize: !!anonRoute,
+          claudeEnv: claudeProvider && anonRoute ? { ANTHROPIC_BASE_URL: anonRoute } : undefined,
           // Cloud CLI logins the human exposed to it (never a custodian's).
           exposeCredentials: isCustodian(criticalMap(), opts.hive.id) ? [] : cleanCloudCredentialMap(readConfig().agentCloudCredentials)[opts.hive.id] ?? [],
           // The Docker socket, when the human allowed it (never a custodian's).
@@ -4729,6 +4857,10 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // Point the agent's mempalace CLI at the shared palace + the `kg` CLI at the
       // enterprise knowledge store (both no-ops / empty when their flags are off).
       opts.env = { ...(opts.env ?? {}), ...inj.env, ...memory.env(), ...knowledge.env() };
+      // Claude Code's model calls through the anonymization proxy (also in its
+      // --settings env above); loopback never through a corporate proxy.
+      if (anonRoute && claudeProvider) opts.env = { ...withNoProxy(opts.env), ANTHROPIC_BASE_URL: anonRoute };
+      else if (anonRoute) opts.env = withNoProxy(opts.env);
     } catch (e) {
       // Not started: without its preparation the agent would run with no
       // sandbox, no guard and no hooks (in auto mode, free to write anywhere).
@@ -4960,6 +5092,24 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     if (!argModel && eff.model) opts.args = ['--model', eff.model, ...(opts.args ?? [])];
     const modelSlug = eff.model ?? '';
     const prefix = eff.provider ?? '';
+    // Anonymization: covered only when the model is one of the providers whose
+    // base URL the app writes into this agent's config (opencode's local one,
+    // your own OpenAI-compatible providers); that base URL becomes the proxy.
+    let anonBase: { id: string; url: string } | null = null;
+    {
+      spawnStep(opts.id, 'anonymization');
+      const bases: Record<string, string> = Object.fromEntries(cleanCustomProviders(cfg.customModelProviders).map((p) => [p.id, p.baseUrl]));
+      const ocLocal = provider === 'opencode' ? cfg.providerBaseUrls?.opencode?.trim() : undefined;
+      if (ocLocal) bases.local = ocLocal;
+      const upstream = prefix ? bases[prefix] : undefined;
+      const coverage = anonCoverage(provider, { modelProvider: prefix, configurableProviders: Object.keys(bases), upstream });
+      const { decision, error } = await anonDecide(opts.hive.id, coverage);
+      if (error) return { ok: false, error };
+      if (decision.action === 'proxy' && upstream && hive.root()) {
+        anonRoute = anonProxy.addRoute(opts.hive.id, hive.root()!, upstream, proxyTls);
+        anonBase = { id: prefix, url: anonRoute };
+      } else if (decision.action === 'uncovered') anonNotice = ANON_REASON_TEXT[decision.reason];
+    }
     // Keys follow the model: its backend's key only; a provider of your own (or
     // one the engine defines itself) gets none — it brings its own.
     const scope = keyScope(eff.provider, (p) => !!backendForModel(`${p}/x`));
@@ -4985,7 +5135,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         const file = join(piDir, 'models.json');
         let existing: string | null = null;
         try { existing = readFileSync(file, 'utf8'); } catch { /* none yet */ }
-        try { writeFileSync(file, piModelsJson(existing, custom, (id) => !!extra[customKeyEnv(id)]), 'utf8'); }
+        const routed = anonBase ? custom.map((p) => (p.id === anonBase!.id ? { ...p, baseUrl: anonBase!.url } : p)) : custom;
+        try { writeFileSync(file, piModelsJson(existing, routed, (id) => !!extra[customKeyEnv(id)]), 'utf8'); }
         catch (e) { console.error('[pi] could not write models.json:', e); }
       }
     }
@@ -5011,6 +5162,11 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       // Your own OpenAI-compatible providers (AI providers → Local & compatible).
       const custom = cleanCustomProviders(cfg.customModelProviders);
       if (custom.length) oc.provider = { ...((oc.provider as Record<string, unknown>) ?? {}), ...opencodeProviders(custom, (id) => !!extra[customKeyEnv(id)]) };
+      // The model's provider through the anonymization proxy.
+      if (anonBase) {
+        const entry = (oc.provider as Record<string, { options?: Record<string, unknown> }> | undefined)?.[anonBase.id];
+        if (entry) entry.options = { ...(entry.options ?? {}), baseURL: anonBase.url };
+      }
       // Connections (keyed MCP servers) through main's gateway, as OpenCode
       // remote servers: only a capability token, never the key. Same list the
       // agent's prompt names (hive.keyedConnectionsFor).
@@ -5026,6 +5182,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       extra.OPENCODE_CONFIG_CONTENT = JSON.stringify(oc);
     }
     opts.env = { ...(opts.env ?? {}), ...extra };
+    // SB_ANON_URL names the proxy's loopback port in the env, so a pi
+    // custodian's sb-netgate relays it (it relays the loopback ports it finds there).
+    if (anonBase) opts.env = { ...withNoProxy(opts.env), SB_ANON_URL: anonProxy.url() ?? '' };
   }
   // Codex Remote is daemon-based (there is no `/remote-control` slash command).
   // Start/enable the daemon under this agent's isolated CODEX_HOME and connect
@@ -5050,7 +5209,10 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
       const listeners = [
         ...wslBridgeListeners(),
         ...(slackReplyServer && slackReplyPort ? [{ name: `slack:${slackReplyPort}`, port: slackReplyPort, target: { port: slackReplyPort } }] : []),
-        ...(proxy ? [{ name: `proxy:${proxy}`, port: proxy, target: { port: proxy } }] : [])
+        ...(proxy ? [{ name: `proxy:${proxy}`, port: proxy, target: { port: proxy } }] : []),
+        // The anonymization proxy, same port inside WSL (its routes are in the
+        // agent's base URL). Cannot bridge it: not started (fail closed, below).
+        ...(anonRoute && anonProxy.portNumber() ? [{ name: `anon:${anonProxy.portNumber()}`, port: anonProxy.portNumber(), target: { port: anonProxy.portNumber() } }] : [])
       ];
       // "Port already taken inside WSL" means the Windows service is reachable
       // directly ONLY with mirrored networking. Otherwise some other program
@@ -5063,6 +5225,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         const p = await bridge.ensure(l);
         spawnStep(opts.id, `WSL bridge: ${l.name} → ${p}`);
         if (l.name === 'hooks' && typeof p === 'number') opts.env = { ...(opts.env ?? {}), HIVE_SOCK: `tcp://127.0.0.1:${p}` };
+        if (l.name.startsWith('anon:') && typeof p === 'number' && p !== l.port) {
+          return { ok: false, error: `Could not start the agent in WSL (${wslLoc.distro}): anonymization is on and its proxy port ${l.port} could not be opened inside WSL (got ${p}).` };
+        }
         if (p === 'direct' && mirrored === undefined) mirrored = await distroMirrored(wslLoc.distro);
         if (typeof p === 'number' || (p === 'direct' && mirrored)) continue;
         console.warn(`[wsl-bridge] ${l.name}: ${p}`);
@@ -5102,6 +5267,11 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     try { hive.appendLog({ kind: 'session-fresh', agentId: opts.hive.id, reason: freshReason }); } catch { /* log is best-effort */ }
     const wc = (owner && !owner.isDestroyed()) ? owner : liveWebContents();
     try { wc?.send(`pty:data:${opts.id}`, `\r\n\x1b[33m  ${freshStart}\x1b[0m\r\n`); } catch { /* window gone */ }
+  }
+  // Anonymization is on but cannot cover this CLI: said, never implied.
+  if (res.ok && anonNotice && opts.hive) {
+    const wc = (owner && !owner.isDestroyed()) ? owner : liveWebContents();
+    try { wc?.send(`pty:data:${opts.id}`, `\r\n\x1b[33m  Anonymization is on, but it does not cover ${opts.hive.name ?? 'this agent'}: ${anonNotice}. Its model calls go out unchanged.\x1b[0m\r\n`); } catch { /* window gone */ }
   }
   syncKeepAwake(); // arm the power-save blocker while ≥1 agent PTY is alive (#18)
   // Hand the resolved worktree path back to the renderer so it can persist it on
@@ -5391,8 +5561,8 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   // "Run without sandbox" is set only by agent:setUnsandboxed (its typed
   // confirmation, custodian check and audit line); never through here. Nor is
   // "Use my SSH keys through the office" (sshRelay:set), nor the cloud logins
-  // an agent may read (cloudCreds:set), nor Docker (docker:set).
-  const { agentUnsandboxed: _unsandboxed, agentSshRelay: _sshRelay, agentCloudCredentials: _cloudCreds, agentDocker: _docker, ...safePatch } = patch ?? {};
+  // an agent may read (cloudCreds:set), nor Docker (docker:set), nor anonymization (anon:setSettings).
+  const safePatch = stripHumanOnly(patch);
   const next = writeConfig(safePatch);
   // Live opt-in/out from Settings → Privacy (TELEMETRY.md).
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);
@@ -7344,6 +7514,7 @@ function finishTeardown(): void {
   try { reflector.stop(); } catch (e) { console.error('[quit] reflector.stop:', e); }
   try { persist.close(); } catch (e) { console.error('[quit] persist.close:', e); }
   try { hive.stopAllProxyBridges(); } catch (e) { console.error('[quit] stopAllProxyBridges:', e); }
+  try { anonProxy.stop(); } catch (e) { console.error('[quit] anonProxy:', e); }
   try { ptyManager.killAll(); } catch (e) { console.error('[quit] killAll:', e); }
   app.quit();
 }

@@ -120,7 +120,8 @@ test('a finished temp forgets it', () => {
 test('main: only docker:set changes it (custodian refused, logged); the generic config write drops it; spawn checks custodians', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
   const update = src.slice(src.indexOf("ipcMain.handle('config:update'"), src.indexOf("ipcMain.handle('config:setAgentMcpGrant'"));
-  assert.match(update, /agentDocker: _docker,[^}]*\.\.\.safePatch \} = patch/);
+  assert.match(update, /const safePatch = stripHumanOnly\(patch\)/);
+  assert.ok(require('./load-ts.cjs')('src/shared/anonSettings.ts').HUMAN_ONLY_CONFIG_KEYS.includes('agentDocker'));
   assert.equal((src.match(/writeConfig\(\{ agentDocker/g) ?? []).length, 1, 'one writer');
   const set = src.slice(src.indexOf("ipcMain.handle('docker:set'"));
   assert.match(set.slice(0, 1200), /isCustodian\(/);
