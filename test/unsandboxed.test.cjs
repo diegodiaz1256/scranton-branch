@@ -65,7 +65,8 @@ test('a Claude agent run without sandbox: sandbox off, its control files still r
   // Back on: the sandbox returns and the mark goes.
   const again = await hive.ensureAgent({ id: 'jim', name: 'Jim', provider: 'claude', cwd: project }, {});
   const s2 = JSON.parse(fs.readFileSync(again.args[again.args.indexOf('--settings') + 1], 'utf8'));
-  assert.equal(s2.sandbox.enabled, true);
+  // (On Windows the block comes back written but off: see hive.ts.)
+  assert.equal(s2.sandbox.enabled, process.platform !== 'win32');
   assert.equal(s2.sandbox.allowUnsandboxedCommands, false);
   assert.equal(again.osSandbox, undefined);
 });

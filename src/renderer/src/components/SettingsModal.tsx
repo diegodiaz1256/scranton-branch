@@ -1,4 +1,4 @@
-import { useState, useEffect, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { agentModels, type HarnessConfig } from '@/store/config';
 import { normalizeThresholds } from '@shared/usageWindowAlerts';
@@ -35,6 +35,8 @@ import { FreezeLogSection } from './FreezeLogSection';
 import { OfficeRenderSection } from './OfficeRenderSection';
 import { TempQuotaSettings } from './TempQuotaSettings';
 import { TempAnswerOptions } from './TempAnswerOptions';
+import { indexSettings, searchSettings, type IndexedSetting } from '@shared/settingsSearch';
+import { SETTINGS_INDEX } from './settingsIndex';
 
 export interface SettingsModalProps {
   config: HarnessConfig;
@@ -186,7 +188,7 @@ export type Section = 'General' | 'Prerequisites' | 'Agents & Models' | 'Autonom
 const NAV_SECTIONS: Section[] = ['General', 'Prerequisites', 'Agents & Models', 'Autonomy & Budgets', 'Connections', 'Voice', 'Memory & Knowledge'];
 /** i18n key for each nav section's label — the Section values themselves stay
  *  as stable identifiers (tab state, deep links). */
-/** One line under each section's name: what lives there (also what search matches). */
+/** One line under each section's name: what lives there. */
 const NAV_SECTION_DESC: Record<Section, string> = {
   'General': 'settings.navDesc.general',
   'Prerequisites': 'settings.navDesc.prerequisites',
@@ -196,18 +198,6 @@ const NAV_SECTION_DESC: Record<Section, string> = {
   'Voice': 'settings.navDesc.voice',
   'Memory & Knowledge': 'settings.navDesc.memoryKnowledge'
 };
-/** Extra words search should find a section by (settings.find.*). */
-const NAV_SECTION_FIND: Record<Section, string> = {
-  'General': 'settings.find.general',
-  'Prerequisites': 'settings.find.prerequisites',
-  'Agents & Models': 'settings.find.agentsModels',
-  'Autonomy & Budgets': 'settings.find.autonomyBudgets',
-  'Connections': 'settings.find.connections',
-  'Voice': 'settings.find.voice',
-  'Memory & Knowledge': 'settings.find.memoryKnowledge'
-};
-const fold = (s: string): string => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-
 const NAV_SECTION_KEYS: Record<Section, string> = {
   'General': 'settings.nav.general',
   'Prerequisites': 'settings.nav.prerequisites',
@@ -224,20 +214,43 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [activeSection, setActiveSection] = useState<Section>(initialSection ?? 'General');
-  // Search over each section's name, its description and extra words. Every
-  // word must match; a search that leaves the open section out jumps to the
-  // first one it found.
+  // Search over every setting (settingsIndex.ts), not just the tab names: the
+  // visible label and help text in the UI language, the English text, and
+  // English synonyms. While a query is typed the nav lists matching settings;
+  // opening one switches tab, scrolls to the row and flashes it.
   const [navQuery, setNavQuery] = useState('');
-  const shownSections = NAV_SECTIONS.filter((sec) => {
-    const words = fold(navQuery).split(/\s+/).filter(Boolean);
-    if (!words.length) return true;
-    const hay = fold(`${t(NAV_SECTION_KEYS[sec])} ${t(NAV_SECTION_DESC[sec])} ${t(NAV_SECTION_FIND[sec])} ${sec}`);
-    return words.every((w) => hay.includes(w));
-  });
-  useEffect(() => {
-    if (shownSections.length && !shownSections.includes(activeSection)) setActiveSection(shownSections[0]);
+  const [resultCursor, setResultCursor] = useState(0);
+  const searchIndex = useMemo(() => {
+    const tEn = i18n.getFixedT('en');
+    return indexSettings(SETTINGS_INDEX, (k) => String(t(k, { godName })), (k) => String(tEn(k, { godName })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navQuery]);
+  }, [i18n.language, godName]);
+  const searchResults = useMemo(() => searchSettings(searchIndex, navQuery), [searchIndex, navQuery]);
+  const searching = navQuery.trim() !== '';
+  useEffect(() => { setResultCursor(0); }, [navQuery]);
+  const contentPaneRef = useRef<HTMLDivElement>(null);
+  /** The row to bring into view after a tab switch; `n` re-fires the same row. */
+  const [focusTarget, setFocusTarget] = useState<{ anchor: string | null; n: number } | null>(null);
+  const openResult = (r: IndexedSetting): void => {
+    setActiveSection(r.section as Section);
+    setFocusTarget({ anchor: r.isSection ? null : r.anchor, n: Date.now() });
+  };
+  useEffect(() => {
+    const pane = contentPaneRef.current;
+    if (!focusTarget || !pane) return;
+    if (!focusTarget.anchor) { pane.scrollTop = 0; return; }
+    let el: HTMLElement | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Wait a frame so the newly opened tab has rendered its rows.
+    const raf = requestAnimationFrame(() => {
+      el = pane.querySelector<HTMLElement>(`[data-setting-id="${CSS.escape(focusTarget.anchor ?? '')}"]`);
+      if (!el) { pane.scrollTop = 0; return; }
+      el.scrollIntoView({ block: 'center' });
+      el.classList.add('cth-setting-flash');
+      timer = setTimeout(() => el?.classList.remove('cth-setting-flash'), 1600);
+    });
+    return () => { cancelAnimationFrame(raf); if (timer) clearTimeout(timer); el?.classList.remove('cth-setting-flash'); };
+  }, [focusTarget]);
 
   // Change-home flow: null until the user picks a new folder, then the sub-modal
   // confirms move-vs-fresh. Pre-selects 'move' (recommended - keeps the data).
@@ -984,11 +997,42 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                 }}>
                   <input
                     type="search" value={navQuery} onChange={(e) => setNavQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (isComposingKey(e) || !searching) return;
+                      if (e.key === 'ArrowDown') { e.preventDefault(); setResultCursor((c) => Math.min(c + 1, searchResults.length - 1)); }
+                      else if (e.key === 'ArrowUp') { e.preventDefault(); setResultCursor((c) => Math.max(c - 1, 0)); }
+                      else if (e.key === 'Enter' && searchResults[resultCursor]) { e.preventDefault(); openResult(searchResults[resultCursor]); }
+                      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setNavQuery(''); }
+                    }}
                     placeholder={t('settings.searchPlaceholder')} aria-label={t('settings.searchPlaceholder')}
                     style={{ margin: '2px 0 8px', padding: '6px 8px', fontSize: 13, fontFamily: 'var(--cth-font-ui)', border: '1.5px solid var(--cth-ink-300)', background: 'var(--cth-cream-50)', color: 'var(--cth-ink-900)' }}
                   />
-                  {shownSections.length === 0 && <span style={{ fontSize: 12, color: 'var(--cth-ink-500)', padding: '4px 8px' }}>{t('settings.searchNone')}</span>}
-                  {shownSections.map((section) => {
+                  {searching && searchResults.length === 0 && <span style={{ fontSize: 12, color: 'var(--cth-ink-500)', padding: '4px 8px' }}>{t('settings.searchNone')}</span>}
+                  {searching && searchResults.map((r, i) => {
+                    const lit = i === resultCursor;
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => { setResultCursor(i); openResult(r); }}
+                        onMouseEnter={() => setResultCursor(i)}
+                        style={{
+                          display: 'flex', flexDirection: 'column', gap: 2, width: '100%', textAlign: 'left',
+                          padding: '6px 10px',
+                          border: 'none',
+                          borderLeft: lit ? '3px solid var(--cth-lemon)' : '3px solid transparent',
+                          background: lit ? 'var(--cth-lemon-light)' : 'transparent',
+                          color: 'var(--cth-ink-900)',
+                          fontFamily: 'var(--cth-font-ui)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <span style={{ fontSize: 13, fontWeight: 600, lineHeight: '18px' }}>{r.label}</span>
+                        {!r.isSection && <span style={{ fontSize: 11, lineHeight: '15px', color: 'var(--cth-ink-500)' }}>{t(NAV_SECTION_KEYS[r.section as Section])}</span>}
+                      </button>
+                    );
+                  })}
+                  {!searching && NAV_SECTIONS.map((section) => {
                     const active = activeSection === section;
                     return (
                       <button
@@ -1017,7 +1061,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                 {/* Right scrollable content pane. minWidth:0 lets this flex child
                     shrink to the row's width instead of growing to its content's
                     min-content (which would push a horizontal scrollbar). */}
-                <div style={{
+                <div ref={contentPaneRef} style={{
                   flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden',
                   padding: '20px 24px',
                   display: 'flex', flexDirection: 'column', gap: 20
@@ -1042,22 +1086,22 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                           on the latest?" is the question people open Settings to
                           answer, and the toolbar chip says nothing at all when
                           the answer is yes. */}
-                      <UpdatesSection />
+                      <div data-setting-id="updates"><UpdatesSection /></div>
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Freezes the app noticed by itself (main/freezeLog.ts). */}
-                      <FreezeLogSection headStyle={sectionHead} />
+                      <div data-setting-id="freezes"><FreezeLogSection headStyle={sectionHead} /></div>
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* How much of the office floor to draw (full / no walking / no office / auto). */}
-                      <OfficeRenderSection headStyle={sectionHead} />
+                      <div data-setting-id="officeRender"><OfficeRenderSection headStyle={sectionHead} /></div>
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Home folder */}
-                      <div>
+                      <div data-setting-id="homeFolder">
                         <div style={sectionHead}>
                           {t('settings.general.homeFolder')}
                         </div>
@@ -1078,7 +1122,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                           {t('settings.general.environment')}
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                          <div data-setting-id="keepAwake" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>{t('settings.general.keepAwake')}</span>
                               <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
@@ -1089,7 +1133,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                               {keepAwake ? t('common.on') : t('common.off')}
                             </PixelButton>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                          <div data-setting-id="simpleMode" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>{t('settings.general.simpleMode')}</span>
                               <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
@@ -1106,7 +1150,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Language — app UI language (i18n) */}
-                      <div>
+                      <div data-setting-id="language">
                         <div style={sectionHead}>
                           {t('settings.general.language')}
                         </div>
@@ -1133,7 +1177,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Desktop notifications toggle */}
-                      <div>
+                      <div data-setting-id="notifications">
                         <div style={sectionHead}>
                           {t('settings.general.notifications')}
                         </div>
@@ -1163,7 +1207,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                         <div style={sectionHead}>
                           {t('settings.general.maintenance')}
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                        <div data-setting-id="autoCompact" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                             <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
                               {t('settings.general.autoCompact')}
@@ -1181,7 +1225,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                           </PixelButton>
                         </div>
                         <div style={{ height: 10 }} />
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                        <div data-setting-id="autoUpdate" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                             <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
                               {t('settings.general.autoUpdate')}
@@ -1222,7 +1266,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       </div>
 
                       {/* Office Theme — TV-show office maps (experimental; flag tvShowOffices, default off) */}
-                      <OfficeThemePicker config={config} />
+                      <div data-setting-id="officeTheme"><OfficeThemePicker config={config} /></div>
                     </>
                   )}
 
@@ -1235,7 +1279,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                   {activeSection === 'Agents & Models' && (
                     <>
-                      <div>
+                      <div data-setting-id="defaultModel">
                         <div style={sectionHead}>
                           {t('settings.agentsModels.defaultModel')}
                         </div>
@@ -1262,7 +1306,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
-                      <div>
+                      <div data-setting-id="roleModels">
                         <div style={sectionHead}>{t('settings.agentsModels.perRole')}</div>
                         <span style={{ display: 'block', fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)', marginBottom: 8 }}>
                           {t('settings.agentsModels.perRoleDesc')}
@@ -1272,12 +1316,12 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
-                      <AiEnginesSettings config={config} />
+                      <div data-setting-id="aiEngines"><AiEnginesSettings config={config} /></div>
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Advanced */}
-                      <div>
+                      <div data-setting-id="maxTurns">
                         <div style={sectionHead}>
                           {t('settings.agentsModels.advanced')}
                         </div>
@@ -1298,7 +1342,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                   {/* AUTONOMY & BUDGETS — the safety tab */}
                   {activeSection === 'Autonomy & Budgets' && (
                     <>
-                      <div>
+                      <div data-setting-id="autoMode">
                         <div style={sectionHead}>
                           {t('settings.autonomy.autonomy')}
                         </div>
@@ -1319,11 +1363,11 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)', margin: '12px 0' }} />
 
-                      <div>
+                      <div data-setting-id="whoCanAdd">
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                             <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
-                              Who can add agents
+                              {t('settings.autonomy.whoCanAdd')}
                             </span>
                             <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
                               {orchSpawnOn
@@ -1340,7 +1384,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Temps: the office's cap and each agent's own quota */}
-                      <div>
+                      <div data-setting-id="temps">
                         <div style={sectionHead}>
                           {t('tempQuota.title')}
                         </div>
@@ -1350,7 +1394,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Circuit breaker — the FULL unit (v0.3.4: all fields have UI) */}
-                      <div>
+                      <div data-setting-id="breaker">
                         <div style={sectionHead}>
                           {t('settings.autonomy.breaker')}
                         </div>
@@ -1365,7 +1409,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                             </PixelButton>
                           </div>
                           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
+                            <label data-setting-id="floorBudget" style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
                               {t('settings.autonomy.floorBudget')}
                               <input
                                 type="number" min="0" step="100000" value={agentBudget}
@@ -1377,7 +1421,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                                 {fmtBudgetTokens(agentBudget) ? t('settings.autonomy.budgetEquals', { value: fmtBudgetTokens(agentBudget) }) : t('settings.autonomy.budgetTotal')}
                               </span>
                             </label>
-                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
+                            <label data-setting-id="velocity" style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
                               {t('settings.autonomy.velocity')}
                               <input
                                 type="number" min="0" step="1000" value={velocityCeiling}
@@ -1386,7 +1430,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                                 style={{ ...slackInputStyle, width: 180 }}
                               />
                             </label>
-                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
+                            <label data-setting-id="repeatedLimit" style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
                               {t('settings.autonomy.repeatedLimit')}
                               <input
                                 type="number" min="0" step="5" value={brkRepeated}
@@ -1395,7 +1439,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                                 style={{ ...slackInputStyle, width: 140 }}
                               />
                             </label>
-                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
+                            <label data-setting-id="errorStormLimit" style={{ display: 'flex', flexDirection: 'column', gap: 4, ...slackLabelStyle }}>
                               {t('settings.autonomy.errorStormLimit')}
                               <input
                                 type="number" min="0" step="5" value={brkErrStorm}
@@ -1405,7 +1449,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                               />
                             </label>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                          <div data-setting-id="hardStop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>{t('settings.autonomy.hardStop')}</span>
                               <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
@@ -1423,7 +1467,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Usage windows: when agents are told the subscription is nearly spent */}
-                      <div>
+                      <div data-setting-id="usageWindows">
                         <div style={sectionHead}>
                           {t('settings.autonomy.usageWindows')}
                         </div>
@@ -1459,7 +1503,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                   {/* MEMORY & KNOWLEDGE */}
                   {activeSection === 'Memory & Knowledge' && (
                     <>
-                      <div>
+                      <div data-setting-id="semanticMemory">
                         <div style={sectionHead}>
                           {t('settings.memory.semanticMemory')}
                         </div>
@@ -1480,7 +1524,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
                       {/* Knowledge Graph — enterprise multimodal context for agents */}
-                      <div>
+                      <div data-setting-id="knowledgeGraph">
                         <div style={sectionHead}>
                           {t('settings.memory.kg')}
                         </div>
@@ -1521,7 +1565,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                   {/* CONNECTIONS — everything external (MCP + Slack + webhook + REST) */}
                   {activeSection === 'Connections' && (
                     <>
-                      <McpDefaultsSettings config={config} />
+                      <div data-setting-id="mcpDefaults"><McpDefaultsSettings config={config} /></div>
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
                     </>
                   )}
@@ -1531,12 +1575,12 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       {/* Connected-services registry (generic, registry-driven).
                           Leads the section; the hardcoded Slack/Webhook/Free Flow
                           blocks below stay as-is. */}
-                      <IntegrationsRegistry />
+                      <div data-setting-id="integrations"><IntegrationsRegistry /></div>
 
                       <div style={sectionRule} />
 
                       {/* Slack integration */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div data-setting-id="slack" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         <div style={sectionHeadTight}>
                           {t('settings.connections.slack')}
                         </div>
@@ -1721,7 +1765,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                           Everything renders off the store mirror, so a change made
                           in the Triggers tab lands here without a refetch (and the
                           other way round). */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div data-setting-id="webhooks" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         <div style={sectionHeadTight}>
                           {t('settings.connections.webhooks')}
                         </div>
@@ -1919,7 +1963,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                       {/* Organisation trigger — teammates messaging this clone node.
                           Persisted + mirrored; no transport reads the key yet. */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div data-setting-id="organisation" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         <div style={sectionHeadTight}>
                           {t('settings.connections.organisation')}
                         </div>
@@ -2006,7 +2050,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                   {activeSection === 'Voice' && (
                     <>
                       {/* Free Flow (voice dictation) */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div data-setting-id="freeFlow" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         <div style={sectionHeadTight}>
                           {t('settings.voice.freeFlow')}
                         </div>
@@ -2086,7 +2130,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                       <div style={sectionRule} />
 
                       {/* Realtime Michael — voice device selection (rt-8) */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div data-setting-id="realtime" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         <div style={sectionHeadTight}>
                           {t('settings.voice.realtime')}
                         </div>
@@ -2159,7 +2203,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                         <CostHud />
                         {/* rt-9 idle-tunable: how long an idle voice session stays open before
                             it auto-closes. The spend cap remains the real runaway guard. */}
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 280 }}>
+                        <label data-setting-id="idleDisconnect" style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 280 }}>
                           <span style={slackLabelStyle}>{t('settings.voice.idleDisconnect')}</span>
                           <select
                             value={String(idleDisconnectMs)}
@@ -2188,7 +2232,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                   {/* Danger — a red row at the bottom of General (was its own tab) */}
                   {activeSection === 'General' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div data-setting-id="reset" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                       <div style={{
                         fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px',
                         color: '#6E1423'

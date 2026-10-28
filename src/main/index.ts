@@ -98,12 +98,16 @@ import { WslBridge } from './wslBridge';
 import { appImageRelaunch } from './appImageLauncher';
 import { McpServers } from './mcpServers';
 import { EnvVault, fingerprintOf, type ProposalAnswer } from './envVault';
+import { readRunnerCode } from './runnerCode';
+import { runHiddenClaude } from './hiddenClaude';
+import { explainRunnerPrompt, type RunnerCodeFile } from '../shared/runnerCode';
 import { addConnection, connectionAccessFor, setConnectionAccess, connectionKeyStored, connectionLaunchEnv, instancesOf, listConnections, removeConnection, renameConnection, serviceOf, setConnectionEnabled, setConnectionScope, setConnectionSecret, testConnection } from './connections';
 import { McpGateway, type McpCallRecord } from './mcpGateway';
 import { effectiveApiAccess, explainConnection, isAccess, type Access } from '../shared/connectionAccess';
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
 import { runsUnsandboxed, unsandboxedAgents, unsandboxRefusal } from '../shared/unsandboxed';
 import { cleanCloudCredentialIds, cleanCloudCredentialMap } from '../shared/cloudCredentials';
+import { cleanDockerMap, dockerGranted } from '../shared/agentDocker';
 import { ensureVaultRoot } from './vaultRoot';
 import { piNoSandboxScript, refusePiWithoutSandbox, type PiSandboxPlace } from '../shared/piSandbox';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
@@ -128,7 +132,7 @@ import { diffTasks, snapshotOf, type TaskEvent, type TaskSnapshot } from '../sha
 import type { TaskEdit } from '../shared/taskEdit';
 import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, deliverablePaths, isInside, linkFor, recordElsewhere, writtenFiles, type DeliverableLink, type ElsewhereWrite } from '../shared/deliverables';
 import { isDeliverableLike, isElsewhereDeliverable } from '../shared/deliverableOrganize';
-import { matchDeliverable } from '../shared/deliverableMatch';
+import { matchDeliverable, matchRelativeDeliverable } from '../shared/deliverableMatch';
 import { piSessionSaved } from './piSession';
 import { findArgs, parseFindListing, repoCheck, scanDeliverables, type ScanOptions } from './deliverableScan';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, hasPlaceholderHost, probeSpecFor } from '../shared/integrations';
@@ -721,8 +725,8 @@ ipcMain.handle('fortress:uninstall', () => {
 
 // Environment & secrets (envVault.ts): agents use secrets, never see them.
 /** Runner proposals waiting for the human in the window, by id. */
-interface RunnerProposalRequest { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[] }
-const pendingProposals = new Map<string, { req: RunnerProposalRequest; settle: (a: ProposalAnswer) => void }>();
+interface RunnerProposalRequest { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[]; files: RunnerCodeFile[] }
+const pendingProposals = new Map<string, { req: RunnerProposalRequest; cwd?: string; settle: (a: ProposalAnswer) => void; explain?: Promise<{ ok: boolean; text?: string; error?: string }> }>();
 
 const envVault = new EnvVault({
   readVars: () => readConfig().envVars ?? [],
@@ -746,17 +750,20 @@ const envVault = new EnvVault({
     refocusAfterDialog(win);
     return response === 0 ? 'once' : response === 1 ? 'always' : 'deny';
   },
-  approveProposal: async ({ proposal, agentName, missing }) => {
+  approveProposal: async ({ proposal, agentName, missing, cwd }) => {
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
     // In the app's own window: translated, and the human can create the
     // secrets the runner needs right there (renderer: RunnerProposalModal).
     if (win && !win.webContents.isDestroyed()) {
       const id = randomUUID();
-      const req: RunnerProposalRequest = { id, agentName, proposal, missing };
+      // The code the command runs, read now from the agent's folder (confined
+      // to it), so the human reads what they are approving.
+      const files = await readRunnerCode(cwd, proposal.command).catch(() => []);
+      const req: RunnerProposalRequest = { id, agentName, proposal, missing, files };
       return new Promise<ProposalAnswer>((resolve) => {
         const timer = setTimeout(() => settle(false), 15 * 60_000);
         const settle = (a: ProposalAnswer) => { clearTimeout(timer); pendingProposals.delete(id); resolve(a); };
-        pendingProposals.set(id, { req, settle });
+        pendingProposals.set(id, { req, cwd, settle });
         try { win.webContents.send('env:proposal', req); } catch { settle(false); return; }
         if (win.isMinimized()) win.restore();
         win.flashFrame(true);
@@ -927,6 +934,27 @@ ipcMain.handle('cloudCreds:set', (_evt, agentId: unknown, ids: unknown) => {
   return { ok: true };
 });
 
+// ─── Docker (shared/agentDocker.ts) ─────────────────────────────────────────
+// Out of every sandboxed agent's reach; the human may let one agent use it.
+// Docker is root where agents run, so like the cloud logins: only docker:set
+// writes agentDocker (the generic config write drops it), never for a
+// custodian, every change in the hive's log. It applies at the next start.
+ipcMain.handle('docker:status', async () => {
+  if (!hive.enabled() || !(await hive.sandboxAvailable())) return { available: false, present: false };
+  return { available: true, present: (await hive.dockerSockets()).length > 0 };
+});
+ipcMain.handle('docker:set', (_evt, agentId: unknown, on: unknown) => {
+  if (typeof agentId !== 'string' || !agentId || typeof on !== 'boolean') return { ok: false, error: 'bad request' };
+  const a = hive.enabled() ? hive.registry().agents?.[agentId] : undefined;
+  if (!a) return { ok: false, error: 'unknown agent' };
+  if (on && isCustodian(criticalMap(), agentId)) return { ok: false, error: `${a.name ?? agentId} holds a critical connection: a custodian never reaches Docker.` };
+  const map = cleanDockerMap(readConfig().agentDocker);
+  if (on) map[agentId] = true; else delete map[agentId];
+  writeConfig({ agentDocker: map });
+  try { hive.appendLog({ kind: 'docker', agentId, name: a.name, on, by: 'human' }); } catch { /* the config change stands */ }
+  return { ok: true };
+});
+
 ipcMain.handle('sshRelay:set', (_evt, agentId: unknown, grant: unknown) => {
   if (typeof agentId !== 'string' || !agentId) return { ok: false, error: 'bad request' };
   const a = hive.enabled() ? hive.registry().agents?.[agentId] : undefined;
@@ -964,7 +992,9 @@ const integrationBroker = new IntegrationBroker({
     propose: (workerId, proposal) => {
       const agentId = ptyToAgent.get(workerId);
       const name = (agentId && hive.registry().agents?.[agentId]?.name) || agentId || workerId;
-      return envVault.proposeRunner(proposal, { agentName: name });
+      // Its folder is the one the app started it in, never a path it names.
+      const cwd = ptyManager.list().find((p) => p.id === workerId)?.cwd;
+      return envVault.proposeRunner(proposal, { agentName: name, cwd });
     },
     run: async (workerId, runnerId) => {
       // The worktree is the one the app started this agent in — never a path
@@ -4677,7 +4707,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           // Its sandboxed shell may reach this broker port (sb-api, sb-run…).
           brokerUrl: opts.env?.SB_BROKER_URL,
           // Cloud CLI logins the human exposed to it (never a custodian's).
-          exposeCredentials: isCustodian(criticalMap(), opts.hive.id) ? [] : cleanCloudCredentialMap(readConfig().agentCloudCredentials)[opts.hive.id] ?? []
+          exposeCredentials: isCustodian(criticalMap(), opts.hive.id) ? [] : cleanCloudCredentialMap(readConfig().agentCloudCredentials)[opts.hive.id] ?? [],
+          // The Docker socket, when the human allowed it (never a custodian's).
+          docker: dockerGranted(readConfig().agentDocker, readConfig().criticalCustodians, opts.hive.id)
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
@@ -5359,8 +5391,8 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   // "Run without sandbox" is set only by agent:setUnsandboxed (its typed
   // confirmation, custodian check and audit line); never through here. Nor is
   // "Use my SSH keys through the office" (sshRelay:set), nor the cloud logins
-  // an agent may read (cloudCreds:set).
-  const { agentUnsandboxed: _unsandboxed, agentSshRelay: _sshRelay, agentCloudCredentials: _cloudCreds, ...safePatch } = patch ?? {};
+  // an agent may read (cloudCreds:set), nor Docker (docker:set).
+  const { agentUnsandboxed: _unsandboxed, agentSshRelay: _sshRelay, agentCloudCredentials: _cloudCreds, agentDocker: _docker, ...safePatch } = patch ?? {};
   const next = writeConfig(safePatch);
   // Live opt-in/out from Settings → Privacy (TELEMETRY.md).
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);
@@ -5486,6 +5518,40 @@ ipcMain.handle('env:proposalAnswer', (_evt, id: unknown, answer: unknown) => {
   }
   p.settle({ ok: a.ok === true, secrets });
   return { ok: true };
+});
+// "Explain": a hidden one-shot session reads the proposal (and the code shown
+// with it) and returns a plain-language explanation for the window. It only
+// informs: approving still takes the human's click. One run per proposal.
+ipcMain.handle('env:proposalExplain', (_evt, id: unknown, lang: unknown) => {
+  const p = typeof id === 'string' ? pendingProposals.get(id) : undefined;
+  if (!p) return { ok: false, error: 'gone' };
+  if (!p.explain) {
+    p.explain = (async () => {
+      const cfg = readConfig();
+      const command = cfg.defaultCommand || 'claude';
+      // The hidden session drives Claude Code's TUI and transcript; other
+      // engines have no such one-shot here yet.
+      if (!isClaudeProvider(inferAgentProvider(command, undefined))) return { ok: false, error: 'needsClaude' };
+      const cwd = p.cwd && existsSync(p.cwd) ? p.cwd : app.getPath('userData');
+      const prompt = explainRunnerPrompt({
+        agentName: p.req.agentName, ...p.req.proposal, files: p.req.files,
+        language: typeof lang === 'string' ? lang : cfg.uiLanguage
+      });
+      const r = await runHiddenClaude(prompt, {
+        // The configured default model; the CLI's own default when unset.
+        model: cfg.defaultModel || 'sonnet',
+        cwd,
+        command,
+        // Read-only: it may look at the folder, never change it, run commands or go online.
+        disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch', 'Task', 'Agent'],
+        timeoutMs: 180_000
+      });
+      return r.ok && r.text ? { ok: true, text: r.text } : { ok: false, error: r.error ?? 'no answer' };
+    })().catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    // A failed run may be tried again.
+    void p.explain.then((r) => { if (!r.ok) p.explain = undefined; });
+  }
+  return p.explain;
 });
 ipcMain.handle('env:opStatus', () => new Promise((resolve) => {
   // Is the 1Password CLI installed? (Signing in happens through the desktop app.)
@@ -6367,6 +6433,18 @@ function readElsewhereWrites(root: string): ElsewhereWrite[] {
     return Array.isArray(raw.files) ? raw.files.filter((f): f is ElsewhereWrite => !!f && typeof f.path === 'string' && typeof f.ts === 'number') : [];
   } catch { return []; }
 }
+/** An older office's own research/ folder (<office>/research, beside hive/),
+ *  when it has one. The orchestrator runs in the office folder, and before its
+ *  prompt named the hive's research/ by full path, `research/...` from it
+ *  landed there (offerOrchestratorHires still reads hires from both). */
+function legacyResearchDirs(): string[] {
+  const home = readConfig().harnessHome;
+  const root = hive.enabled() ? hive.root() : null;
+  if (!home || !root) return [];
+  const dir = join(home, DELIVERABLES_DIR);
+  if (resolve(dir) === resolve(root, DELIVERABLES_DIR)) return [];
+  try { return statSync(dir).isDirectory() ? [dir] : []; } catch { return []; }
+}
 /** The paths "Written elsewhere" lists: documents outside the office, not in
  *  a repo or worktree (the project's own code and docs) or a temp folder. */
 function elsewhereDeliverables(paths: string[], root: string): string[] {
@@ -6472,6 +6550,15 @@ ipcMain.handle('deliverables:list', async () => {
   const elsewhere = (await Promise.all(kept.slice(-200).map(async (w) => {
     try { const s = await stat(w.path); return s.isFile() ? { ...w, size: s.size, mtime: s.mtimeMs } : null; } catch { return null; }
   }))).filter((w): w is NonNullable<typeof w> => !!w).reverse();
+  // An older office's own research/ folder: its documents, with the ones above.
+  const listed = new Set(elsewhere.map((w) => w.path.replace(/\\/g, '/').toLowerCase()));
+  for (const legacyDir of legacyResearchDirs()) {
+    const scan = await scanResearch(legacyDir, wsl).catch(() => null);
+    for (const f of scan?.files ?? []) {
+      if (!isDeliverableLike(f.abs) || listed.has(f.abs.replace(/\\/g, '/').toLowerCase())) continue;
+      elsewhere.push({ path: f.abs, agentId: '', name: '', ts: f.mtime, created: false, size: f.size, mtime: f.mtime });
+    }
+  }
   // A slow listing says where the time went (log.jsonl), so it can be found on the machine it happens on.
   const ms = Date.now() - started;
   if (ms > 1500) try { hive.appendLog({ kind: 'deliverables-slow', ms, scanMs, files: total, elsewhere: kept.length, wsl: !!wsl, authorsPending }); } catch { /* best-effort */ }
@@ -6579,7 +6666,10 @@ ipcMain.handle('deliverables:fileUrl', async (_evt, p: unknown) => {
 // A path clicked in an agent's terminal: the deliverable it is (as the list
 // spells it), or null for any other file (the IDE opens those). The same files
 // deliverables:list shows: research/, task links and cards, written elsewhere.
-ipcMain.handle('deliverables:match', (_evt, p: unknown) => {
+// `cwd` comes with a RELATIVE path the renderer did not find under the agent's
+// folder (deliverableMatch.ts matchRelativeDeliverable says why): it is then
+// tried against the hive and the office folder too.
+ipcMain.handle('deliverables:match', (_evt, p: unknown, cwd?: unknown) => {
   const root = hive.enabled() ? hive.root() : null;
   if (!root || typeof p !== 'string' || !p.length || p.length > 4096 || p.includes('\0')) return null;
   const distro = hive.wslRoot()?.distro ?? null;
@@ -6592,7 +6682,12 @@ ipcMain.handle('deliverables:match', (_evt, p: unknown) => {
     ...cards,
     ...[...readElsewhereWrites(root).map((w) => w.path), ...session].filter((x) => !isInside(x, root) && isDeliverableLike(x))
   ];
-  return matchDeliverable(p, { researchDir: join(root, DELIVERABLES_DIR), distro, known });
+  const index = { researchDir: join(root, DELIVERABLES_DIR), distro, known, legacyDirs: legacyResearchDirs() };
+  if (typeof cwd === 'string' && cwd.length && cwd.length <= 4096 && !cwd.includes('\0')) {
+    const home = readConfig().harnessHome;
+    return matchRelativeDeliverable(p, index, [cwd, root, home], (x) => { try { return statSync(x).isFile(); } catch { return false; } });
+  }
+  return matchDeliverable(p, index);
 });
 // What the human typed straight into an agent's terminal, kept for the Inbox
 // (the renderer knows which prompts were typed by a person). Main-only file.

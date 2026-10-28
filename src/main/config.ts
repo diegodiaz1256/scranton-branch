@@ -250,6 +250,9 @@ export interface HarnessConfig {
   /** Cloud CLI logins (shared/cloudCredentials.ts) the human let each agent
    *  read: agent id → set ids. Absent → all hidden. */
   agentCloudCredentials?: Record<string, string[]>;
+  /** Agents the human let reach the Docker socket (shared/agentDocker.ts): agent
+   *  id → true. Set only through docker:set, never a generic config write. */
+  agentDocker?: Record<string, true>;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'catalog';

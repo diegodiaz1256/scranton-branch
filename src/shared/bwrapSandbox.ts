@@ -12,6 +12,8 @@
  *     the human exposed them to this agent (shared/cloudCredentials.ts);
  *   - folders it may not read at all (another agent's confidential vault)
  *     hidden the same way;
+ *   - the Docker socket hidden unless the human allowed Docker to this agent
+ *     (Claude Code's sandbox blocks Unix sockets; agentDocker.ts);
  *   - network: the host's (the agent needs its model API, and the app's
  *     services on loopback through the WSL bridge), or none.
  *
@@ -38,6 +40,10 @@ export interface BwrapProfile {
   controls?: string[];
   /** Folders hidden from the agent: an empty tmpfs over each. */
   hide?: string[];
+  /** Single files hidden from the agent (/dev/null over each): the Docker
+   *  socket unless the human allowed it (shared/agentDocker.ts). Real paths:
+   *  bwrap cannot mount through a link such as /var/run. */
+  hideFiles?: string[];
   /** The agent's home (for the credential folders). */
   home: string;
   /** Cloud CLI logins this agent may read (shared/cloudCredentials.ts ids);
@@ -100,7 +106,7 @@ export function cliStateMounts(cli: AppSandboxedCli, home: string): { writable: 
 /** The paths a profile mounts over (for the caller's existence check). */
 export function mountPoints(p: BwrapProfile): string[] {
   const h = hiddenHome(p);
-  return [...h.dirs, ...h.files, WSL_INTEROP_DIR, ...(p.hide ?? []), ...(p.writableFiles ?? [])];
+  return [...h.dirs, ...h.files, WSL_INTEROP_DIR, ...(p.hide ?? []), ...(p.hideFiles ?? []), ...(p.writableFiles ?? [])];
 }
 
 const clean = (xs: string[] | undefined): string[] => [...new Set((xs ?? []).filter((x) => typeof x === 'string' && x.startsWith('/') && !x.includes('\0')).map((x) => x.replace(/\/+$/, '') || '/'))];
@@ -134,6 +140,6 @@ export function bwrapArgs(p: BwrapProfile, exists: (path: string) => boolean): s
   const home = hiddenHome(p);
   const hidden = clean([...home.dirs, WSL_INTEROP_DIR, ...(p.hide ?? [])]);
   for (const h of hidden) if (exists(h)) args.push('--tmpfs', h);
-  for (const f of clean(home.files)) if (exists(f)) args.push('--ro-bind', '/dev/null', f);
+  for (const f of clean([...home.files, ...(p.hideFiles ?? [])])) if (exists(f)) args.push('--ro-bind', '/dev/null', f);
   return args;
 }

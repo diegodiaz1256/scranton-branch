@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { RunnerProposalView } from '../../../preload';
+import { MarkdownPreview } from '@/markdown/MarkdownPreview';
 import './RunnerProposalModal.css';
 
 type Kind = 'secret' | 'op';
@@ -10,13 +11,17 @@ type Kind = 'secret' | 'op';
  * secrets the agent never sees. The human reads the exact command, why, and
  * which secrets it uses, and can create the ones that do not exist yet right
  * here (a value or a 1Password reference), stored encrypted by the app.
+ * The code the command runs (script files, package.json scripts) is shown
+ * too, and "Explain" asks an agent for a plain-language reading of it; that
+ * only informs, approving still takes the human's click.
  * Mounted once for both layouts; proposals queue and show one at a time.
  */
 export function RunnerProposalModal() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [queue, setQueue] = useState<RunnerProposalView[]>([]);
   const [values, setValues] = useState<Record<string, { kind: Kind; value: string }>>({});
   const [busy, setBusy] = useState(false);
+  const [explain, setExplain] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; text?: string; error?: string }>({ state: 'idle' });
 
   useEffect(() => {
     const add = (r: RunnerProposalView) => setQueue((q) => (q.some((x) => x.id === r.id) ? q : [...q, r]));
@@ -25,7 +30,9 @@ export function RunnerProposalModal() {
   }, []);
 
   const cur = queue[0];
-  useEffect(() => { setValues({}); }, [cur?.id]);
+  const curId = useRef<string | undefined>(undefined);
+  curId.current = cur?.id;
+  useEffect(() => { setValues({}); setExplain({ state: 'idle' }); }, [cur?.id]);
   if (!cur) return null;
 
   const missing = new Set(cur.missing);
@@ -35,6 +42,18 @@ export function RunnerProposalModal() {
     try { await window.cth.envProposalAnswer(cur.id, ok ? { ok, secrets: values } : { ok }); }
     finally { setBusy(false); setQueue((q) => q.slice(1)); }
   };
+  const askExplain = async () => {
+    const id = cur.id;
+    setExplain({ state: 'loading' });
+    let r: { ok: boolean; text?: string; error?: string };
+    try { r = await window.cth.envProposalExplain(id, i18n.language); }
+    catch (e) { r = { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+    // The window may have moved on to the next proposal meanwhile.
+    if (curId.current === id) setExplain(r.ok && r.text ? { state: 'done', text: r.text } : { state: 'error', error: r.error });
+  };
+  const explainError = (e?: string) =>
+    e === 'needsClaude' ? t('proposal.explainNeedsClaude') : e === 'gone' ? t('proposal.explainGone') : t('proposal.explainFailed', { error: e ?? '?' });
+  const files = cur.files ?? [];
   const set = (name: string, patch: Partial<{ kind: Kind; value: string }>) =>
     setValues((v) => ({ ...v, [name]: { kind: v[name]?.kind ?? 'secret', value: v[name]?.value ?? '', ...patch } }));
 
@@ -46,6 +65,38 @@ export function RunnerProposalModal() {
         <div>
           <div className="rp-label">{t('proposal.command')}</div>
           <pre className="rp-command">{cur.proposal.command}</pre>
+        </div>
+        <div>
+          <div className="rp-label">{t('proposal.code')}</div>
+          {files.length === 0 && <p className="rp-muted">{t('proposal.codeNone')}</p>}
+          {files.map((f, i) => (
+            <div key={`${f.path}#${f.script ?? ''}#${i}`} className="rp-file">
+              <div className="rp-file-head">
+                <code className="rp-name">{f.path}</code>
+                {f.script && <span className="rp-muted">{t('proposal.codeScript', { name: f.script })}</span>}
+              </div>
+              {f.content !== undefined
+                ? <pre className="rp-code" tabIndex={0} aria-label={f.path}>{f.content}</pre>
+                : <p className="rp-muted">{t(`proposal.codeError_${f.error ?? 'unreadable'}`)}</p>}
+              {f.truncated && <p className="rp-muted">{t('proposal.codeTruncated')}</p>}
+            </div>
+          ))}
+          {files.length > 0 && <p className="rp-muted">{t('proposal.codeSnapshot')}</p>}
+        </div>
+        <div className="rp-explain">
+          {explain.state !== 'done' && (
+            <button type="button" className="rp-btn" disabled={explain.state === 'loading'} onClick={() => void askExplain()}>
+              {explain.state === 'loading' ? t('proposal.explaining') : t('proposal.explain')}
+            </button>
+          )}
+          {explain.state === 'error' && <p className="rp-muted" role="alert">{explainError(explain.error)}</p>}
+          {explain.state === 'done' && explain.text && (
+            <div className="rp-explanation" aria-live="polite">
+              <div className="rp-label">{t('proposal.explanation')}</div>
+              <MarkdownPreview source={explain.text} variant="card" />
+              <p className="rp-muted">{t('proposal.explainNote')}</p>
+            </div>
+          )}
         </div>
         <div>
           <div className="rp-label">{t('proposal.secrets')}</div>
