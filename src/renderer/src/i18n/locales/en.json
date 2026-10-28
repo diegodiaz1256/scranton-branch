@@ -467,7 +467,31 @@
       "memoryKnowledge": "memory mempalace semantic embedding model graph knowledge"
     },
     "searchPlaceholder": "Search settings",
-    "searchNone": "Nothing matches."
+    "searchNone": "Nothing matches.",
+    "presets": {
+      "title": "How careful should the office be?",
+      "careful": "Careful",
+      "balanced": "Balanced",
+      "autonomous": "Autonomous",
+      "custom": "Custom",
+      "carefulDesc": "Agents ask you before they act, and anything that runs away is stopped at once.",
+      "balancedDesc": "Agents get on with the work by themselves, inside their safe space, and you decide who joins the team.",
+      "autonomousDesc": "Like Balanced, and the orchestrator can also bring in helpers by himself when the work needs them.",
+      "customDesc": "You changed some of the settings below one by one, so they match no preset. Pick a preset to go back to one.",
+      "change": {
+        "autoOn": "Agents act without asking first (still inside the sandbox).",
+        "autoOff": "Agents ask you before they act.",
+        "hireYou": "Only you can add agents. {{name}} can ask, and his request waits for you.",
+        "hireBoth": "{{name}} can add agents by himself, which also spends tokens.",
+        "breakerStop": "The runaway safety stops an agent as soon as it trips.",
+        "breakerSteer": "The runaway safety warns and steers an agent before it stops it.",
+        "velocitySlow": "Spending may run at half the usual speed (30,000 tokens a minute).",
+        "velocityDefault": "Spending may run at the usual speed.",
+        "warnEarly": "Agents are warned early about your plan's limits (at 80% of the 5-hour window, 90% of the week).",
+        "warnDefault": "Agents are warned near your plan's limits (at 95% of the 5-hour window, 98% of the week)."
+      },
+      "never": "No preset turns off the sandbox, Docker or SSH protections, or the sign-offs that only you can give, and none changes your token budget."
+    }
   },
   "commandCenter": {
     "title": "COMMAND CENTER",
@@ -688,6 +712,21 @@
       "edit": "Edit details",
       "hire": "Hire {{name}}",
       "hint": "Nothing starts until you hire. Edit details to change anything first."
+    },
+    "easy": {
+      "ask": "WHAT DO YOU WANT IT FOR?",
+      "role_research": "Research",
+      "role_researchDesc": "Looks things up and writes short summaries",
+      "role_writing": "Writing",
+      "role_writingDesc": "Drafts, edits and proofreads documents",
+      "role_organizing": "Organizing",
+      "role_organizingDesc": "Tidies files, spreadsheets and data",
+      "role_coding": "Software",
+      "role_codingDesc": "Builds and fixes apps and code",
+      "role_other": "Something else",
+      "role_otherDesc": "Describe it in your own words",
+      "engineNote": "It will run on Claude Code with Sonnet 5.5. You can change the engine under Advanced.",
+      "advanced": "Advanced"
     }
   },
   "onboarding": {

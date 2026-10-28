@@ -467,7 +467,31 @@
       "memoryKnowledge": "memoria mempalace semantica embedding modelo grafo conocimiento"
     },
     "searchPlaceholder": "Buscar en ajustes",
-    "searchNone": "No hay coincidencias."
+    "searchNone": "No hay coincidencias.",
+    "presets": {
+      "title": "¿Con cuánto cuidado debe trabajar la oficina?",
+      "careful": "Prudente",
+      "balanced": "Equilibrado",
+      "autonomous": "Autónomo",
+      "custom": "Personalizado",
+      "carefulDesc": "Los agentes te preguntan antes de actuar, y cualquiera que se desboque se detiene en el acto.",
+      "balancedDesc": "Los agentes hacen el trabajo por su cuenta, dentro de su espacio seguro, y tú decides quién entra en el equipo.",
+      "autonomousDesc": "Como Equilibrado, y además el orquestador puede incorporar ayudantes por su cuenta cuando el trabajo lo pide.",
+      "customDesc": "Cambiaste algunos ajustes de abajo uno a uno, así que no coinciden con ningún perfil. Elige un perfil para volver a uno.",
+      "change": {
+        "autoOn": "Los agentes actúan sin preguntar antes (siempre dentro del sandbox).",
+        "autoOff": "Los agentes te preguntan antes de actuar.",
+        "hireYou": "Solo tú puedes añadir agentes. {{name}} puede pedirlo, y su petición te espera.",
+        "hireBoth": "{{name}} puede añadir agentes por su cuenta, lo que también gasta tokens.",
+        "breakerStop": "El freno de seguridad detiene a un agente en cuanto salta.",
+        "breakerSteer": "El freno de seguridad avisa y reconduce a un agente antes de detenerlo.",
+        "velocitySlow": "El gasto puede ir a la mitad de la velocidad habitual (30.000 tokens por minuto).",
+        "velocityDefault": "El gasto puede ir a la velocidad habitual.",
+        "warnEarly": "Los agentes reciben aviso pronto sobre los límites de tu plan (al 80 % de la ventana de 5 horas, al 90 % de la semana).",
+        "warnDefault": "Los agentes reciben aviso cerca de los límites de tu plan (al 95 % de la ventana de 5 horas, al 98 % de la semana)."
+      },
+      "never": "Ningún perfil desactiva el sandbox, las protecciones de Docker o SSH, ni las aprobaciones que solo tú puedes dar, y ninguno cambia tu presupuesto de tokens."
+    }
   },
   "commandCenter": {
     "title": "CENTRO DE MANDO",
@@ -688,6 +712,21 @@
       "edit": "Editar detalles",
       "hire": "Contratar a {{name}}",
       "hint": "No empieza nada hasta que contrates. Edita los detalles si quieres cambiar algo antes."
+    },
+    "easy": {
+      "ask": "¿PARA QUÉ LO QUIERES?",
+      "role_research": "Investigar",
+      "role_researchDesc": "Busca información y escribe resúmenes breves",
+      "role_writing": "Escribir",
+      "role_writingDesc": "Redacta, edita y corrige documentos",
+      "role_organizing": "Organizar",
+      "role_organizingDesc": "Ordena archivos, hojas de cálculo y datos",
+      "role_coding": "Software",
+      "role_codingDesc": "Crea y arregla aplicaciones y código",
+      "role_other": "Otra cosa",
+      "role_otherDesc": "Descríbelo con tus palabras",
+      "engineNote": "Funcionará con Claude Code y Sonnet 5.5. Puedes cambiar el motor en Avanzado.",
+      "advanced": "Avanzado"
     }
   },
   "onboarding": {

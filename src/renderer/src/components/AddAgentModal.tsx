@@ -31,6 +31,8 @@ import {
   isClaudeProvider
 } from '@/store/config';
 import { useRtl } from '@/i18n/useDirection';
+import { isEasyMode } from '@shared/uiMode';
+import { EASY_HIRE_ENGINE, EASY_HIRE_ROLES, easyHireRole, type EasyHireRole } from '@shared/easyHire';
 
 const ACCENTS: AccentColorName[] = ['coral', 'mint', 'sky', 'lemon', 'lilac', 'peach'];
 
@@ -181,8 +183,11 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
 
   // Default provider follows whatever the global default command is (claude
   // unless the user reconfigured it); the model only carries over for Claude.
-  const initialProvider = inferAgentProvider(config.defaultCommand);
-  const initialModel = isClaudeProvider(initialProvider) ? config.defaultModel : undefined;
+  // Easy mode (a fresh hire, not a manifest under review) asks what the agent is
+  // for and starts on Claude Code with Sonnet 5.5; the engine moves under Advanced.
+  const easyHire = isEasyMode(config) && !pendingHire;
+  const initialProvider: AgentProvider = easyHire ? EASY_HIRE_ENGINE.provider : inferAgentProvider(config.defaultCommand);
+  const initialModel = easyHire ? EASY_HIRE_ENGINE.model : isClaudeProvider(initialProvider) ? config.defaultModel : undefined;
 
   const [name, setName] = useState(pendingHire?.name ?? 'Jim');
   // Pi's own ~/.pi/agent/models.json, offered beside the catalog models.
@@ -251,6 +256,17 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   const [busy, setBusy] = useState(false);
   // Which config section the left sidebar index is showing.
   const [section, setSection] = useState<SectionKey>('identity');
+  // Easy mode: the role picked from "What do you want it for?", and whether the
+  // Advanced part of the index (the engine) is unfolded.
+  const [easyRole, setEasyRole] = useState<EasyHireRole | null>(null);
+  const [easyAdvancedOpen, setEasyAdvancedOpen] = useState(false);
+  const pickEasyRole = (id: EasyHireRole): void => {
+    setEasyRole(id);
+    const r = easyHireRole(id);
+    setDescription(r.description);
+    setGoal(r.goal);
+    if (!r.description) setSection('briefing'); // "Something else": say it in your own words
+  };
   // "Generate a hire with AI" helper — reveals a copy-paste prompt (item 7).
   const [showHirePrompt, setShowHirePrompt] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
@@ -654,12 +670,45 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
               </div>
             )}
 
+            {/* Easy mode: what is it for? A role fills the description and goal. */}
+            {easyHire && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px', color: 'var(--cth-ink-700)' }}>
+                  {tr('addAgent.easy.ask')}
+                </span>
+                <div role="radiogroup" aria-label={tr('addAgent.easy.ask')} style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {EASY_HIRE_ROLES.map((r) => {
+                    const on = easyRole === r.id;
+                    return (
+                      <button
+                        key={r.id}
+                        role="radio"
+                        aria-checked={on}
+                        onClick={() => pickEasyRole(r.id)}
+                        style={{
+                          flex: '1 1 150px', textAlign: 'left', padding: '6px 9px', border: 'none', cursor: 'pointer',
+                          background: on ? `var(--cth-${accent}-light)` : 'var(--cth-cream-100)',
+                          boxShadow: on ? 'inset 0 0 0 1.5px var(--cth-ink-500)' : 'inset 0 0 0 1px var(--cth-ink-100)',
+                          display: 'flex', flexDirection: 'column', gap: 2
+                        }}
+                      >
+                        <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--cth-ink-900)' }}>{tr(`addAgent.easy.role_${r.id}`)}</span>
+                        <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-500)' }}>{tr(`addAgent.easy.role_${r.id}Desc`)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{tr('addAgent.easy.engineNote')}</span>
+              </div>
+            )}
+
             {/* sidebar index + the active section's fields (hidden behind the CV) */}
             <div style={{ display: hireMeta && cvMode ? 'none' : 'flex', gap: 16, alignItems: 'flex-start' }}>
               {/* LEFT — section index. Capabilities isn't a nav item: it isn't a
                   user field, it rides the imported hire manifest (banner above). */}
               <nav style={{ width: 168, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {SECTIONS.map((s, i) => {
+                {(() => {
+                const navItem = (s: (typeof SECTIONS)[number], i: number): JSX.Element => {
                   const active = section === s.key;
                   return (
                     <button
@@ -687,7 +736,31 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                       </span>
                     </button>
                   );
-                })}
+                };
+                if (!easyHire) return SECTIONS.map(navItem);
+                // Easy mode: the engine (engine, model, command) folds under Advanced.
+                const basic = SECTIONS.filter((s) => s.key !== 'engine');
+                const engine = SECTIONS.filter((s) => s.key === 'engine');
+                const open = easyAdvancedOpen || section === 'engine';
+                return (
+                  <>
+                    {basic.map(navItem)}
+                    <button
+                      aria-expanded={open}
+                      onClick={() => setEasyAdvancedOpen(!open)}
+                      style={{
+                        textAlign: 'left', padding: '6px 9px 5px', marginTop: 4, border: 'none', cursor: 'pointer',
+                        background: 'transparent', boxShadow: 'inset 0 1px 0 var(--cth-ink-100)',
+                        fontFamily: 'var(--cth-font-display)', fontSize: 9, lineHeight: '13px',
+                        color: 'var(--cth-ink-700)', textTransform: 'uppercase'
+                      }}
+                    >
+                      {open ? '▾' : '▸'} {tr('addAgent.easy.advanced')}
+                    </button>
+                    {open && engine.map((s) => navItem(s, basic.length))}
+                  </>
+                );
+                })()}
               </nav>
 
               {/* RIGHT — the active section's fields */}
