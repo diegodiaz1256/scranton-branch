@@ -2232,6 +2232,20 @@
         "notFound": "(no existe donde se ejecutan los agentes)",
         "none": "Ninguna permitida: todas las sesiones de arriba están ocultas para este agente.",
         "restart": "Reinicia el agente para que el cambio se aplique."
+      },
+      "docker": {
+        "title": "Docker: {{name}}",
+        "body": "Los agentes en sandbox no pueden llegar al daemon de Docker: su socket les está cerrado. Actívalo para que este agente pueda ejecutar comandos docker. Se aplica cuando el agente se reinicia.",
+        "warning": "Docker le da a este agente root en esta máquina (o en toda la distro de WSL): con un comando como docker run -v /:/host puede leer y cambiar cualquier archivo y salir por completo de su sandbox. En Linux también puede conectarse a cualquier otro socket local. Permítelo solo a un agente de confianza, y solo mientras su tarea lo necesite.",
+        "toggle": "Permitir Docker",
+        "confirm": "¿Dar Docker a {{name}}, y con él root en esta máquina?",
+        "allow": "Permitir Docker",
+        "unavailable": "No disponible en esta planta: los agentes de aquí no tienen sandbox de sistema, así que nada les cierra Docker de entrada.",
+        "custodian": "No para el custodio de una conexión crítica: nunca llega a Docker.",
+        "notFound": "(no se encontró ningún socket de Docker donde se ejecutan los agentes)",
+        "scope": "Para agentes en el sandbox de Claude Code o en el de la oficina (pi, Antigravity). Un agente sin sandbox ya llega a Docker si tu usuario puede.",
+        "off": "Desactivado: el sandbox de este agente le mantiene Docker cerrado.",
+        "restart": "Reinicia el agente para que el cambio se aplique."
       }
     },
     "skills": {

@@ -16,6 +16,7 @@ import { unsandboxedAgents } from '@shared/unsandboxed';
 import { cleanCriticalMap, custodianships } from '@shared/criticalConnections';
 import { SshRelaySection } from './SshRelaySection';
 import { CloudCredentialsSection } from './CloudCredentialsSection';
+import { DockerSection } from './DockerSection';
 
 /** A write/secret server is usable only once the user switched it on (Connections). */
 function consented(config: HarnessConfig, id: string): boolean {
@@ -227,6 +228,7 @@ export function CapabilitiesView({ roster, config }: { roster: Agent[]; config: 
 
       {targetAgent && <SshRelaySection key={targetAgent.id} agent={targetAgent} config={config} />}
       {targetAgent && <CloudCredentialsSection key={`creds-${targetAgent.id}`} agent={targetAgent} config={config} />}
+      {targetAgent && <DockerSection key={`docker-${targetAgent.id}`} agent={targetAgent} config={config} />}
 
       <h3 style={{ margin: '6px 0 0', fontSize: 14 }}>{t('pro.caps.whoHasWhat')}</h3>
       {roster.map((a) => {

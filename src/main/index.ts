@@ -104,6 +104,7 @@ import { effectiveApiAccess, explainConnection, isAccess, type Access } from '..
 import { blockedMcpServers, cleanToolBlocks } from '../shared/nativeTools';
 import { runsUnsandboxed, unsandboxedAgents, unsandboxRefusal } from '../shared/unsandboxed';
 import { cleanCloudCredentialIds, cleanCloudCredentialMap } from '../shared/cloudCredentials';
+import { cleanDockerMap, dockerGranted } from '../shared/agentDocker';
 import { ensureVaultRoot } from './vaultRoot';
 import { piNoSandboxScript, refusePiWithoutSandbox, type PiSandboxPlace } from '../shared/piSandbox';
 import { canBeCustodian, cleanCriticalMap, criticalAllows, criticalRefusal, custodianOf, custodianships, heldIds, isCritical, isCustodian, setCritical, vaultAccess, vaultName, vaultRelPath, VAULT_REQUESTS, VAULT_ROOT, type CriticalKind, type CriticalMap } from '../shared/criticalConnections';
@@ -924,6 +925,27 @@ ipcMain.handle('cloudCreds:set', (_evt, agentId: unknown, ids: unknown) => {
   if (next.length) map[agentId] = next; else delete map[agentId];
   writeConfig({ agentCloudCredentials: map });
   try { hive.appendLog({ kind: 'cloud-credentials', agentId, name: a.name, exposed: next, by: 'human' }); } catch { /* the config change stands */ }
+  return { ok: true };
+});
+
+// ─── Docker (shared/agentDocker.ts) ─────────────────────────────────────────
+// Out of every sandboxed agent's reach; the human may let one agent use it.
+// Docker is root where agents run, so like the cloud logins: only docker:set
+// writes agentDocker (the generic config write drops it), never for a
+// custodian, every change in the hive's log. It applies at the next start.
+ipcMain.handle('docker:status', async () => {
+  if (!hive.enabled() || !(await hive.sandboxAvailable())) return { available: false, present: false };
+  return { available: true, present: (await hive.dockerSockets()).length > 0 };
+});
+ipcMain.handle('docker:set', (_evt, agentId: unknown, on: unknown) => {
+  if (typeof agentId !== 'string' || !agentId || typeof on !== 'boolean') return { ok: false, error: 'bad request' };
+  const a = hive.enabled() ? hive.registry().agents?.[agentId] : undefined;
+  if (!a) return { ok: false, error: 'unknown agent' };
+  if (on && isCustodian(criticalMap(), agentId)) return { ok: false, error: `${a.name ?? agentId} holds a critical connection: a custodian never reaches Docker.` };
+  const map = cleanDockerMap(readConfig().agentDocker);
+  if (on) map[agentId] = true; else delete map[agentId];
+  writeConfig({ agentDocker: map });
+  try { hive.appendLog({ kind: 'docker', agentId, name: a.name, on, by: 'human' }); } catch { /* the config change stands */ }
   return { ok: true };
 });
 
@@ -4677,7 +4699,9 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           // Its sandboxed shell may reach this broker port (sb-api, sb-run…).
           brokerUrl: opts.env?.SB_BROKER_URL,
           // Cloud CLI logins the human exposed to it (never a custodian's).
-          exposeCredentials: isCustodian(criticalMap(), opts.hive.id) ? [] : cleanCloudCredentialMap(readConfig().agentCloudCredentials)[opts.hive.id] ?? []
+          exposeCredentials: isCustodian(criticalMap(), opts.hive.id) ? [] : cleanCloudCredentialMap(readConfig().agentCloudCredentials)[opts.hive.id] ?? [],
+          // The Docker socket, when the human allowed it (never a custodian's).
+          docker: dockerGranted(readConfig().agentDocker, readConfig().criticalCustodians, opts.hive.id)
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
@@ -5359,8 +5383,8 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   // "Run without sandbox" is set only by agent:setUnsandboxed (its typed
   // confirmation, custodian check and audit line); never through here. Nor is
   // "Use my SSH keys through the office" (sshRelay:set), nor the cloud logins
-  // an agent may read (cloudCreds:set).
-  const { agentUnsandboxed: _unsandboxed, agentSshRelay: _sshRelay, agentCloudCredentials: _cloudCreds, ...safePatch } = patch ?? {};
+  // an agent may read (cloudCreds:set), nor Docker (docker:set).
+  const { agentUnsandboxed: _unsandboxed, agentSshRelay: _sshRelay, agentCloudCredentials: _cloudCreds, agentDocker: _docker, ...safePatch } = patch ?? {};
   const next = writeConfig(safePatch);
   // Live opt-in/out from Settings → Privacy (TELEMETRY.md).
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);

@@ -2232,6 +2232,20 @@
         "notFound": "(not found where agents run)",
         "none": "None allowed: every login above is hidden from this agent.",
         "restart": "Restart the agent for a change to apply."
+      },
+      "docker": {
+        "title": "Docker: {{name}}",
+        "body": "Agents in a sandbox cannot reach the Docker daemon: its socket is closed to them. Turn this on to let this agent run docker commands. It applies when the agent is restarted.",
+        "warning": "Docker gives this agent root on this machine (or the whole WSL distro): with a command like docker run -v /:/host it can read and change any file and leave its sandbox entirely. On Linux it can also connect to any other local socket. Allow it only for an agent you trust, and only while its task needs it.",
+        "toggle": "Allow Docker",
+        "confirm": "Give {{name}} Docker, and with it root on this machine?",
+        "allow": "Allow Docker",
+        "unavailable": "Not available on this floor: agents here run without an OS sandbox, so nothing closes Docker to them in the first place.",
+        "custodian": "Not for the custodian of a critical connection: it never reaches Docker.",
+        "notFound": "(no Docker socket found where agents run)",
+        "scope": "For agents in Claude Code's sandbox or the office's own (pi, Antigravity). An agent running without its sandbox already reaches Docker if your user can.",
+        "off": "Off: this agent's sandbox keeps Docker from it.",
+        "restart": "Restart the agent for a change to apply."
       }
     },
     "skills": {
