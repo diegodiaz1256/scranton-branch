@@ -4,9 +4,11 @@
  * identity; next to Pro's hairline cards and system type it read as noise.
  */
 export type ProIconName =
-  | 'now' | 'tasks' | 'inbox' | 'deliverables' | 'automations' | 'memory' | 'skills' | 'capabilities' | 'connections' | 'environment' | 'providers' | 'mcp' | 'team' | 'factories' | 'agents' | 'temps';
+  | 'thread' | 'now' | 'tasks' | 'inbox' | 'deliverables' | 'automations' | 'memory' | 'skills' | 'capabilities' | 'connections' | 'environment' | 'providers' | 'mcp' | 'team' | 'factories' | 'agents' | 'temps';
 
 const PATHS: Record<ProIconName, string> = {
+  // two speech bubbles: you and the orchestrator
+  thread: 'M2 3h7.5v5H5L3 9.8V8H2z M11 6h3v5h-1v1.8L11 11H7.5V9.5',
   // a pulse line
   now: 'M1.5 8.5h3l1.6-4.5 3 9 1.6-4.5h3.8',
   // a checklist: three rows, the first two ticked

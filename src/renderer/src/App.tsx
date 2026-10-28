@@ -40,6 +40,7 @@ const IdePanel = lazy(() => import('@/ide/IdePanel').then((m) => ({ default: m.I
 import { useHoldOptionToTalk } from '@/freeflow/holdOption';
 import { ProShell, LayoutSwitch } from '@/pro/ProShell';
 import { useProStore } from '@/pro/proStore';
+import { landingLayout } from '@shared/uiMode';
 import brandLogo from '@brand/logo.png?url';
 
 // Injected at build time from package.json (see electron.vite.config.ts).
@@ -210,13 +211,15 @@ export function App() {
   const officeOpen = hiveOpened || !!config?.demoMode || !!window.cth.headless;
   useHive(officeOpen ? config : null);
   // The demo exists to show the Pro screens, so its first launch opens there.
+  // Easy mode lives there too (its sidebar and readable thread), so a
+  // non-technical user lands in it rather than on the Classic floor.
   // Only while no layout was ever chosen: switching to Classic sticks.
   useEffect(() => {
-    if (!config?.demoMode) return;
     try {
-      if (window.localStorage.getItem('cth.layout') === null) useProStore.getState().setLayout('pro');
+      const stored = window.localStorage.getItem('cth.layout');
+      if (config?.demoMode ? stored === null : landingLayout(stored, config) === 'pro') useProStore.getState().setLayout('pro');
     } catch { /* storage unavailable — stay on the default */ }
-  }, [config?.demoMode]);
+  }, [config?.demoMode, config?.uiMode, config?.audience]);
 
   // Pre-warm a persistent terminal for every live agent so its output is
   // buffered from spawn. Switching agents then re-attaches an already-rendered

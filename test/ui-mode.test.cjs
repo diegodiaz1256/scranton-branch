@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const loadTs = require('./load-ts.cjs');
 
-const { resolveUiMode, isEasyMode, splitForEasyMode, EASY_NAV_ESSENTIALS, EASY_SETTINGS_ESSENTIALS } = loadTs('src/shared/uiMode.ts');
+const { resolveUiMode, isEasyMode, splitForEasyMode, landingLayout, EASY_HOME, EASY_NAV_ESSENTIALS, EASY_SETTINGS_ESSENTIALS } = loadTs('src/shared/uiMode.ts');
 
 test('an explicit choice wins over the onboarding answer', () => {
   assert.equal(resolveUiMode({ uiMode: 'full', audience: 'non-technical' }), 'full');
@@ -40,4 +40,20 @@ test('settings keep General and Autonomy & Budgets in view', () => {
   const { essential, advanced } = splitForEasyMode(all, EASY_SETTINGS_ESSENTIALS);
   assert.deepEqual(essential, ['General', 'Autonomy & Budgets']);
   assert.deepEqual(advanced, ['Prerequisites', 'Agents & Models', 'Connections', 'Voice', 'Memory & Knowledge']);
+});
+
+test('easy mode lands in the Manager layout unless a layout was chosen', () => {
+  assert.equal(landingLayout(null, { uiMode: 'easy' }), 'pro');
+  assert.equal(landingLayout(undefined, { audience: 'non-technical' }), 'pro');
+  assert.equal(landingLayout('classic', { uiMode: 'easy' }), null); // an explicit choice stands
+  assert.equal(landingLayout('pro', { uiMode: 'easy' }), null);
+  assert.equal(landingLayout(null, { uiMode: 'full' }), null); // full mode unchanged
+  assert.equal(landingLayout(null, {}), null);
+});
+
+test('easy mode opens on the thread, the first page of its sidebar', () => {
+  assert.equal(EASY_HOME, 'thread');
+  assert.equal(EASY_NAV_ESSENTIALS[0], 'thread');
+  const { essential } = splitForEasyMode(['now', 'thread', 'tasks', 'memory'], EASY_NAV_ESSENTIALS);
+  assert.deepEqual(essential, ['now', 'thread', 'tasks']);
 });
