@@ -6,7 +6,7 @@ import { resolveCommand, userShellPath } from './shellEnv';
 import { expandTilde } from './fs';
 import { projectDir } from './transcript';
 import { ensureKilled } from './procKill';
-import { linuxizeText, parseWslPath, spillLongArgs, wslCommand } from './wsl';
+import { linuxizeText, parseWslPath, spillLongArgs, wslAgentTmpDir, wslCommand } from './wsl';
 
 /**
  * Shared helper: run a HIDDEN interactive claude session (ephemeral PTY) and
@@ -98,7 +98,19 @@ function extractLastAssistantText(cwd: string, spawnedAt: number): string | null
   } catch { return null; }
 }
 
-export function runHiddenClaude(prompt: string, opts: HiddenClaudeOptions): Promise<HiddenClaudeResult> {
+export async function runHiddenClaude(prompt: string, opts: HiddenClaudeOptions): Promise<HiddenClaudeResult> {
+  // On a WSL floor, Claude's temp folder in the user's own cache, as for the
+  // floor's agents (wsl.ts AGENT_TMP_SCRIPT): /tmp/claude-<uid> may belong to
+  // someone else, and Claude then refuses to start.
+  const floor = process.platform === 'win32' && opts.cwd ? parseWslPath(opts.cwd) : null;
+  if (floor && !opts.env?.CLAUDE_CODE_TMPDIR) {
+    const tmp = await wslAgentTmpDir(floor.distro);
+    if (tmp) opts = { ...opts, env: { ...(opts.env ?? {}), CLAUDE_CODE_TMPDIR: tmp } };
+  }
+  return runHiddenClaudeNow(prompt, opts);
+}
+
+function runHiddenClaudeNow(prompt: string, opts: HiddenClaudeOptions): Promise<HiddenClaudeResult> {
   return new Promise((resolve) => {
     if (!prompt.trim()) { resolve({ ok: false, error: 'empty prompt' }); return; }
     // Defense-in-depth: `~` is shell syntax, not a path Node understands.
