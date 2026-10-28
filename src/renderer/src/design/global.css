@@ -181,6 +181,18 @@ canvas, img, svg { image-rendering: pixelated; image-rendering: crisp-edges; }
   50%, 100% { transform: scale(0.7); }
 }
 
+/* Settings search: the row a result opened, briefly marked (SettingsModal). */
+.cth-setting-flash {
+  outline: 2px solid var(--cth-lemon);
+  outline-offset: 4px;
+  background: var(--cth-lemon-light);
+  animation: cth-setting-blink 400ms steps(1) 2;
+}
+@keyframes cth-setting-blink {
+  0%, 49% { outline-color: var(--cth-lemon); }
+  50%, 100% { outline-color: transparent; }
+}
+
 /* Reduce motion */
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0s !important; transition-duration: 0s !important; }

@@ -273,6 +273,7 @@
     },
     "autonomy": {
       "autonomy": "Autonomía",
+      "whoCanAdd": "Quién puede añadir agentes",
       "autoOn": "Autónomo: los agentes actúan sin preguntar",
       "autoOff": "Preguntar antes: los agentes esperan a que apruebes las herramientas",
       "autoDesc": "Se aplica a los agentes nuevos (el comando de cada agente puede cambiarlo).",
