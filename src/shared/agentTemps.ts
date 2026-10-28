@@ -124,6 +124,7 @@ export interface AccessConfig {
   agentUnsandboxed?: string[];
   agentSshRelay?: Record<string, unknown>;
   agentCloudCredentials?: Record<string, string[]>;
+  agentDocker?: Record<string, unknown>;
   criticalCustodians?: Record<string, string>;
 }
 
@@ -135,7 +136,7 @@ const withoutId = (list: string[], id: string): string[] => list.filter((x) => x
  * its MCP grant, access levels and blocked tools are copied, and it joins every
  * "only these agents" list the parent is on (and no other). Absent entries mean
  * the default, which the parent has too. Never copied: writing outside its
- * folders, running without a sandbox, SSH keys, cloud logins and custodianship.
+ * folders, running without a sandbox, SSH keys, cloud logins, Docker and custodianship.
  * Any of those already naming `tempId` (a reused id) is taken away.
  */
 export function inheritedAccess(cfg: AccessConfig, parentId: string, tempId: string): AccessConfig {
@@ -192,6 +193,7 @@ export function withoutAccess(cfg: AccessConfig, id: string): AccessConfig {
     agentUnsandboxed: withoutId(cfg.agentUnsandboxed ?? [], id),
     agentSshRelay: drop(cfg.agentSshRelay),
     agentCloudCredentials: drop(cfg.agentCloudCredentials),
+    agentDocker: drop(cfg.agentDocker),
     criticalCustodians: Object.fromEntries(Object.entries(cfg.criticalCustodians ?? {}).map(([k, who]) => [k, who === id ? '' : who]))
   };
 }

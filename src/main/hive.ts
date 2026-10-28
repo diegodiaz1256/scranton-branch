@@ -60,6 +60,7 @@ import { listsInstruction, parseList } from '../shared/lists';
 import { blockedMcpServers, cleanToolBlocks, disallowedTools } from '../shared/nativeTools';
 import { bwrapArgs, cliStateMounts, mountPoints, KEY_HOME_DIRS, type AppSandboxedCli } from '../shared/bwrapSandbox';
 import { CLOUD_CREDENTIALS, credentialPromptLine, hiddenCredentialPaths } from '../shared/cloudCredentials';
+import { dockerSocketPaths, withDockerSockets } from '../shared/agentDocker';
 import { AGENT_CONTROL_FILES, within, type GuardPolicy } from '../shared/toolGuard';
 import { customProviderHosts, MD_NETGATE, piModelHosts } from './netgate';
 import { resolvePiModelHosts } from '../shared/piModelHosts';
@@ -1293,6 +1294,9 @@ export class HiveManager {
       /** Cloud CLI logins the human let it read (shared/cloudCredentials.ts);
        *  the rest stay hidden. Never for a custodian. */
       exposeCredentials?: string[];
+      /** The human let it reach the Docker socket (shared/agentDocker.ts).
+       *  Never for a custodian (lockdown wins). */
+      docker?: boolean;
       /** The key broker this agent was handed (SB_BROKER_URL): its sandbox may
        *  reach that one loopback port (hookSettings). */
       brokerUrl?: string;
@@ -1715,7 +1719,14 @@ export class HiveManager {
       // Run without sandbox: off, said outright (a project's settings cannot
       // turn it back on for it either). Its permission rules stay.
       if (unsandboxed) settings.sandbox = { enabled: false };
-      this.writeJson(settingsPath, this.forAgentJson(settings));
+      // "Allow Docker": its sandboxed shell may connect to the Docker socket.
+      // Never a custodian's (and withDockerSockets leaves a strictAllowlist
+      // network alone besides).
+      const dockerOpen = !!opts.docker && !opts.lockdown && !unsandboxed;
+      const out = dockerOpen
+        ? withDockerSockets(settings, [...new Set([...(await this.dockerSocketList()), ...(await this.dockerSockets())])], { linux: !!this.wslRoot() || process.platform === 'linux' })
+        : settings;
+      this.writeJson(settingsPath, this.forAgentJson(out));
       args.push('--settings', settingsPath);
     }
     return { args, env, ...(unsandboxed ? { osSandbox: 'off' as const } : {}) };
@@ -3913,10 +3924,14 @@ export class HiveManager {
    */
   private async appSandbox(
     cli: AppSandboxedCli, meta: AgentMeta, dir: string, root: string,
-    opts: { extraWritableDirs?: string[]; writableRoots?: string[]; vaults?: string[]; denyDirs?: string[]; lockdown?: { outgoing: string }; exposeCredentials?: string[] },
+    opts: { extraWritableDirs?: string[]; writableRoots?: string[]; vaults?: string[]; denyDirs?: string[]; lockdown?: { outgoing: string }; exposeCredentials?: string[]; docker?: boolean },
     sock: string | null
   ): Promise<string[] | null> {
     if (!(await this.sandboxAvailable())) return null;
+    // The Docker socket: a read-only root still lets a shell connect() to it
+    // (and --unshare-net does not stop a socket on disk), so it is covered
+    // unless the human allowed Docker; always for a custodian.
+    const dockerHide = opts.docker && !opts.lockdown ? [] : await this.dockerSockets();
     const sockDir = sock && !/^tcp:/.test(sock) && !/^\\\\/.test(sock) ? [dirname(sock)] : [];
     const lin = (p: string): string => this.forAgent(p).replace(/\\/g, '/');
     const userHome = lin(this.userHome());
@@ -3931,7 +3946,7 @@ export class HiveManager {
     if (opts.lockdown) {
       const profile = {
         writable: [...custodianWriteRoots(dir, opts.vaults ?? []), ...sockDir].map(lin),
-        hide: (opts.denyDirs ?? []).map(lin), home: userHome, network: 'none' as const, controls
+        hide: (opts.denyDirs ?? []).map(lin), hideFiles: dockerHide, home: userHome, network: 'none' as const, controls
       };
       const present = new Set(await this.existingPaths(mountPoints(profile)));
       return bwrapArgs(profile, (p) => present.has(p));
@@ -3948,7 +3963,7 @@ export class HiveManager {
     // to sign. Its env no longer names it either.
     const agentSock = !this.wslRoot() && process.env.SSH_AUTH_SOCK ? dirname(process.env.SSH_AUTH_SOCK) : '';
     const sockHide = agentSock && !['/', '/tmp', '/run', '/var/run', homedir()].includes(agentSock) && !/^\/run\/user\/\d+$/.test(agentSock) ? [agentSock] : [];
-    const profile = { writable: [...writable, ...state.writable], readOnly: [lin(join(root, 'agents'))], writableFiles: state.writableFiles, home: userHome, hide: [...(opts.denyDirs ?? []).map(lin), ...sockHide], controls, exposeCredentials: opts.exposeCredentials };
+    const profile = { writable: [...writable, ...state.writable], readOnly: [lin(join(root, 'agents'))], writableFiles: state.writableFiles, home: userHome, hide: [...(opts.denyDirs ?? []).map(lin), ...sockHide], hideFiles: dockerHide, controls, exposeCredentials: opts.exposeCredentials };
     const present = new Set(await this.existingPaths(mountPoints(profile)));
     return bwrapArgs(profile, (p) => present.has(p));
   }
@@ -3984,6 +3999,37 @@ export class HiveManager {
   }
 
   /** Which of these (agent-side) paths exist where the agent runs. */
+  /** Where the Docker socket may be, where agents run (shared/agentDocker.ts):
+   *  the system daemon's, rootless Docker's and DOCKER_HOST's. In a WSL
+   *  floor's distro, its own user and variables. */
+  private async dockerSocketList(): Promise<string[]> {
+    const w = this.wslRoot();
+    if (!w) {
+      if (process.platform === 'win32') return [];
+      return dockerSocketPaths({ DOCKER_HOST: process.env.DOCKER_HOST, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, uid: process.getuid?.() });
+    }
+    try {
+      const [uid = '', xdg = '', host = ''] = (await runInDistroAsync(w.distro, 'sh', ['-c', 'id -u; printf "%s\\n%s\\n" "$XDG_RUNTIME_DIR" "$DOCKER_HOST"'], '/')).split('\n').map((l) => l.trim());
+      return dockerSocketPaths({ uid, XDG_RUNTIME_DIR: xdg, DOCKER_HOST: host });
+    } catch { return dockerSocketPaths(); }
+  }
+
+  /** The Docker sockets that exist where agents run, by their real paths
+   *  (/var/run is a link to /run, and bubblewrap cannot mount through a link). */
+  async dockerSockets(): Promise<string[]> {
+    const list = await this.dockerSocketList();
+    if (!list.length) return [];
+    const w = this.wslRoot();
+    if (!w) {
+      const out = new Set<string>();
+      for (const p of list) { try { if (statSync(p).isSocket()) out.add(realpathSync(p)); } catch { /* absent */ } }
+      return [...out];
+    }
+    const script = 'for p in "$@"; do [ -S "$p" ] && realpath -e -- "$p"; done; true';
+    try { return [...new Set((await runInDistroAsync(w.distro, 'bash', ['-c', script, 'x', ...list], '/')).split('\n').map((l) => l.trim()).filter((l) => l.startsWith('/')))]; }
+    catch { return []; }
+  }
+
   private async existingPaths(paths: string[]): Promise<string[]> {
     const w = this.wslRoot();
     if (!w) return paths.filter((p) => existsSync(p));

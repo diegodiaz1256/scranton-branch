@@ -470,6 +470,9 @@ export interface HarnessConfig {
   /** Cloud CLI logins (shared/cloudCredentials.ts) the human let each agent
    *  read: agent id → set ids. Absent → all hidden. */
   agentCloudCredentials?: Record<string, string[]>;
+  /** Agents the human let reach the Docker socket (shared/agentDocker.ts): agent
+   *  id → true. Set only through docker:set, never a generic config write. */
+  agentDocker?: Record<string, true>;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'mine' | 'catalog';
@@ -1640,6 +1643,13 @@ const api = {
     ipcRenderer.invoke('cloudCreds:status'),
   cloudCredsSet: (agentId: string, ids: string[]): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('cloudCreds:set', agentId, ids),
+  // Docker (Capabilities, shared/agentDocker.ts): whether agents here have an
+  // OS sandbox that keeps it from them and a Docker socket was found, and the
+  // human's switch for one agent.
+  dockerStatus: (): Promise<{ available: boolean; present: boolean }> =>
+    ipcRenderer.invoke('docker:status'),
+  dockerSet: (agentId: string, on: boolean): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('docker:set', agentId, on),
   // Manager → Connections (keyed MCP servers). WRITE-ONLY like the integrations:
   // `connectionsList` reports only whether each field is stored.
   /** Save the user's own role bundles; resolves to what was kept after validation. */
