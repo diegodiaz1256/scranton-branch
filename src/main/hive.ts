@@ -909,6 +909,24 @@ export class HiveManager {
   private guardPolicies = new Map<string, GuardPolicy>();
   proxyPortFor(agentId: string): number | undefined { return this.proxyPorts.get(agentId); }
 
+  /**
+   * The `env` blocks of Claude Code's settings files that apply to an agent
+   * in `cwd` (user, project, project-local; later wins), as Claude Code
+   * merges them: they beat the process environment. Read to find where its
+   * model calls really go (ANTHROPIC_BASE_URL, Bedrock/Vertex switches).
+   */
+  claudeSettingsEnv(cwd: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    const files = [join(this.userHome(), '.claude', 'settings.json'), join(cwd, '.claude', 'settings.json'), join(cwd, '.claude', 'settings.local.json')];
+    for (const f of files) {
+      try {
+        const j = JSON.parse(readFileSync(f, 'utf8')) as { env?: Record<string, unknown> };
+        for (const [k, v] of Object.entries(j?.env ?? {})) if (typeof v === 'string') out[k] = v;
+      } catch { /* none or unreadable */ }
+    }
+    return out;
+  }
+
   private distroHomes = new Map<string, string>();
   /** The home folder the agents' CLIs use: the Windows profile, or the
    *  distro user's home (as a \\wsl.localhost path) on a WSL floor. */
@@ -1296,6 +1314,13 @@ export class HiveManager {
       /** The key broker this agent was handed (SB_BROKER_URL): its sandbox may
        *  reach that one loopback port (hookSettings). */
       brokerUrl?: string;
+      /** Anonymization is on for this agent (anonProxy.ts): a proxy-tier CLI
+       *  that cannot be routed through it is not started (fail closed). */
+      anonymize?: boolean;
+      /** Claude Code: env for its --settings file, which beats the user's and
+       *  the project's settings.json `env` (the anonymization proxy's base URL
+       *  must not be overridden there). */
+      claudeEnv?: Record<string, string>;
     } = {}
   ): Promise<SpawnInjection> {
     const root = this.root();
@@ -1498,6 +1523,7 @@ export class HiveManager {
       // configuration is never mutated. Both share the HIVE_SOCK wiring below.
       const preArgs: string[] = [];
       let degraded: string | undefined;
+      let anonFail: string | undefined;
       let appWrap: string[] | null | undefined;
       let appWrapCommand: string | undefined;
       // Dispatch on the structured bridge descriptor (the foundation's `bridgeOf`
@@ -1622,14 +1648,21 @@ export class HiveManager {
               // Still talk to the user's endpoint directly: without this a local
               // model (Ollama, vLLM…) would silently fall back to the cloud.
               if (opts.proxyUpstream) env[desc.baseUrlEnv] = opts.proxyUpstream;
+              // Crush has no base-URL env: without the bridge it would talk to
+              // its provider directly, past the anonymization proxy.
+              if (opts.anonymize && meta.provider === 'crush') anonFail = `${meta.name} was not started: anonymization is on and its traffic can only reach the anonymization proxy through the proxy bridge, which did not bind. Try again in a moment.`;
               degraded = `${meta.name} is running without hive events: its proxy bridge did not bind after ${PROXY_BIND_ATTEMPTS} attempts. Live status, cost and inbox wake will not work for this session. Respawn the agent to try again.`;
               console.error(`[hive] proxy bridge for ${meta.id} did not bind — spawning without hive events`);
               this.appendLog({ kind: 'proxy-degraded', agentId: meta.id, name: meta.name, provider: meta.provider, attempts: PROXY_BIND_ATTEMPTS });
               this.emit?.('hive:degraded', { agentId: meta.id, name: meta.name, reason: 'proxy-bind', message: degraded });
             }
           }
-        } catch (e) { console.error(`[hive] install ${desc.kind} bridge failed:`, e); }
+        } catch (e) {
+          console.error(`[hive] install ${desc.kind} bridge failed:`, e);
+          if (opts.anonymize && desc.kind === 'proxy') anonFail = `${meta.name} was not started: anonymization is on and its proxy bridge could not be set up.`;
+        }
       }
+      if (anonFail) throw new Error(anonFail);
       // Inject the protocol text whichever way the CLI accepts it.
       // type-into-tui (Crush): the bare TUI reads a positional as a Cobra subcommand
       // → `Unknown command`. So DROP the positional and hand the protocol back as
@@ -1715,6 +1748,7 @@ export class HiveManager {
       // Run without sandbox: off, said outright (a project's settings cannot
       // turn it back on for it either). Its permission rules stay.
       if (unsandboxed) settings.sandbox = { enabled: false };
+      if (opts.claudeEnv && Object.keys(opts.claudeEnv).length) (settings as { env?: Record<string, string> }).env = { ...opts.claudeEnv };
       this.writeJson(settingsPath, this.forAgentJson(settings));
       args.push('--settings', settingsPath);
     }

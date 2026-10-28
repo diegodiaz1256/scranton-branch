@@ -22,6 +22,7 @@ import { ConnectionsView } from './ConnectionsView';
 import { TeamView } from './TeamView';
 import { FactoriesView } from './FactoriesView';
 import { EnvironmentView } from './EnvironmentView';
+import { PrivacyView } from './PrivacyView';
 import { McpView } from './McpView';
 import { ProvidersView } from './ProvidersView';
 import { DeliverablesView } from './DeliverablesView';
@@ -41,6 +42,7 @@ const TOP: { id: ProSection; icon: ProIconName }[] = [
   { id: 'capabilities', icon: 'capabilities' },
   { id: 'connections', icon: 'connections' },
   { id: 'environment', icon: 'environment' },
+  { id: 'privacy', icon: 'privacy' },
   { id: 'providers', icon: 'providers' },
   { id: 'mcp', icon: 'mcp' },
   { id: 'team', icon: 'team' },
@@ -52,7 +54,7 @@ const TOP: { id: ProSection; icon: ProIconName }[] = [
 const NAV_GROUPS: Array<{ id: string; label?: string; items: ProSection[] }> = [
   { id: 'main', items: ['now', 'tasks', 'inbox', 'deliverables'] },
   { id: 'office', label: 'group_office', items: ['automations', 'memory', 'skills', 'team', 'factories'] },
-  { id: 'setup', label: 'group_setup', items: ['capabilities', 'connections', 'environment', 'providers', 'mcp'] }
+  { id: 'setup', label: 'group_setup', items: ['capabilities', 'connections', 'environment', 'privacy', 'providers', 'mcp'] }
 ];
 const LS_GROUPS = 'cth.proNavGroups';
 function readGroups(): Record<string, boolean> {
@@ -122,6 +124,7 @@ export function ProShell({ config }: { config: HarnessConfig }) {
     case 'team': page = <TeamView />; break;
     case 'factories': page = <FactoriesView />; break;
     case 'environment': page = <EnvironmentView roster={roster} />; break;
+    case 'privacy': page = <PrivacyView roster={roster} config={config} />; break;
     case 'providers': page = <ProvidersView config={config} />; break;
     case 'mcp': page = <McpView roster={roster} config={config} />; break;
     case 'agents': page = <AgentsView roster={roster} tasks={tasks} directory={directory} asking={asking} config={config} onOpen={openAgent} />; break;

@@ -4,7 +4,7 @@
  * identity; next to Pro's hairline cards and system type it read as noise.
  */
 export type ProIconName =
-  | 'now' | 'tasks' | 'inbox' | 'deliverables' | 'automations' | 'memory' | 'skills' | 'capabilities' | 'connections' | 'environment' | 'providers' | 'mcp' | 'team' | 'factories' | 'agents' | 'temps';
+  | 'now' | 'tasks' | 'inbox' | 'deliverables' | 'automations' | 'memory' | 'skills' | 'capabilities' | 'connections' | 'environment' | 'privacy' | 'providers' | 'mcp' | 'team' | 'factories' | 'agents' | 'temps';
 
 const PATHS: Record<ProIconName, string> = {
   // a pulse line
@@ -30,6 +30,8 @@ const PATHS: Record<ProIconName, string> = {
   // a plug: tool servers
   mcp: 'M5.5 2v3 M10.5 2v3 M3.5 5h9v2.5a4.5 4.5 0 0 1-9 0z M8 12v2.5',
   // a key: secrets the agents use but never see
+  // a padlock
+  privacy: 'M4 7.5h8v6.5H4z M5.6 7.5V5.4a2.4 2.4 0 0 1 4.8 0v2.1 M8 10v1.6',
   environment: 'M5.5 10.5a3 3 0 1 1 0-6 3 3 0 0 1 0 6z M8.3 8.6L14 8.6 M12 8.6v2.2 M14 8.6v1.6',
   // a document with a folded corner
   deliverables: 'M4 1.8h5.5L12.5 4.8V14.2H4z M9.5 1.8v3h3 M6 8h4.5 M6 10.5h4.5 M6 13h2.5',

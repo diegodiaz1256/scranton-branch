@@ -11,6 +11,7 @@ import type { FloorEntry } from '../main/floors';
 export type { FloorEntry } from '../main/floors';
 export type FortressStatusView = FortressStatus & { enabled: boolean; bytes: number };
 import type { RateLimits } from '../shared/rateLimits';
+import type { AnonState } from '../shared/anonSettings';
 import type { ActiveUsageAlert } from '../shared/usageWindowAlerts';
 export type { HireManifest } from '../shared/hire';
 import type { IntegrationRecord, IntegrationTemplate } from '../shared/integrations';
@@ -469,6 +470,10 @@ export interface HarnessConfig {
   /** Cloud CLI logins (shared/cloudCredentials.ts) the human let each agent
    *  read: agent id → set ids. Absent → all hidden. */
   agentCloudCredentials?: Record<string, string[]>;
+  /** Anonymization (shared/anonSettings.ts): office switch, per-agent
+   *  override, categories. Human-only (anon:setSettings); the dictionary is
+   *  not here (encrypted in the app's data folder, anonStore.ts). */
+  anonymize?: import('../shared/anonSettings').AnonSettings;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'mine' | 'catalog';
@@ -1638,6 +1643,17 @@ const api = {
     ipcRenderer.invoke('cloudCreds:status'),
   cloudCredsSet: (agentId: string, ids: string[]): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('cloudCreds:set', agentId, ids),
+  // Privacy → Anonymization (anonProxy.ts). Human-only: config:set drops
+  // `anonymize`. Known secret values are write-only (their count comes back).
+  anonGet: (): Promise<AnonState> => ipcRenderer.invoke('anon:get'),
+  anonSetSettings: (s: import('../shared/anonSettings').AnonSettings): Promise<{ ok: boolean; settings: import('../shared/anonSettings').AnonSettings }> =>
+    ipcRenderer.invoke('anon:setSettings', s),
+  anonSetDictionary: (d: { terms: import('../shared/anonSettings').AnonDictionaryEntry[]; ticketPrefixes: string[] }): Promise<{ ok: boolean; encrypted?: boolean; error?: string }> =>
+    ipcRenderer.invoke('anon:setDictionary', d),
+  anonAddSecret: (value: string): Promise<{ ok: boolean; error?: string; secretCount: number }> =>
+    ipcRenderer.invoke('anon:addSecret', value),
+  anonClearSecrets: (): Promise<{ ok: boolean; error?: string; secretCount: number }> =>
+    ipcRenderer.invoke('anon:clearSecrets'),
   // Manager → Connections (keyed MCP servers). WRITE-ONLY like the integrations:
   // `connectionsList` reports only whether each field is stored.
   /** Save the user's own role bundles; resolves to what was kept after validation. */

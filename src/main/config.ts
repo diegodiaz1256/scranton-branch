@@ -20,6 +20,7 @@ import { expandTilde, normalizeHiveHome } from './fs';
 import { distroHomeUnc, fromLinuxPath, parseWslPath } from './wsl';
 import { hasPlainSecrets, mergeSecrets, splitSecrets, type SecretCodec } from './configSecrets';
 import type { IntegrationRecord } from '../shared/integrations';
+import type { AnonSettings } from '../shared/anonSettings';
 import {
   DEFAULT_CONTEXT_TRIGGER,
   DEFAULT_ORG_TRIGGER,
@@ -250,6 +251,10 @@ export interface HarnessConfig {
   /** Cloud CLI logins (shared/cloudCredentials.ts) the human let each agent
    *  read: agent id → set ids. Absent → all hidden. */
   agentCloudCredentials?: Record<string, string[]>;
+  /** Anonymization (shared/anonSettings.ts): office switch, per-agent
+   *  override, categories. Human-only (anon:setSettings); the dictionary is
+   *  not here (encrypted in the app's data folder, anonStore.ts). */
+  anonymize?: AnonSettings;
   /** What the orchestrator may add as office skills: nothing, Anthropic's own
    *  (default), or anything in the catalog (shared/skillRequests.ts). */
   orchestratorSkills?: 'off' | 'official' | 'catalog';
@@ -781,6 +786,8 @@ const codec: SecretCodec = {
     }
   }
 };
+/** The OS key store codec, for other encrypted app-data files (anonStore.ts). */
+export const configCodec: SecretCodec = codec;
 function readSecretsFile(): Record<string, string> {
   try {
     const parsed: unknown = JSON.parse(readFileSync(secretsFilePath(), 'utf8'));
