@@ -1719,6 +1719,12 @@ export class HiveManager {
       // Run without sandbox: off, said outright (a project's settings cannot
       // turn it back on for it either). Its permission rules stay.
       if (unsandboxed) settings.sandbox = { enabled: false };
+      // A Windows floor: off too, except for a custodian. The block was
+      // written for macOS/Linux, where Windows ignored it; Claude Code now has
+      // a Windows sandbox of its own (srt-win) that this block switches on,
+      // and it needs a one-time elevated install and its own limits.
+      // The rest of the block stays as written, inert, for when it comes on.
+      else if (this.winAgents() && !requireSandbox && !opts.lockdown && settings.sandbox) settings.sandbox = { ...(settings.sandbox as object), enabled: false };
       // "Allow Docker": its sandboxed shell may connect to the Docker socket.
       // Never a custodian's (and withDockerSockets leaves a strictAllowlist
       // network alone besides).

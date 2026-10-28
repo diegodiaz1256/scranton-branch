@@ -46,8 +46,9 @@ test('a Claude agent gets a native sandbox that still allows its agent dir and t
   const settings = JSON.parse(fs.readFileSync(inj.args[i + 1], 'utf8'));
   const agentDir = path.join(home, 'hive', 'agents', 'jim-1');
   const hiveRoot = path.join(home, 'hive');
-  assert.equal(settings.sandbox.enabled, true);
-  assert.notEqual(settings.sandbox.failIfUnavailable, true, 'Windows must still spawn');
+  // Windows: off (Claude Code's own Windows sandbox needs an elevated install).
+  assert.equal(settings.sandbox.enabled, process.platform !== 'win32');
+  assert.notEqual(settings.sandbox.failIfUnavailable, true, 'a machine without a sandbox must still spawn');
   assert.deepEqual(settings.sandbox.filesystem.allowWrite, [agentDir, hiveRoot, palace]);
   // Both layers, or the agent deadlocks: Edit/Write allowed but `mv … .done/` denied.
   assert.deepEqual(settings.permissions.additionalDirectories, settings.sandbox.filesystem.allowWrite);
