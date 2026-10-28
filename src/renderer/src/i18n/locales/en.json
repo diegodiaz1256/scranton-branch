@@ -273,6 +273,7 @@
     },
     "autonomy": {
       "autonomy": "Autonomy",
+      "whoCanAdd": "Who can add agents",
       "autoOn": "Autonomous — agents act without asking",
       "autoOff": "Ask-first — agents pause for tool approval",
       "autoDesc": "Applies to newly spawned agents (each agent's command can still override).",
