@@ -36,6 +36,7 @@ import { OfficeRenderSection } from './OfficeRenderSection';
 import { TempQuotaSettings } from './TempQuotaSettings';
 import { TempAnswerOptions } from './TempAnswerOptions';
 import { EASY_SETTINGS_ESSENTIALS, resolveUiMode, splitForEasyMode, type UiMode } from '@shared/uiMode';
+import { EASY_PRESETS, detectPreset, presetChanges, presetPatch, type EasyPreset } from '@shared/easyPresets';
 
 export interface SettingsModalProps {
   config: HarnessConfig;
@@ -390,6 +391,28 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     const num = (raw: string): number | undefined => (raw.trim() === '' ? undefined : Number(raw));
     const th = normalizeThresholds({ fiveHourPct: num(usageFiveHour), weeklyPct: num(usageWeekly) });
     return { usageWindowAlerts: th };
+  };
+  // Easy-mode presets (src/shared/easyPresets.ts). Read from what the form shows
+  // now, so a change made below in the detailed controls turns it into "Custom".
+  const numOrUndef = (raw: string): number | undefined => (raw.trim() === '' ? undefined : Number(raw));
+  const presetNow = detectPreset({
+    autoMode: autoModeOn,
+    orchestratorMaySpawn: orchSpawnOn,
+    circuitBreaker: { enabled: brkEnabled, hardStop: brkHardStop, tokenVelocityPerMin: numOrUndef(velocityCeiling) },
+    usageWindowAlerts: { fiveHourPct: numOrUndef(usageFiveHour), weeklyPct: numOrUndef(usageWeekly) }
+  });
+  const applyPreset = (preset: EasyPreset): void => {
+    const patch = presetPatch(preset, breakerCfg);
+    setAutoModeOn(patch.autoMode);
+    setOrchSpawnOn(patch.orchestratorMaySpawn);
+    stage({ autoMode: patch.autoMode, orchestratorMaySpawn: patch.orchestratorMaySpawn } as Partial<HarnessConfig>);
+    // The breaker and the usage warnings are saved from these fields (budgetPatch,
+    // usageAlertsPatch), like when they are typed in by hand.
+    setBrkEnabled(true);
+    setBrkHardStop(patch.circuitBreaker.hardStop === true);
+    setVelocityCeiling(patch.circuitBreaker.tokenVelocityPerMin != null ? String(patch.circuitBreaker.tokenVelocityPerMin) : '');
+    setUsageFiveHour(String(patch.usageWindowAlerts.fiveHourPct));
+    setUsageWeekly(String(patch.usageWindowAlerts.weeklyPct));
   };
   /** The one writer. Commits what the form currently shows, in a single
    *  updateConfig, so a half-applied save is not a state the app can reach. */
@@ -1350,6 +1373,41 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                   {/* AUTONOMY & BUDGETS — the safety tab */}
                   {activeSection === 'Autonomy & Budgets' && (
                     <>
+                      {/* Easy mode: one choice in plain words; the detailed controls below stay. */}
+                      {uiMode === 'easy' && (() => {
+                        const described = presetNow;
+                        return (
+                          <>
+                            <div>
+                              <div style={sectionHead}>{t('settings.presets.title')}</div>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                                {EASY_PRESETS.map((p) => (
+                                  <PixelButton key={p} variant={presetNow === p ? 'primary' : 'secondary'} size="sm" onClick={() => applyPreset(p)}>
+                                    {t(`settings.presets.${p}`)}
+                                  </PixelButton>
+                                ))}
+                                {presetNow === 'custom' && (
+                                  <span style={{ fontSize: 12, padding: '2px 8px', color: 'var(--cth-ink-900)', background: 'var(--cth-lemon-light)', boxShadow: 'inset 0 0 0 1px var(--cth-lemon)' }}>
+                                    {t('settings.presets.custom')}
+                                  </span>
+                                )}
+                              </div>
+                              <p style={{ margin: '10px 0 4px', fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
+                                {t(`settings.presets.${described}Desc`)}
+                              </p>
+                              {described !== 'custom' && (
+                                <ul style={{ margin: 0, paddingInlineStart: 18, fontSize: 12, lineHeight: '18px', color: 'var(--cth-ink-700)' }}>
+                                  {presetChanges(described).map((k) => <li key={k}>{t(`settings.presets.change.${k}`, { name: godName })}</li>)}
+                                </ul>
+                              )}
+                              <p style={{ margin: '6px 0 0', fontSize: 11, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+                                {t('settings.presets.never')}
+                              </p>
+                            </div>
+                            <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
+                          </>
+                        );
+                      })()}
                       <div>
                         <div style={sectionHead}>
                           {t('settings.autonomy.autonomy')}
