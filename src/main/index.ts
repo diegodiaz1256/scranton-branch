@@ -128,7 +128,7 @@ import { diffTasks, snapshotOf, type TaskEvent, type TaskSnapshot } from '../sha
 import type { TaskEdit } from '../shared/taskEdit';
 import { DELIVERABLES_DIR, addLink, canOpenExternally, currentTaskOf, deliverablePaths, isInside, linkFor, recordElsewhere, writtenFiles, type DeliverableLink, type ElsewhereWrite } from '../shared/deliverables';
 import { isDeliverableLike, isElsewhereDeliverable } from '../shared/deliverableOrganize';
-import { matchDeliverable } from '../shared/deliverableMatch';
+import { matchDeliverable, matchRelativeDeliverable } from '../shared/deliverableMatch';
 import { piSessionSaved } from './piSession';
 import { findArgs, parseFindListing, repoCheck, scanDeliverables, type ScanOptions } from './deliverableScan';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, hasPlaceholderHost, probeSpecFor } from '../shared/integrations';
@@ -6367,6 +6367,18 @@ function readElsewhereWrites(root: string): ElsewhereWrite[] {
     return Array.isArray(raw.files) ? raw.files.filter((f): f is ElsewhereWrite => !!f && typeof f.path === 'string' && typeof f.ts === 'number') : [];
   } catch { return []; }
 }
+/** An older office's own research/ folder (<office>/research, beside hive/),
+ *  when it has one. The orchestrator runs in the office folder, and before its
+ *  prompt named the hive's research/ by full path, `research/...` from it
+ *  landed there (offerOrchestratorHires still reads hires from both). */
+function legacyResearchDirs(): string[] {
+  const home = readConfig().harnessHome;
+  const root = hive.enabled() ? hive.root() : null;
+  if (!home || !root) return [];
+  const dir = join(home, DELIVERABLES_DIR);
+  if (resolve(dir) === resolve(root, DELIVERABLES_DIR)) return [];
+  try { return statSync(dir).isDirectory() ? [dir] : []; } catch { return []; }
+}
 /** The paths "Written elsewhere" lists: documents outside the office, not in
  *  a repo or worktree (the project's own code and docs) or a temp folder. */
 function elsewhereDeliverables(paths: string[], root: string): string[] {
@@ -6472,6 +6484,15 @@ ipcMain.handle('deliverables:list', async () => {
   const elsewhere = (await Promise.all(kept.slice(-200).map(async (w) => {
     try { const s = await stat(w.path); return s.isFile() ? { ...w, size: s.size, mtime: s.mtimeMs } : null; } catch { return null; }
   }))).filter((w): w is NonNullable<typeof w> => !!w).reverse();
+  // An older office's own research/ folder: its documents, with the ones above.
+  const listed = new Set(elsewhere.map((w) => w.path.replace(/\\/g, '/').toLowerCase()));
+  for (const legacyDir of legacyResearchDirs()) {
+    const scan = await scanResearch(legacyDir, wsl).catch(() => null);
+    for (const f of scan?.files ?? []) {
+      if (!isDeliverableLike(f.abs) || listed.has(f.abs.replace(/\\/g, '/').toLowerCase())) continue;
+      elsewhere.push({ path: f.abs, agentId: '', name: '', ts: f.mtime, created: false, size: f.size, mtime: f.mtime });
+    }
+  }
   // A slow listing says where the time went (log.jsonl), so it can be found on the machine it happens on.
   const ms = Date.now() - started;
   if (ms > 1500) try { hive.appendLog({ kind: 'deliverables-slow', ms, scanMs, files: total, elsewhere: kept.length, wsl: !!wsl, authorsPending }); } catch { /* best-effort */ }
@@ -6579,7 +6600,10 @@ ipcMain.handle('deliverables:fileUrl', async (_evt, p: unknown) => {
 // A path clicked in an agent's terminal: the deliverable it is (as the list
 // spells it), or null for any other file (the IDE opens those). The same files
 // deliverables:list shows: research/, task links and cards, written elsewhere.
-ipcMain.handle('deliverables:match', (_evt, p: unknown) => {
+// `cwd` comes with a RELATIVE path the renderer did not find under the agent's
+// folder (deliverableMatch.ts matchRelativeDeliverable says why): it is then
+// tried against the hive and the office folder too.
+ipcMain.handle('deliverables:match', (_evt, p: unknown, cwd?: unknown) => {
   const root = hive.enabled() ? hive.root() : null;
   if (!root || typeof p !== 'string' || !p.length || p.length > 4096 || p.includes('\0')) return null;
   const distro = hive.wslRoot()?.distro ?? null;
@@ -6592,7 +6616,12 @@ ipcMain.handle('deliverables:match', (_evt, p: unknown) => {
     ...cards,
     ...[...readElsewhereWrites(root).map((w) => w.path), ...session].filter((x) => !isInside(x, root) && isDeliverableLike(x))
   ];
-  return matchDeliverable(p, { researchDir: join(root, DELIVERABLES_DIR), distro, known });
+  const index = { researchDir: join(root, DELIVERABLES_DIR), distro, known, legacyDirs: legacyResearchDirs() };
+  if (typeof cwd === 'string' && cwd.length && cwd.length <= 4096 && !cwd.includes('\0')) {
+    const home = readConfig().harnessHome;
+    return matchRelativeDeliverable(p, index, [cwd, root, home], (x) => { try { return statSync(x).isFile(); } catch { return false; } });
+  }
+  return matchDeliverable(p, index);
 });
 // What the human typed straight into an agent's terminal, kept for the Inbox
 // (the renderer knows which prompts were typed by a person). Main-only file.

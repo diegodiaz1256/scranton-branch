@@ -1113,7 +1113,8 @@ const api = {
   /** Where an HTML deliverable renders from (a sandboxed md-dlv:// URL), or null. */
   deliverablesFileUrl: (path: string): Promise<string | null> => ipcRenderer.invoke('deliverables:fileUrl', path),
   /** A clicked terminal path as the deliverable it is (spelled as the list spells it), or null. */
-  deliverablesMatch: (path: string): Promise<string | null> => ipcRenderer.invoke('deliverables:match', path),
+  /** `cwd`: `path` is relative to it and was not found there (see deliverables:match). */
+  deliverablesMatch: (path: string, cwd?: string): Promise<string | null> => ipcRenderer.invoke('deliverables:match', path, cwd),
   /** A deliverable's committed versions, newest first (author = the agent). */
   deliverablesHistory: (path: string): Promise<Array<{ hash: string; ts: string; author: string; subject: string }>> => ipcRenderer.invoke('deliverables:history', path),
   /** A deliverable's text as it was in one of those versions. */

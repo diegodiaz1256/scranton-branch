@@ -1058,6 +1058,15 @@ function resolvePathCandidate(ptyId: string, raw: string): string | null {
   return `${cwd}/${p.replace(/^\.\//, '')}`;
 }
 
+/** A relative token and the folder it was resolved against, for the
+ *  deliverables fallback in activatePath; null for an absolute one. */
+function relativeCandidate(ptyId: string, raw: string): { token: string; cwd: string } | null {
+  const p = stripPathToken(raw);
+  if (p.startsWith('~/') || p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p)) return null;
+  const cwd = storeApi?.getState().agents.find((a) => a.ptyId === ptyId)?.cwd ?? null;
+  return cwd ? { token: p, cwd } : null;
+}
+
 // The store is loaded lazily via dynamic import (resolved once, cached): a
 // static import would drag zustand/react into the node --test transpile of the
 // pure automation helpers that share this file's import graph.
@@ -1084,11 +1093,21 @@ void import('@/store/store')
  *  A deliverable (a file the Deliverables list shows: research/, linked from a
  *  task, written elsewhere) opens there instead, on a plain click; ⌘/Ctrl+click
  *  still takes it to the IDE. */
-async function activatePath(abs: string, action: PathAction, event?: MouseEvent): Promise<void> {
+async function activatePath(abs: string, action: PathAction, event?: MouseEvent, rel?: { token: string; cwd: string }): Promise<void> {
   let hit = mdStatCache.get(abs);
   if (!hit) {
     const res = await window.cth.statAbs(abs).catch(() => null);
-    if (!res || !res.exists) return;
+    if (!res || !res.exists) {
+      // A relative path that is not under the agent's folder may still be a
+      // deliverable: the orchestrator runs in the office folder but prints
+      // `research/...` relative to the hive, and so do messages from an older
+      // version. Main tries the hive and the office folder too.
+      if (rel && !(event && (event.metaKey || event.ctrlKey))) {
+        const found = await window.cth.deliverablesMatch(rel.token, rel.cwd).catch(() => null);
+        if (found) await openInDeliverables(found);
+      }
+      return;
+    }
     hit = { isFile: res.isFile, path: res.path };
     if (mdStatCache.size > 500) mdStatCache.clear();
     mdStatCache.set(abs, hit);
@@ -1100,16 +1119,20 @@ async function activatePath(abs: string, action: PathAction, event?: MouseEvent)
   const toIde = !!event && (event.metaKey || event.ctrlKey);
   const deliverable = toIde ? null : await window.cth.deliverablesMatch(hit.path).catch(() => null);
   if (deliverable) {
-    // From the Classic floor too: Deliverables lives in the Pro layout (like a
-    // task card's "Open in Deliverables").
-    const { useProStore } = await import('@/pro/proStore');
-    const pro = useProStore.getState();
-    pro.setFocusDeliverable(deliverable);
-    pro.setLayout('pro');
-    pro.setView({ kind: 'section', section: 'deliverables' });
+    await openInDeliverables(deliverable);
     return;
   }
   storeApi?.getState().openFileInIde(hit.path);
+}
+
+async function openInDeliverables(deliverable: string): Promise<void> {
+  // From the Classic floor too: Deliverables lives in the Pro layout (like a
+  // task card's "Open in Deliverables").
+  const { useProStore } = await import('@/pro/proStore');
+  const pro = useProStore.getState();
+  pro.setFocusDeliverable(deliverable);
+  pro.setLayout('pro');
+  pro.setView({ kind: 'section', section: 'deliverables' });
 }
 
 function registerMarkdownLinkProvider(term: Terminal, ptyId: string): void {
@@ -1166,6 +1189,7 @@ function registerMarkdownLinkProvider(term: Terminal, ptyId: string): void {
           const abs = resolvePathCandidate(ptyId, span.raw);
           if (!abs) continue;
           const action = classifyPathToken(span.token);
+          const rel = relativeCandidate(ptyId, span.raw);
           links!.push({
             range, text: span.raw,
             decorations: { underline: true, pointerCursor: true },
@@ -1174,7 +1198,7 @@ function registerMarkdownLinkProvider(term: Terminal, ptyId: string): void {
             // (a file browser) still wants the modifier. URLs keep ⌘/Ctrl.
             activate: (event: MouseEvent | undefined) => {
               if (action === 'reveal' && event && !(event.metaKey || event.ctrlKey)) return;
-              void activatePath(abs, action, event);
+              void activatePath(abs, action, event, rel ?? undefined);
             }
           });
         }
