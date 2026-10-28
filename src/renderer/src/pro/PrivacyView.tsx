@@ -8,6 +8,7 @@ import {
   type AnonAgentStatus, type AnonDictionaryEntry, type AnonSettings, type AnonState
 } from '@shared/anonSettings';
 import { StateBadge, type Tone } from './data';
+import { PreviewCard, SuggestionsCard } from './AnonymizeParts';
 
 /**
  * Privacy → Anonymization (main/anonProxy.ts). Between an agent's CLI and its
@@ -165,6 +166,15 @@ export function PrivacyView({ roster }: { roster: Agent[]; config: HarnessConfig
         <span className="pro-sub" style={{ fontSize: 11.5 }}>{t('pro.privacy.liveNote')}</span>
       </section>
 
+      <SuggestionsCard
+        onAdd={(terms, prefixesAdded) => {
+          if (terms.length) setRows((rs) => [...rs, ...toRows(terms)]);
+          if (prefixesAdded.length) setPrefixes((p) => [...new Set([...p.split(/[,\s]+/).filter(Boolean), ...prefixesAdded])].join(', '));
+          if (terms.length || prefixesAdded.length) { setDirty(true); setSaved(false); }
+        }}
+        onSecretCount={(n) => setState((s) => (s ? { ...s, dictionary: { ...s.dictionary, secretCount: n } } : s))}
+      />
+
       <section className="pro-card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <strong style={{ fontSize: 14 }}>{t('pro.privacy.secrets')}</strong>
         <span className="pro-sub" style={{ fontSize: 12 }}>{t('pro.privacy.secretsBody')}</span>
@@ -175,6 +185,8 @@ export function PrivacyView({ roster }: { roster: Agent[]; config: HarnessConfig
         </div>
         <span className="pro-sub" style={{ fontSize: 11.5 }}>{t('pro.privacy.secretCount', { count: state.dictionary.secretCount })}</span>
       </section>
+
+      <PreviewCard />
 
       <section className="pro-card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <strong style={{ fontSize: 14 }}>{t('pro.privacy.agents')}</strong>
