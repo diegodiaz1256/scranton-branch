@@ -63,6 +63,9 @@ export interface HarnessConfig {
    *  'non-technical') — drives the copy register across onboarding. Mirrors
    *  src/main/config.ts. */
   audience?: 'technical' | 'non-technical';
+  /** Easy vs Full mode; unset = derived from `audience` (resolveUiMode in
+   *  src/shared/uiMode.ts). Mirrors src/main/config.ts. */
+  uiMode?: 'easy' | 'full';
   harnessHome: string | null;
   /** Recently-opened hive home folders (most-recent first) for the launch picker.
    *  Mirrors src/main/config.ts. */

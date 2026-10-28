@@ -35,6 +35,7 @@ import { FreezeLogSection } from './FreezeLogSection';
 import { OfficeRenderSection } from './OfficeRenderSection';
 import { TempQuotaSettings } from './TempQuotaSettings';
 import { TempAnswerOptions } from './TempAnswerOptions';
+import { EASY_SETTINGS_ESSENTIALS, resolveUiMode, splitForEasyMode, type UiMode } from '@shared/uiMode';
 
 export interface SettingsModalProps {
   config: HarnessConfig;
@@ -307,6 +308,14 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     setSimpleMode(next);
     stage({ audience: next ? 'non-technical' : 'technical' } as Partial<HarnessConfig>);
   };
+  // Easy / Full mode. Staged like the rest; the left nav below already follows
+  // the staged choice, so the effect is visible before Save.
+  const [uiMode, setUiModeState] = useState<UiMode>(resolveUiMode(config));
+  const chooseUiMode = (next: UiMode): void => {
+    setUiModeState(next);
+    stage({ uiMode: next });
+  };
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [autoModeOn, setAutoModeOn] = useState<boolean>(cfgX.autoMode !== false);
   const toggleAutoMode = async () => {
     const next = !autoModeOn;
@@ -988,7 +997,8 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                     style={{ margin: '2px 0 8px', padding: '6px 8px', fontSize: 13, fontFamily: 'var(--cth-font-ui)', border: '1.5px solid var(--cth-ink-300)', background: 'var(--cth-cream-50)', color: 'var(--cth-ink-900)' }}
                   />
                   {shownSections.length === 0 && <span style={{ fontSize: 12, color: 'var(--cth-ink-500)', padding: '4px 8px' }}>{t('settings.searchNone')}</span>}
-                  {shownSections.map((section) => {
+                  {(() => {
+                  const navButton = (section: Section, indent = false): JSX.Element => {
                     const active = activeSection === section;
                     return (
                       <button
@@ -998,7 +1008,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                         aria-current={active ? 'page' : undefined}
                         style={{
                           display: 'flex', flexDirection: 'column', gap: 2, width: '100%', textAlign: 'left',
-                          padding: '8px 10px',
+                          padding: indent ? '8px 10px 8px 22px' : '8px 10px',
                           border: 'none',
                           borderLeft: active ? '3px solid var(--cth-lemon)' : '3px solid transparent',
                           background: active ? 'var(--cth-ink-900)' : 'transparent',
@@ -1011,7 +1021,33 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                         <span style={{ fontSize: 11, lineHeight: '15px', color: active ? 'var(--cth-cream-200)' : 'var(--cth-ink-500)' }}>{t(NAV_SECTION_DESC[section])}</span>
                       </button>
                     );
-                  })}
+                  };
+                  // Full mode, or a search: every section in one list, as always.
+                  if (uiMode !== 'easy' || navQuery.trim()) return shownSections.map((sec) => navButton(sec));
+                  // Easy mode: the everyday sections, then the rest folded under
+                  // "Advanced settings" (open while one of them is the open page).
+                  const { essential, advanced } = splitForEasyMode(shownSections, EASY_SETTINGS_ESSENTIALS);
+                  const open = advancedOpen || advanced.includes(activeSection);
+                  return (
+                    <>
+                      {essential.map((sec) => navButton(sec))}
+                      {advanced.length > 0 && (
+                        <button
+                          type="button" aria-expanded={open} onClick={() => setAdvancedOpen(!open)}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
+                            marginTop: 6, padding: '8px 10px', border: 'none', borderTop: '1px solid var(--cth-ink-300)',
+                            background: 'transparent', color: 'var(--cth-ink-700)', fontFamily: 'var(--cth-font-ui)',
+                            fontSize: 12, fontWeight: 600, cursor: 'pointer'
+                          }}
+                        >
+                          <span aria-hidden style={{ width: 12 }}>{open ? '▾' : '▸'}</span> {t('settings.nav.advanced')}
+                        </button>
+                      )}
+                      {open && advanced.map((sec) => navButton(sec, true))}
+                    </>
+                  );
+                  })()}
                 </div>
 
                 {/* Right scrollable content pane. minWidth:0 lets this flex child
@@ -1099,6 +1135,22 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                             <PixelButton variant={simpleMode ? 'primary' : 'secondary'} size="sm" onClick={toggleSimpleMode}>
                               {simpleMode ? t('common.on') : t('common.off')}
                             </PixelButton>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>{t('settings.general.uiMode')}</span>
+                              <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+                                {t(uiMode === 'easy' ? 'settings.general.uiModeEasyDesc' : 'settings.general.uiModeFullDesc')}
+                              </span>
+                            </div>
+                            <div role="group" aria-label={t('settings.general.uiMode')} style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                              <PixelButton variant={uiMode === 'easy' ? 'primary' : 'secondary'} size="sm" onClick={() => chooseUiMode('easy')}>
+                                {t('settings.general.uiModeEasy')}
+                              </PixelButton>
+                              <PixelButton variant={uiMode === 'full' ? 'primary' : 'secondary'} size="sm" onClick={() => chooseUiMode('full')}>
+                                {t('settings.general.uiModeFull')}
+                              </PixelButton>
+                            </div>
                           </div>
                         </div>
                       </div>
