@@ -151,8 +151,8 @@ export function writtenPathsOf(tool: string | undefined, input: unknown): string
 
 // ─── what it was asked to do ────────────────────────────────────────────────
 
-const SECRET_VALUE = /\b(?:ghp_|gho_|ghs_|github_pat_|sk-|sk_live_|sk_test_|xox[abp]-|AKIA|AIza|glpat-|ntn_|secret_)[A-Za-z0-9_-]{8,}/g;
-const SECRET_ASSIGN = /\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)=\S+/g;
+export const SECRET_VALUE = /\b(?:ghp_|gho_|ghs_|github_pat_|sk-|sk_live_|sk_test_|xox[abp]-|AKIA|AIza|glpat-|ntn_|secret_)[A-Za-z0-9_-]{8,}/g;
+export const SECRET_ASSIGN = /\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)=\S+/g;
 const SECRET_FIELD = /(key|token|secret|password|passwd|auth|credential)/i;
 
 /** Hide anything that looks like a credential before it is shown or kept. */
