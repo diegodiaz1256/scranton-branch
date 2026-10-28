@@ -274,3 +274,19 @@ button.pro-card:hover { border-color: var(--pro-line-strong); }
 
 /* A folding group header in the sidebar (ProShell NAV_GROUPS). */
 .pro-nav.pro-nav-group { color: var(--cth-ink-500); font-size: 12px; margin-top: 6px; }
+
+/* Easy mode configuration pages (EasyConfig.tsx): one column, more air, a
+   plain explanation on top and the full page below "Show all options". */
+.pro-easy { gap: 18px; }
+.pro-easy-intro { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; max-width: 720px; font-size: 13px; }
+.pro-easy-intro dt { font-weight: 600; color: var(--cth-ink-900); }
+.pro-easy-intro dd { margin: 0; color: var(--cth-ink-700); }
+.pro-easy-simple { display: flex; flex-direction: column; gap: 12px; max-width: 720px; padding: 16px 18px; background: var(--pro-card); border: 1px solid var(--pro-line); border-radius: var(--pro-radius); }
+.pro-easy-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; padding-block: 2px; }
+.pro-easy-agent { display: flex; flex-direction: column; gap: 6px; padding-block: 10px; border-top: 1px solid var(--pro-line); }
+.pro-easy-agent:first-child { border-top: none; padding-top: 0; }
+/* The full page sits inside this one: no second scroller, no second title. */
+.pro-easy-full { display: flex; flex-direction: column; border-top: 1px solid var(--pro-line); padding-top: 14px; }
+.pro-easy-full > .pro-page { flex: none; overflow: visible; padding: 0; }
+.pro-easy-full > .pro-page > .pro-head h2 { display: none; }
+@media (max-width: 520px) { .pro-easy-intro { grid-template-columns: 1fr; } }
