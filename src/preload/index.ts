@@ -11,6 +11,7 @@ import type { FloorEntry } from '../main/floors';
 export type { FloorEntry } from '../main/floors';
 export type FortressStatusView = FortressStatus & { enabled: boolean; bytes: number };
 import type { RateLimits } from '../shared/rateLimits';
+import type { RunnerCodeFile } from '../shared/runnerCode';
 import type { ActiveUsageAlert } from '../shared/usageWindowAlerts';
 export type { HireManifest } from '../shared/hire';
 import type { IntegrationRecord, IntegrationTemplate } from '../shared/integrations';
@@ -43,7 +44,7 @@ export type McpTransportView = { kind: 'stdio'; command: string; args: string[] 
 /** A subagent an agent's Claude started (main/subagents.ts). */
 export interface SubagentView { id: string; parentId: string; type: string; description: string; startedAt: number; endedAt?: number; ok?: boolean }
 /** A runner an agent proposed, waiting for the human (main: approveProposal). */
-export interface RunnerProposalView { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[] }
+export interface RunnerProposalView { id: string; agentName: string; proposal: { name: string; command: string; secrets: string[]; description?: string }; missing: string[]; /** The code the command runs, read from the agent's folder. */ files?: RunnerCodeFile[] }
 export interface McpMineView { id: string; name: string; transport: McpTransportView; env: Record<string, string>; secretEnv: string[]; headers: Record<string, string>; secretHeaders: string[]; enabled: boolean; agents: string[] | null; source?: string; secretsStored: Record<string, boolean>; headersStored: Record<string, boolean> }
 export interface McpFoundView { source: string; file: string; name: string; transport: McpTransportView; env: Array<{ name: string; secret: boolean; value?: string }>; headers: Array<{ name: string; secret: boolean; value?: string }>; imported: boolean; agent?: string; suggest: { kind: 'connection' | 'builtin'; id: string; label: string } | null }
 export interface McpOverviewView { agentId: string; name: string; provider: string; servers: Array<{ name: string; id: string; origin: 'connection' | 'builtin' | 'yours' | 'office'; access?: 'none' | 'read' | 'readwrite' }> }
@@ -1680,6 +1681,9 @@ const api = {
   envProposalsPending: (): Promise<RunnerProposalView[]> => ipcRenderer.invoke('env:proposalsPending'),
   envProposalAnswer: (id: string, answer: { ok: boolean; secrets?: Record<string, { kind: 'secret' | 'op'; value: string }> }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('env:proposalAnswer', id, answer),
+  /** Ask an agent to explain a proposal in plain language (never approves it). */
+  envProposalExplain: (id: string, lang: string): Promise<{ ok: boolean; text?: string; error?: string }> =>
+    ipcRenderer.invoke('env:proposalExplain', id, lang),
   onEnvProposal: (cb: (req: RunnerProposalView) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, req: RunnerProposalView) => cb(req);
     ipcRenderer.on('env:proposal', listener);

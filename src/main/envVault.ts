@@ -69,7 +69,7 @@ export interface EnvVaultDeps {
   /** Ask the human whether to add a runner an agent proposed. `missing` are
    *  secrets it names that do not exist yet: the human can create them in the
    *  same prompt (a value, or a 1Password reference); the agent never sees them. */
-  approveProposal?: (req: { proposal: Pick<Runner, 'name' | 'command' | 'secrets' | 'description'>; agentName: string; missing: string[] }) => Promise<ProposalAnswer>;
+  approveProposal?: (req: { proposal: Pick<Runner, 'name' | 'command' | 'secrets' | 'description'>; agentName: string; missing: string[]; cwd?: string }) => Promise<ProposalAnswer>;
   /** `op read <ref>` (injected for tests). */
   opRead?: (ref: string) => Promise<string>;
   log?: (m: string) => void;
@@ -234,9 +234,10 @@ export class EnvVault {
    * the worktree changed, like any other). A secret it names that does not
    * exist yet is created by the human in that same prompt (never by the
    * agent); a plain variable cannot be named as a secret, and an existing
-   * runner is never replaced from here.
+   * runner is never replaced from here. `cwd` is the agent's folder (chosen by
+   * the app), so the prompt can show the code the command runs.
    */
-  async proposeRunner(input: unknown, ctx: { agentName: string }): Promise<{ ok: boolean; id?: string; error?: string }> {
+  async proposeRunner(input: unknown, ctx: { agentName: string; cwd?: string }): Promise<{ ok: boolean; id?: string; error?: string }> {
     const r = (input ?? {}) as Record<string, unknown>;
     const name = typeof r.name === 'string' ? r.name.trim().slice(0, 40) : '';
     const command = typeof r.command === 'string' ? r.command.trim() : '';
@@ -259,7 +260,7 @@ export class EnvVault {
     if (!this.deps.approveProposal) return { ok: false, error: 'proposals are not available here' };
     const description = typeof r.description === 'string' && r.description.trim() ? r.description.trim().slice(0, 200) : undefined;
     const proposal = { name, command, secrets: [...new Set(secretsIn)], ...(description ? { description } : {}) };
-    const raw = await this.deps.approveProposal({ proposal, agentName: ctx.agentName, missing });
+    const raw = await this.deps.approveProposal({ proposal, agentName: ctx.agentName, missing, ...(ctx.cwd ? { cwd: ctx.cwd } : {}) });
     const answer = typeof raw === 'boolean' ? { ok: raw, secrets: {} } : raw;
     if (!answer.ok) return { ok: false, error: 'the human declined this runner' };
     // The secrets the human created in the prompt. The agent gets only names.
