@@ -37,6 +37,9 @@ import {
 } from './config';
 import { AnonProxy } from './anonProxy';
 import { AnonStore } from './anonStore';
+import { envSecretValue, gatherSuggestSources } from './anonSuggestGather';
+import { suggestEntries } from '../shared/anonSuggest';
+import { AnonActivityLog, categoryOfFamily } from '../shared/anonActivity';
 import {
   anonCoverage, anonEnabledFor, anonSpawnDecision, anonStatusOf, cleanAnonSettings, cleanDictionary, stripHumanOnly,
   type AnonAgentStatus, type AnonCoverage, type AnonSpawnDecision, type AnonUncoveredReason
@@ -958,12 +961,15 @@ ipcMain.handle('sshRelay:set', (_evt, agentId: unknown, grant: unknown) => {
 // encrypted in the app's data folder, never in a repo.
 const anonStore = new AnonStore(join(app.getPath('userData'), 'anonymize'), configCodec);
 let anonDict = anonStore.readDictionary();
+/** Per-agent counter and log: codenames, categories, times; never real values. */
+const anonActivity = new AnonActivityLog();
 const anonProxy = new AnonProxy({
   settings: () => cleanAnonSettings(readConfig().anonymize),
   dictionary: () => anonDict,
   loadMap: (office) => anonStore.loadMap(office),
   saveMap: (office, map) => anonStore.saveMap(office, map),
-  log: (m) => console.log(m)
+  log: (m) => console.log(m),
+  onSubstitutions: (agentId, subs) => anonActivity.record(agentId, subs)
 });
 /** Each agent's anonymization at its last start (Privacy view, agent panel). */
 const anonStatuses = new Map<string, { status: AnonAgentStatus; reason?: AnonUncoveredReason; at: number }>();
@@ -1037,6 +1043,42 @@ ipcMain.handle('anon:addSecret', (_evt, value: unknown) => {
   if (res.ok) { anonDict = next; anonProxy.invalidate(); }
   return { ...res, secretCount: anonDict.secrets.length };
 });
+// Suggestions (shared/anonSuggest.ts): found locally on request, no model call.
+// The .env files they came from, for reading a value only when the human accepts it.
+let anonEnvFiles: Record<string, string> = {};
+ipcMain.handle('anon:suggest', async () => {
+  const cfg = readConfig();
+  const reg = hive.enabled() ? hive.registry() : { agents: {} as Record<string, { cwd?: string }> };
+  const repos = [...(cfg.registeredRepos ?? []), ...Object.values(reg.agents ?? {}).map((a) => (a as { cwd?: string }).cwd)]
+    .filter((p): p is string => typeof p === 'string' && !!p && existsSync(p));
+  const tasks = (hive.tasks() as { tasks?: Array<{ ticket?: unknown }> })?.tasks ?? [];
+  const connections = integrations.listRecords().map((r) => ({
+    label: r.label,
+    baseUrl: r.baseUrl,
+    headers: () => buildAuthHeaders(r.authType, r.authHeader, r.secretRef ? integrations.getSecret(r.secretRef) : undefined)
+  }));
+  const g = await gatherSuggestSources({ repos, home: homedir(), connections, ticketKeys: tasks.map((t) => t.ticket).filter((k): k is string => typeof k === 'string') });
+  anonEnvFiles = g.envFiles;
+  return { suggestions: suggestEntries(g.sources, anonDict), notes: g.notes };
+});
+/** Accept a secret-looking .env variable as a known secret: its value is read here, now, and never returned. */
+ipcMain.handle('anon:acceptEnvSecret', (_evt, file: unknown, name: unknown) => {
+  if (typeof file !== 'string' || typeof name !== 'string') return { ok: false, error: 'bad request' };
+  const path = anonEnvFiles[file];
+  const value = path ? envSecretValue(path, name) : undefined;
+  if (!value || value.length < 4) return { ok: false, error: `${name} has no value in ${file}.` };
+  const next = cleanDictionary({ ...anonDict, secrets: [...anonDict.secrets, value] });
+  const res = anonStore.writeDictionary(next);
+  if (res.ok) { anonDict = next; anonProxy.invalidate(); }
+  return { ...res, secretCount: anonDict.secrets.length };
+});
+/** What the model would see for a pasted text (a copy of the office's map: nothing is assigned). */
+ipcMain.handle('anon:preview', (_evt, text: unknown) => {
+  if (typeof text !== 'string') return { output: '', subs: [] };
+  const r = anonProxy.preview(hive.root() ?? 'no-office', text.slice(0, 200_000));
+  return { output: r.output, subs: r.subs.map((s) => ({ codename: s.placeholder, ...categoryOfFamily(s.family) })) };
+});
+ipcMain.handle('anon:activity', (_evt, agentId: unknown) => (typeof agentId === 'string' ? anonActivity.get(agentId) : anonActivity.get('')));
 ipcMain.handle('anon:clearSecrets', () => {
   const next = cleanDictionary({ ...anonDict, secrets: [] });
   const res = anonStore.writeDictionary(next);

@@ -25,7 +25,7 @@ import https from 'node:https';
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import zlib from 'node:zlib';
-import { Anonymizer, apiForPath, type ApiFlavor, type PseudonymMap } from '../shared/anonymize';
+import { Anonymizer, PseudonymMap, apiForPath, type ApiFlavor } from '../shared/anonymize';
 import { anonOptions, type AnonDictionary, type AnonSettings } from '../shared/anonSettings';
 
 export interface AnonProxyDeps {
@@ -34,6 +34,8 @@ export interface AnonProxyDeps {
   loadMap(office: string): PseudonymMap;
   saveMap(office: string, map: PseudonymMap): void;
   log?(m: string): void;
+  /** One request's substitutions for an agent (placeholders only, never values). */
+  onSubstitutions?(agentId: string, subs: Array<{ family: string; placeholder: string }>): void;
 }
 
 interface Route {
@@ -141,6 +143,19 @@ export class AnonProxy {
     for (const [t, r] of this.routes) if (r.agentId === agentId) this.routes.delete(t);
   }
 
+  /**
+   * What the model would see for this text, with the office's dictionary and
+   * map, without touching the map (a copy): a preview never assigns codenames
+   * that real traffic would then inherit.
+   */
+  preview(office: string, text: string): { output: string; subs: Array<{ family: string; placeholder: string }> } {
+    const live = this.anonymizerFor(office);
+    const anon = new Anonymizer(anonOptions(this.deps.settings(), this.deps.dictionary()), PseudonymMap.fromJSON(live.map.toJSON()));
+    const subs: Array<{ family: string; placeholder: string }> = [];
+    anon.onSubstitute = (family, placeholder) => { subs.push({ family, placeholder }); };
+    return { output: anon.pseudonymizeText(text), subs };
+  }
+
   /** Settings or dictionary changed: the next request rebuilds the Anonymizer. */
   invalidate(): void {
     for (const o of this.offices.values()) o.anon = null;
@@ -211,10 +226,18 @@ export class AnonProxy {
       if (enc !== 'identity') { this.fail(res, 415, 'compressed request bodies are not supported; nothing was sent'); return; }
       let parsed: unknown;
       try { parsed = JSON.parse(body.toString('utf8')); } catch { this.fail(res, 415, 'the request body is not JSON; nothing was sent'); return; }
-      const next = flavor && isObj(parsed)
-        ? anon.rewriteRequest(parsed, flavor)
-        : mapStrings(parsed, (s) => anon.pseudonymizeText(s));
+      // Rewriting is synchronous, so the collector sees only this request's
+      // substitutions even though the office's agents share one anonymizer.
+      const subs: Array<{ family: string; placeholder: string }> = [];
+      anon.onSubstitute = (family, placeholder) => { subs.push({ family, placeholder }); };
+      let next: unknown;
+      try {
+        next = flavor && isObj(parsed)
+          ? anon.rewriteRequest(parsed, flavor)
+          : mapStrings(parsed, (s) => anon.pseudonymizeText(s));
+      } finally { anon.onSubstitute = null; }
       body = Buffer.from(JSON.stringify(next), 'utf8');
+      if (subs.length) { try { this.deps.onSubstitutions?.(route.agentId, subs); } catch { /* the counter is best-effort */ } }
     }
     if (anon.map.version !== versionBefore) this.scheduleSave(route.office);
 

@@ -389,11 +389,17 @@ export class Anonymizer {
     let out = '';
     let at = 0;
     for (const s of spans) {
-      out += text.slice(at, s.start) + this.map.placeholderFor(s.family, s.value ?? text.slice(s.start, s.end), s.fixed);
+      const placeholder = this.map.placeholderFor(s.family, s.value ?? text.slice(s.start, s.end), s.fixed);
+      this.onSubstitute?.(s.family, placeholder);
+      out += text.slice(at, s.start) + placeholder;
       at = s.end;
     }
     return out + text.slice(at);
   }
+
+  /** Called for every substitution with its family and placeholder (never
+   *  the real value): the proxy's per-agent counter and log. */
+  onSubstitute: ((family: string, placeholder: string) => void) | null = null;
 
   /** Pseudonymize every string VALUE in a JSON value (keys untouched). */
   private deepPseudo(v: Json): Json {

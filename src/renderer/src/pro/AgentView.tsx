@@ -12,6 +12,7 @@ import { CustodianBadge } from './CriticalConnection';
 import { UnsandboxedBadge } from './Unsandboxed';
 import { currentTicket, spendLine } from './AgentsView';
 import { StepsView } from './StepsView';
+import { AnonAgentCard } from './AnonymizeParts';
 import { ExportAgentDialog } from './AgentFileDialogs';
 import { delegations, envelopeReturning, type Delegation, type LogMessage } from '@shared/delegations';
 
@@ -97,6 +98,7 @@ export function AgentView({ agent, roster, tasks, directory, config, onOpen }: P
 
       {exporting && <ExportAgentDialog agent={agent} onClose={() => setExporting(false)} />}
       {agent.isGod && <RoutingMap god={agent} roster={roster} tasks={tasks} directory={directory} config={config} onOpen={onOpen} />}
+      <AnonAgentCard agentId={agent.id} />
 
       {/* Wraps when the window is narrow: the terminal keeps the full width and
           the facts move below it, instead of everything squeezing side by side. */}

@@ -1654,6 +1654,16 @@ const api = {
     ipcRenderer.invoke('anon:addSecret', value),
   anonClearSecrets: (): Promise<{ ok: boolean; error?: string; secretCount: number }> =>
     ipcRenderer.invoke('anon:clearSecrets'),
+  // Suggestions found locally (no model call); an .env secret's value is read
+  // in main only when accepted, and never comes back.
+  anonSuggest: (): Promise<{ suggestions: import('../shared/anonSuggest').AnonSuggestion[]; notes: string[] }> =>
+    ipcRenderer.invoke('anon:suggest'),
+  anonAcceptEnvSecret: (file: string, name: string): Promise<{ ok: boolean; error?: string; secretCount?: number }> =>
+    ipcRenderer.invoke('anon:acceptEnvSecret', file, name),
+  anonPreview: (text: string): Promise<{ output: string; subs: Array<{ codename: string; category: import('../shared/anonymize').AnonCategory; term?: import('../shared/anonymize').TermCategory }> }> =>
+    ipcRenderer.invoke('anon:preview', text),
+  anonActivity: (agentId: string): Promise<import('../shared/anonActivity').AnonAgentActivity> =>
+    ipcRenderer.invoke('anon:activity', agentId),
   // Manager → Connections (keyed MCP servers). WRITE-ONLY like the integrations:
   // `connectionsList` reports only whether each field is stored.
   /** Save the user's own role bundles; resolves to what was kept after validation. */
